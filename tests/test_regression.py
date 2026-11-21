@@ -83,7 +83,6 @@ def make_project(root: Path, rst: str = "aresetn", clk: str = "aclk") -> Path:
 def test_sandbox_guards(tmp: Path) -> None:
     print("copy_sandbox: sandbox_dir must never be the project root")
     proj = make_project(tmp / "guard")
-    rtl = proj / "rtl" / "reg_slave.sv"
     before = sorted(p.relative_to(proj).as_posix() for p in proj.rglob("*") if p.is_file())
     res = call_tool("copy_sandbox", {
         "project_root": str(proj),

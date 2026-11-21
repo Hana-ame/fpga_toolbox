@@ -41,6 +41,8 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
             obs_decls.append(f"  logic {w}obs_{o.port};")
             conns.append(f"    .{o.port}(obs_{o.port})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
+    # Pre-join: a backslash inside an f-string expression needs Python 3.12+.
+    conn_s = ",\n".join(conns)
     return f"""`timescale 1ns/1ps
 module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W={ax.data_width}, STRB_W={ax.strb_width}) (
   input logic {clk_p}, input logic {rst_p},
@@ -51,7 +53,7 @@ module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W=
   output logic [DATA_W-1:0] s_axil_rdata, output logic [1:0] s_axil_rresp, output logic s_axil_rvalid, input logic s_axil_rready
 );
 {obs_s}  {b.module_name}{params} u_dut (
-{",\n".join(conns)}
+{conn_s}
   );
   {b.module_name}_axil_sva_checker #(.ADDR_W(ADDR_W), .DATA_W(DATA_W), .STRB_W(STRB_W), .MAX_RESP_CYCLES({u.test_plan.protocol_rules.max_resp_cycles})) u_chk (
     .clk({clk_p}), .rst_n({rst_p if b.reset.active_low else "~" + rst_p}),

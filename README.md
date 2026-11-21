@@ -96,6 +96,26 @@ python tests/test_regression.py     # 无需 pytest，全部通过时退出码 0
 
 覆盖：sandbox 误删防护、同名文件保留、未标记目录拒绝清理、六种复位命名识别与极性、wrapper 端口重复连接、cocotb 文件可编译、非法仿真结果报错、JUnit XML 解析、完整链路。
 
+## CI / CD
+
+`.github/workflows/ci.yml` — push 到 `main` 或提交 PR 时触发：
+
+| Job | 内容 |
+| --- | --- |
+| `lint` | `ruff check`（E4/E7/E9/F/I）+ 用 `ast.parse(feature_version=(3,9))` 卡 3.9 语法兼容 |
+| `test` | 矩阵：Ubuntu × Python 3.9/3.11/3.13、Windows × Python 3.13；跑回归、CLI 契约、`pip install .`、入口点 |
+| `build` | 构建 sdist + wheel，装 wheel 后校验导入与入口点，产物上传为 artifact |
+
+`.github/workflows/release.yml` — 推 `v*` tag（或手动触发）时触发：校验 tag 与 `__version__` 一致 → 跑回归 → 构建 → 创建 GitHub Release 并上传产物 → 若配置了 `PYPI_API_TOKEN` 则发布到 PyPI，未配置则自动跳过。
+
+发版流程：
+
+```bash
+# 1. 改 fpga_toolbox/__init__.py 与 pyproject.toml 里的版本号
+# 2. 提交后打 tag 并推送
+git tag v0.2.0 && git push origin main --tags
+```
+
 ## 已知限制
 
 - `test_plan.stress_profile.iterations` / `random_backpressure`、`register_rules.write_mask`、`protocol_rules.allow_unaligned_addr` 目前只做校验，生成器未消费；cocotb 用例只校验复位值与非法地址响应，不含写回读与反压压测。
