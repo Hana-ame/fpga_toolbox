@@ -13,15 +13,10 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-if __name__ == "__main__" and __package__ in (None, ""):
-    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fpga_toolbox.core.types import err_result, ok_result
 
@@ -152,9 +147,3 @@ def tool_normalize_sim_result(
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return ok_result("normalize_sim_result", report)
-
-
-if __name__ == "__main__":
-    from fpga_toolbox.cli import run_single_tool
-
-    sys.exit(run_single_tool("normalize_sim_result"))

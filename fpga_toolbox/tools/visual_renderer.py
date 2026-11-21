@@ -7,13 +7,8 @@ so the diagram can be embedded in a report or an agent transcript on its own.
 from __future__ import annotations
 
 import html
-import sys
 from pathlib import Path
 from typing import Any, Dict, List
-
-if __name__ == "__main__" and __package__ in (None, ""):
-    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fpga_toolbox.core.types import err_result, ok_result
 
@@ -81,9 +76,3 @@ table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{padding:9px 1
     svg_p = out_p.with_suffix(".svg")
     svg_p.write_text(svg, encoding="utf-8")
     return ok_result("render_visual_report", {"html_path": str(out_p.resolve()), "svg_path": str(svg_p.resolve())})
-
-
-if __name__ == "__main__":
-    from fpga_toolbox.cli import run_single_tool
-
-    sys.exit(run_single_tool("render_visual_report"))

@@ -12,13 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-import sys
 from pathlib import Path
 from typing import Any, Dict, List
-
-if __name__ == "__main__" and __package__ in (None, ""):
-    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fpga_toolbox.core.types import err_result, ok_result
 
@@ -119,9 +114,3 @@ def tool_copy_sandbox(
         "file_count": len(copied),
         "files": copied,
     })
-
-
-if __name__ == "__main__":
-    from fpga_toolbox.cli import run_single_tool
-
-    sys.exit(run_single_tool("copy_sandbox"))

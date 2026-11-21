@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
-
-if __name__ == "__main__" and __package__ in (None, ""):
-    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fpga_toolbox.core.sv_parser import SVModuleAST, SVPortAST, parse_sv_file
 from fpga_toolbox.core.types import REQUIRED_AXIL_SIGNALS, err_result, ok_result
@@ -200,9 +195,3 @@ def tool_extract_interfaces(
         data["draft_yaml_path"] = str(out_p.resolve())
 
     return ok_result("extract_interfaces", data, diagnostics=diagnostics)
-
-
-if __name__ == "__main__":
-    from fpga_toolbox.cli import run_single_tool
-
-    sys.exit(run_single_tool("extract_interfaces"))
