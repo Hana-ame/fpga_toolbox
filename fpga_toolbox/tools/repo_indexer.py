@@ -9,13 +9,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 if __name__ == "__main__" and __package__ in (None, ""):
-    import pathlib
+    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-    __package__ = "fpga_toolbox.tools"
-
-from ..core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
-from ..core.types import err_result, ok_result
+from fpga_toolbox.core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
+from fpga_toolbox.core.types import err_result, ok_result
 
 RTL_EXTS = {".v", ".sv", ".vh", ".svh"}
 _INC_RE = re.compile(r'^\s*`include\s+"([^"]+)"', re.MULTILINE)
@@ -131,7 +129,7 @@ def tool_resolve_deps(
 
 
 if __name__ == "__main__":
-    from ..cli import run_single_tool
+    from fpga_toolbox.cli import run_single_tool
 
     # 传了 --target-module 就走依赖闭包，否则只建索引
     legacy = ("--target-module", "--target_module")

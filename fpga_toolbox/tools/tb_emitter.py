@@ -9,19 +9,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 if __name__ == "__main__" and __package__ in (None, ""):
-    import pathlib
+    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-    __package__ = "fpga_toolbox.tools"
-
-from ..core.types import (
+from fpga_toolbox.core.types import (
     OPTIONAL_AXIL_SIGNALS,
     REQUIRED_AXIL_SIGNALS,
     CompiledUnitIR,
     err_result,
     ok_result,
 )
-from ..core.validator import build_and_validate_ir, load_raw_spec
+from fpga_toolbox.core.validator import build_and_validate_ir, load_raw_spec
 
 
 def _emit_wrap(u: CompiledUnitIR) -> str:
@@ -208,7 +206,7 @@ def tool_emit_testbench(spec_path: str, out_dir: str, rtl_file: Optional[str] = 
 
 
 if __name__ == "__main__":
-    from ..cli import run_single_tool
+    from fpga_toolbox.cli import run_single_tool
 
     # 传了 --out-dir 才生成测试台，否则只校验契约
     legacy = ("--out-dir", "--out_dir")

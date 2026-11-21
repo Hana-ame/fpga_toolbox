@@ -12,12 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 if __name__ == "__main__" and __package__ in (None, ""):
-    import pathlib
+    # 脚本模式下 sys.path[0] 是 tools/ 而不是仓库根，补一下才能 import fpga_toolbox
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-    __package__ = "fpga_toolbox.tools"
-
-from ..core.types import err_result, ok_result
+from fpga_toolbox.core.types import err_result, ok_result
 
 
 def _build_svg(report: Dict[str, Any], dep_graph: Dict[str, Any], ifaces: List[Dict[str, Any]]) -> str:
@@ -86,6 +84,6 @@ table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{padding:9px 1
 
 
 if __name__ == "__main__":
-    from ..cli import run_single_tool
+    from fpga_toolbox.cli import run_single_tool
 
     sys.exit(run_single_tool("render_visual_report"))
