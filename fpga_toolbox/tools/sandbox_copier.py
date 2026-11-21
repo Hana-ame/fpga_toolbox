@@ -12,8 +12,15 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+if __name__ == "__main__" and __package__ in (None, ""):
+    import pathlib
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    __package__ = "fpga_toolbox.tools"
 
 from ..core.types import err_result, ok_result
 
@@ -114,3 +121,9 @@ def tool_copy_sandbox(
         "file_count": len(copied),
         "files": copied,
     })
+
+
+if __name__ == "__main__":
+    from ..cli import run_single_tool
+
+    sys.exit(run_single_tool("copy_sandbox"))

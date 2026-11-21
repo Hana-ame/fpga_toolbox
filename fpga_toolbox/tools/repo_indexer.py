@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+if __name__ == "__main__" and __package__ in (None, ""):
+    import pathlib
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    __package__ = "fpga_toolbox.tools"
 
 from ..core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
 from ..core.types import err_result, ok_result
@@ -121,3 +128,12 @@ def tool_resolve_deps(
         "header_files": sorted(hdr_set),
         "all_files": sorted(rtl_set | hdr_set),
     }, diagnostics=diags)
+
+
+if __name__ == "__main__":
+    from ..cli import run_single_tool
+
+    # 传了 --target-module 就走依赖闭包，否则只建索引
+    legacy = ("--target-module", "--target_module")
+    pick = "resolve_deps" if any(a in legacy for a in sys.argv[1:]) else "index_repo"
+    sys.exit(run_single_tool(pick))

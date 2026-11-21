@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+if __name__ == "__main__" and __package__ in (None, ""):
+    import pathlib
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    __package__ = "fpga_toolbox.tools"
 
 from ..core.types import (
     OPTIONAL_AXIL_SIGNALS,
@@ -198,3 +205,12 @@ def tool_emit_testbench(spec_path: str, out_dir: str, rtl_file: Optional[str] = 
     Path(artifacts["in_situ_bind_file"]).write_text(_emit_bind(unit), encoding="utf-8")
     Path(artifacts["cocotb_testbench"]).write_text(_emit_cocotb(unit), encoding="utf-8")
     return ok_result("emit_testbench", {"module": mod, "output_dir": str(od.resolve()), "artifacts": artifacts}, diagnostics=dd)
+
+
+if __name__ == "__main__":
+    from ..cli import run_single_tool
+
+    # 传了 --out-dir 才生成测试台，否则只校验契约
+    legacy = ("--out-dir", "--out_dir")
+    pick = "emit_testbench" if any(a in legacy for a in sys.argv[1:]) else "validate_contract"
+    sys.exit(run_single_tool(pick))

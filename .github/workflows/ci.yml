@@ -85,8 +85,8 @@ jobs:
 
       - name: CLI contract
         run: |
-          python -m fpga_toolbox.cli list
-          python -m fpga_toolbox.cli schemas
+          python -m fpga_toolbox list
+          python -m fpga_toolbox schemas
 
       - name: Install package
         run: python -m pip install .

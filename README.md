@@ -20,7 +20,8 @@ cd fpga_toolbox && pip install -e ".[dev]"
 ```text
 fpga_toolbox/
 ├── __init__.py                 # 顶层导出 call_tool / list_tool_schemas
-├── cli.py                      # 命令行入口: list / schemas / call
+├── __main__.py                 # 支持 python -m fpga_toolbox <tool> --参数 值
+├── cli.py                      # 命令行入口：子命令由 inputSchema 自动生成
 ├── registry.py                 # 8 个原子工具注册表 + MCP JSON Schema
 ├── core/
 │   ├── types.py                # ToolResult 信封与 IR 数据类
@@ -50,12 +51,33 @@ fpga_toolbox/
 
 ## 快速调用
 
+三个层次，按需要选：
+
 ```bash
-python3 -m fpga_toolbox.cli list                 # 列出工具
-python3 -m fpga_toolbox.cli schemas              # 导出 MCP / Function-Calling Schema
-python3 -m fpga_toolbox.cli call index_repo \
-  --args '{"project_root": "./my_soc"}'          # 统一 JSON 输入/输出，失败返回码 1
+# 1) 包级入口（安装后可直接用 fpga-toolbox）
+python3 -m fpga_toolbox list                    # 列出工具
+python3 -m fpga_toolbox schemas                 # 导出 MCP / Function-Calling Schema
+python3 -m fpga_toolbox index_repo --project-root ./my_soc
+python3 -m fpga_toolbox copy_sandbox \
+  --project-root ./my_soc \
+  --relative-files rtl/a.sv inc/defs.svh \
+  --sandbox-dir /tmp/sb --no-clean
+
+# 2) 单文件直跑（调试单个工具时最省事）
+python3 fpga_toolbox/tools/iface_extractor.py --rtl-file ./dut.sv --module-name reg_slave
+python3 fpga_toolbox/tools/repo_indexer.py --target-module soc_top --project-root ./my_soc
+python3 fpga_toolbox/tools/tb_emitter.py --spec-path contract.yaml      # 只校验
+python3 fpga_toolbox/tools/tb_emitter.py --spec-path contract.yaml --out-dir tb/   # 生成
+
+# 3) 复杂对象参数用 @file.json
+python3 -m fpga_toolbox render_visual_report \
+  --report @report.json --dep-graph @deps.json \
+  --extracted-interfaces @ifaces.json --out-html-path out/visual.html
 ```
+
+参数名同时接受 `--kebab-case` 与 `--snake_case`；布尔参数用 `--clean` / `--no-clean`；失败统一返回退出码 1 并输出带 `error` 的 JSON。
+
+> 0.3.0 起移除了 `python -m fpga_toolbox.cli call <tool> --args '{...}'`，改用上面的子命令写法；依赖旧写法的脚本需要改一行。
 
 作为库使用：
 
@@ -107,7 +129,7 @@ pip install pyyaml
 python tests/test_regression.py     # 无需 pytest，全部通过时退出码 0
 ```
 
-覆盖：sandbox 误删防护、同名文件保留、未标记目录拒绝清理、六种复位命名识别与极性、wrapper 端口重复连接、cocotb 文件可编译、非法仿真结果报错、JUnit XML 解析、完整链路。
+覆盖：sandbox 误删防护、同名文件保留、未标记目录拒绝清理、六种复位命名识别与极性、wrapper 端口重复连接、cocotb 文件可编译、非法仿真结果报错、JUnit XML 解析、完整链路，以及 CLI 的三种调用方式（`-m fpga_toolbox` / 单文件直跑 / `@file.json`）与失败退出码。
 
 ## CI / CD
 

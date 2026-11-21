@@ -255,6 +255,66 @@ def test_full_chain(tmp: Path) -> None:
         check("html written", Path(vis["data"]["html_path"]).is_file())
 
 
+def test_cli(tmp: Path) -> None:
+    """The CLI surface is the part users actually touch, so drive it as a subprocess."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    proj = make_project(tmp / "cli")
+    rtl = proj / "rtl" / "reg_slave.sv"
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    print("cli: list / schemas")
+    res = run("-m", "fpga_toolbox", "list")
+    check("python -m fpga_toolbox list", res.returncode == 0 and "index_repo" in res.stdout, res.stderr[-300:])
+    res = run("-m", "fpga_toolbox", "schemas")
+    check("python -m fpga_toolbox schemas", res.returncode == 0 and '"inputSchema"' in res.stdout, res.stderr[-300:])
+
+    print("cli: native flags for a tool")
+    res = run("-m", "fpga_toolbox", "index_repo", "--project-root", str(proj))
+    check("native --project-root", res.returncode == 0 and '"reg_slave"' in res.stdout, res.stdout[-300:] + res.stderr[-300:])
+
+    print("cli: single-file execution")
+    res = run(str(root / "fpga_toolbox" / "tools" / "iface_extractor.py"),
+              "--rtl-file", str(rtl), "--module-name", "reg_slave")
+    check("direct script run", res.returncode == 0 and '"extract_interfaces"' in res.stdout,
+          res.stderr[-400:])
+
+    print("cli: @file.json for object parameters")
+    report = tmp / "cli" / "report.json"
+    report.write_text(json.dumps({
+        "module": "reg_slave", "overall_status": "PASS",
+        "summary": {"total": 1, "passed": 1, "failed": 0, "pass_rate": 1.0},
+        "checks": [{"rule_id": "R1", "category": "c", "status": "PASS", "detail": "d"}],
+    }), encoding="utf-8")
+    deps = tmp / "cli" / "deps.json"
+    deps.write_text(json.dumps({"dependency_closure": ["reg_slave"]}), encoding="utf-8")
+    ifaces = tmp / "cli" / "ifaces.json"
+    ifaces.write_text(json.dumps([{"protocol": "axi4_lite", "port_map": {"awaddr": "s_axi_awaddr"}}]), encoding="utf-8")
+    out = tmp / "cli" / "visual.html"
+    res = run("-m", "fpga_toolbox", "render_visual_report",
+              "--report", f"@{report}", "--dep-graph", f"@{deps}",
+              "--extracted-interfaces", f"@{ifaces}", "--out-html-path", str(out))
+    check("@file.json objects", res.returncode == 0 and out.is_file(), res.stdout[-300:] + res.stderr[-300:])
+
+    print("cli: boolean flags and failure exit code")
+    sb = tmp / "cli_sb"
+    res = run("-m", "fpga_toolbox", "copy_sandbox", "--project-root", str(proj),
+              "--relative-files", "rtl/reg_slave.sv", "--sandbox-dir", str(sb), "--no-clean")
+    check("--no-clean accepted", res.returncode == 0, res.stderr[-300:])
+    res = run("-m", "fpga_toolbox", "index_repo", "--project-root", str(tmp / "missing"))
+    check("failure exits 1", res.returncode == 1, str(res.returncode))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -263,6 +323,7 @@ def main() -> int:
         test_reset_detection(tmp)
         test_normalizer(tmp)
         test_full_chain(tmp)
+        test_cli(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))
