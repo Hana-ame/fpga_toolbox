@@ -18,7 +18,6 @@ cd fpga_toolbox && pip install -e ".[dev]"
 ## 目录结构
 
 ```text
-tools.py                        # 仓库根的单个工具分发器：python tools.py <tool> --参数
 fpga_toolbox/
 ├── __init__.py                 # 顶层导出 call_tool / list_tool_schemas
 ├── __main__.py                 # 支持 python -m fpga_toolbox <tool> --参数 值
@@ -28,13 +27,12 @@ fpga_toolbox/
 │   ├── types.py                # ToolResult 信封与 IR 数据类
 │   ├── sv_parser.py            # Verilog/SV 词法与递归下降语法解析器
 │   └── validator.py            # 边界契约语义检查 + RTL 端口交叉校验
-└── tools/
-    ├── repo_indexer.py         # index_repo + resolve_deps（依赖闭包）
-    ├── sandbox_copier.py       # copy_sandbox（保留目录结构 + SHA-256）
-    ├── iface_extractor.py      # extract_interfaces（AXI4-Lite / Stream 抽取）
-    ├── tb_emitter.py           # validate_contract + emit_testbench（代码生成）
-    ├── result_normalizer.py    # normalize_sim_result（JUnit XML / JSON / SVA 日志）
-    └── visual_renderer.py      # render_visual_report（SVG 拓扑 + HTML 视图）
+├── repo_indexer.py             # index_repo + resolve_deps（依赖闭包）
+├── sandbox_copier.py           # copy_sandbox（保留目录结构 + SHA-256）
+├── iface_extractor.py          # extract_interfaces（AXI4-Lite / Stream 抽取）
+├── tb_emitter.py               # validate_contract + emit_testbench（代码生成）
+├── result_normalizer.py        # normalize_sim_result（JUnit XML / JSON / SVA 日志）
+└── visual_renderer.py          # render_visual_report（SVG 拓扑 + HTML 视图）
 ```
 
 ## 工具一览
@@ -64,10 +62,11 @@ python3 -m fpga_toolbox copy_sandbox \
   --relative-files rtl/a.sv inc/defs.svh \
   --sandbox-dir /tmp/sb --no-clean
 
-# 2) 仓库根目录的 tools.py，直接跑某个工具（调试单个工具时最省事）
-python3 tools.py extract_interfaces --rtl-file ./dut.sv --module-name reg_slave
-python3 tools.py index_repo --project-root ./my_soc
-python3 tools.py validate_contract --spec-path contract.yaml
+# 2) 单文件直跑（工具就在 fpga_toolbox/ 下，调试单个工具时最省事）
+python3 fpga_toolbox/iface_extractor.py --rtl-file ./dut.sv --module-name reg_slave
+python3 fpga_toolbox/repo_indexer.py --project-root ./my_soc
+python3 fpga_toolbox/tb_emitter.py --spec-path contract.yaml                # 只校验
+python3 fpga_toolbox/tb_emitter.py --spec-path contract.yaml --out-dir tb/  # 生成
 
 # 3) 复杂对象参数用 @file.json
 python3 -m fpga_toolbox render_visual_report \

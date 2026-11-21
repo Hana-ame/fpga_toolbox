@@ -18,7 +18,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fpga_toolbox.core.types import err_result, ok_result
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    __package__ = "fpga_toolbox"
+
+from .core.types import err_result, ok_result
 
 _SVA_ERR_RE = re.compile(r"\[RULE:(P_\d+)\]\s*(.+)")
 _STATUS_MAP = {"PASS": "PASS", "PASSED": "PASS", "OK": "PASS",
@@ -147,3 +154,11 @@ def tool_normalize_sim_result(
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return ok_result("normalize_sim_result", report)
+
+
+if __name__ == "__main__":
+    import sys
+
+    from .cli import run_single_tool
+
+    sys.exit(run_single_tool("normalize_sim_result"))

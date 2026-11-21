@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 from .core.types import err_result
-from .tools.iface_extractor import tool_extract_interfaces
-from .tools.repo_indexer import tool_index_repo, tool_resolve_deps
-from .tools.result_normalizer import tool_normalize_sim_result
-from .tools.sandbox_copier import tool_copy_sandbox
-from .tools.tb_emitter import tool_emit_testbench, tool_validate_contract
-from .tools.visual_renderer import tool_render_visual_report
+from .iface_extractor import tool_extract_interfaces
+from .repo_indexer import tool_index_repo, tool_resolve_deps
+from .result_normalizer import tool_normalize_sim_result
+from .sandbox_copier import tool_copy_sandbox
+from .tb_emitter import tool_emit_testbench, tool_validate_contract
+from .visual_renderer import tool_render_visual_report
 
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index_repo": {

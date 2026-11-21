@@ -283,13 +283,15 @@ def test_cli(tmp: Path) -> None:
     res = run("-m", "fpga_toolbox", "index_repo", "--project-root", str(proj))
     check("native --project-root", res.returncode == 0 and '"reg_slave"' in res.stdout, res.stdout[-300:] + res.stderr[-300:])
 
-    print("cli: tools.py dispatcher")
-    res = run(str(root / "tools.py"), "extract_interfaces",
+    print("cli: single-file and module execution")
+    res = run(str(root / "fpga_toolbox" / "iface_extractor.py"),
               "--rtl-file", str(rtl), "--module-name", "reg_slave")
-    check("python tools.py <tool>", res.returncode == 0 and '"extract_interfaces"' in res.stdout,
-          res.stderr[-400:])
-    res = run(str(root / "tools.py"), "no_such_tool")
-    check("tools.py rejects unknown tool", res.returncode == 2, str(res.returncode))
+    check("python fpga_toolbox/iface_extractor.py",
+          res.returncode == 0 and '"extract_interfaces"' in res.stdout, res.stderr[-400:])
+    res = run("-m", "fpga_toolbox.repo_indexer", "--project-root", str(proj))
+    check("python -m fpga_toolbox.repo_indexer",
+          res.returncode == 0 and '"index_repo"' in res.stdout, res.stderr[-400:])
+    check("no runpy double-import warning", "RuntimeWarning" not in res.stderr, res.stderr[-300:])
 
     print("cli: @file.json for object parameters")
     report = tmp / "cli" / "report.json"

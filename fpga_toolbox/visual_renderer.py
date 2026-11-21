@@ -10,7 +10,14 @@ import html
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fpga_toolbox.core.types import err_result, ok_result
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    __package__ = "fpga_toolbox"
+
+from .core.types import err_result, ok_result
 
 
 def _build_svg(report: Dict[str, Any], dep_graph: Dict[str, Any], ifaces: List[Dict[str, Any]]) -> str:
@@ -76,3 +83,11 @@ table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{padding:9px 1
     svg_p = out_p.with_suffix(".svg")
     svg_p.write_text(svg, encoding="utf-8")
     return ok_result("render_visual_report", {"html_path": str(out_p.resolve()), "svg_path": str(svg_p.resolve())})
+
+
+if __name__ == "__main__":
+    import sys
+
+    from .cli import run_single_tool
+
+    sys.exit(run_single_tool("render_visual_report"))

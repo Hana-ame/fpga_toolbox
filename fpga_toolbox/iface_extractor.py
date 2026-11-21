@@ -8,8 +8,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from fpga_toolbox.core.sv_parser import SVModuleAST, SVPortAST, parse_sv_file
-from fpga_toolbox.core.types import REQUIRED_AXIL_SIGNALS, err_result, ok_result
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    __package__ = "fpga_toolbox"
+
+from .core.sv_parser import SVModuleAST, SVPortAST, parse_sv_file
+from .core.types import REQUIRED_AXIL_SIGNALS, err_result, ok_result
 
 _AXIL_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("awaddr",  re.compile(r"(?:^|_)aw_?addr$", re.I)),
@@ -195,3 +202,11 @@ def tool_extract_interfaces(
         data["draft_yaml_path"] = str(out_p.resolve())
 
     return ok_result("extract_interfaces", data, diagnostics=diagnostics)
+
+
+if __name__ == "__main__":
+    import sys
+
+    from .cli import run_single_tool
+
+    sys.exit(run_single_tool("extract_interfaces"))

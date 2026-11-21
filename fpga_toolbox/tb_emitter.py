@@ -7,14 +7,21 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fpga_toolbox.core.types import (
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    __package__ = "fpga_toolbox"
+
+from .core.types import (
     OPTIONAL_AXIL_SIGNALS,
     REQUIRED_AXIL_SIGNALS,
     CompiledUnitIR,
     err_result,
     ok_result,
 )
-from fpga_toolbox.core.validator import build_and_validate_ir, load_raw_spec
+from .core.validator import build_and_validate_ir, load_raw_spec
 
 
 def _emit_wrap(u: CompiledUnitIR) -> str:
@@ -198,3 +205,13 @@ def tool_emit_testbench(spec_path: str, out_dir: str, rtl_file: Optional[str] = 
     Path(artifacts["in_situ_bind_file"]).write_text(_emit_bind(unit), encoding="utf-8")
     Path(artifacts["cocotb_testbench"]).write_text(_emit_cocotb(unit), encoding="utf-8")
     return ok_result("emit_testbench", {"module": mod, "output_dir": str(od.resolve()), "artifacts": artifacts}, diagnostics=dd)
+
+
+if __name__ == "__main__":
+    import sys
+
+    from .cli import run_single_tool
+
+    # 传了 --out-dir 才生成测试台，否则只校验契约
+    pick = "emit_testbench" if any(a.startswith("--out-dir") or a.startswith("--out_dir") for a in sys.argv[1:]) else "validate_contract"
+    sys.exit(run_single_tool(pick))

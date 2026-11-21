@@ -7,8 +7,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from fpga_toolbox.core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
-from fpga_toolbox.core.types import err_result, ok_result
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    __package__ = "fpga_toolbox"
+
+from .core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
+from .core.types import err_result, ok_result
 
 RTL_EXTS = {".v", ".sv", ".vh", ".svh"}
 _INC_RE = re.compile(r'^\s*`include\s+"([^"]+)"', re.MULTILINE)
@@ -121,3 +128,13 @@ def tool_resolve_deps(
         "header_files": sorted(hdr_set),
         "all_files": sorted(rtl_set | hdr_set),
     }, diagnostics=diags)
+
+
+if __name__ == "__main__":
+    import sys
+
+    from .cli import run_single_tool
+
+    # 传了 --target-module 走依赖闭包，否则只建索引
+    pick = "resolve_deps" if any(a.startswith("--target-module") or a.startswith("--target_module") for a in sys.argv[1:]) else "index_repo"
+    sys.exit(run_single_tool(pick))
