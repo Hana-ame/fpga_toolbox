@@ -32,7 +32,7 @@ jobs:
       - name: ruff check
         run: ruff check --output-format=github .
 
-      - name: Syntax gate for Python 3.9
+      - name: Syntax gate for Python 3.10
         run: |
           python - <<'PY'
           import ast, pathlib, sys
@@ -42,13 +42,13 @@ jobs:
               if ".git" in path.parts:
                   continue
               try:
-                  ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 9))
+                  ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 10))
               except SyntaxError as exc:
                   bad.append(f"{path}:{exc.lineno}: {exc.msg}")
           if bad:
               print("\n".join(bad))
-              sys.exit("files above do not parse under Python 3.9")
-          print("all modules parse under Python 3.9")
+              sys.exit("files above do not parse under Python 3.10")
+          print("all modules parse under Python 3.10")
           PY
 
   test:
@@ -58,8 +58,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            python: "3.9"
+          - os: ubuntu-24.04
+            python: "3.10"
           - os: ubuntu-latest
             python: "3.11"
           - os: ubuntu-latest

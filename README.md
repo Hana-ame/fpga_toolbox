@@ -1,6 +1,19 @@
 # fpga_toolbox — 面向 AI Agent Harness 的模块化 FPGA 验证工具箱
 
-把「读 RTL → 抽接口 → 校验契约 → 生成 testbench → 归一化仿真结果 → 出可视化报告」拆成 8 个原子工具，Python 实现，仅依赖 PyYAML。外部 Harness 或 MCP Server 通过 `registry.py` / `cli.py` 统一调用，所有工具共享同一 `ToolResult` 返回信封（`ok / tool / data / diagnostics / error`）。
+[![CI](https://github.com/Hana-ame/fpga_toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Hana-ame/fpga_toolbox/actions/workflows/ci.yml)
+[![Release](https://github.com/Hana-ame/fpga_toolbox/actions/workflows/release.yml/badge.svg)](https://github.com/Hana-ame/fpga_toolbox/actions/workflows/release.yml)
+
+把「读 RTL → 抽接口 → 校验契约 → 生成 testbench → 归一化仿真结果 → 出可视化报告」拆成 8 个原子工具，Python 实现（≥3.10），仅依赖 PyYAML。外部 Harness 或 MCP Server 通过 `registry.py` / `cli.py` 统一调用，所有工具共享同一 `ToolResult` 返回信封（`ok / tool / data / diagnostics / error`）。
+
+## 安装
+
+```bash
+pip install git+https://github.com/Hana-ame/fpga_toolbox.git
+
+# 本地开发（含 ruff）
+git clone git@github.com:Hana-ame/fpga_toolbox.git
+cd fpga_toolbox && pip install -e ".[dev]"
+```
 
 ## 目录结构
 
@@ -102,8 +115,8 @@ python tests/test_regression.py     # 无需 pytest，全部通过时退出码 0
 
 | Job | 内容 |
 | --- | --- |
-| `lint` | `ruff check`（E4/E7/E9/F/I）+ 用 `ast.parse(feature_version=(3,9))` 卡 3.9 语法兼容 |
-| `test` | 矩阵：Ubuntu × Python 3.9/3.11/3.13、Windows × Python 3.13；跑回归、CLI 契约、`pip install .`、入口点 |
+| `lint` | `ruff check`（E4/E7/E9/F/I）+ 用 `ast.parse(feature_version=(3,10))` 卡最低版本语法兼容 |
+| `test` | 矩阵：Ubuntu 24.04 × Python 3.10、Ubuntu × 3.11/3.13、Windows × 3.13；跑回归、CLI 契约、`pip install .`、入口点 |
 | `build` | 构建 sdist + wheel，装 wheel 后校验导入与入口点，产物上传为 artifact |
 
 `.github/workflows/release.yml` — 推 `v*` tag（或手动触发）时触发：校验 tag 与 `__version__` 一致 → 跑回归 → 构建 → 创建 GitHub Release 并上传产物 → 若配置了 `PYPI_API_TOKEN` 则发布到 PyPI，未配置则自动跳过。
