@@ -611,7 +611,7 @@ def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
     for sm in slang_mods:
         new_ports = list(sm.ports)
         for i, sp_ in enumerate(new_ports):
-            if sp_.is_interface and not sp_.interface_type and sp_.name in builtin_ports:
+            if sp_.is_interface and sp_.name in builtin_ports and (not sp_.interface_type or not sp_.modport):
                 itype, modp = builtin_ports[sp_.name]
                 new_ports[i] = SVPortAST(
                     name=sp_.name, direction=sp_.direction, width_expr=sp_.width_expr,
