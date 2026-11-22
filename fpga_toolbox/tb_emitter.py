@@ -242,8 +242,29 @@ def tool_emit_testbench(spec_path: str, out_dir: str, rtl_file: Optional[str] = 
         return err_result("emit_testbench", f"Spec not found: {spec_path}")
     unit, diags = build_and_validate_ir(load_raw_spec(sp), Path(rtl_file) if rtl_file else None)
     dd = [asdict(d) for d in diags]
+    # 存在 ERROR 级诊断（如 E001 缺必需 port_map）时必须提前失败。
+    # 否则会带着残缺的 IR 往下 emit，最终在生成 wrapper 时抛 KeyError，
+    # 而报错只有 'awaddr' 这种单词、看不出根因（实测踩过）。
+    hard_errors = [d for d in dd if str(d.get("severity", "")).upper() == "ERROR"]
+    if hard_errors:
+        summary = "; ".join(f"{d.get('code')}: {d.get('message')}" for d in hard_errors[:5])
+        return err_result("emit_testbench",
+                          f"Spec has {len(hard_errors)} error(s): {summary}",
+                          diagnostics=dd)
     if unit is None:
         return err_result("emit_testbench", "Compilation failed.", diagnostics=dd)
+
+    # emit_testbench 只生成 AXI4-Lite wrapper。若 spec 没有 AXI4-Lite boundary
+    # （如纯 APB 寄存器文件），port_map 会是空 dict，往下 emit 必然 KeyError。
+    # 这里给出明确错误而非让 'awaddr' 这种单词报错（实测踩过）。
+    if not unit.boundary.axil.port_map:
+        return err_result(
+            "emit_testbench",
+            "Spec has no AXI4-Lite boundary (boundary.axi4_lite.port_map is empty). "
+            "emit_testbench generates an AXI4-Lite wrapper; provide an axi4_lite "
+            "boundary, or generate one via `extract_interfaces --emit-draft-yaml`.",
+            diagnostics=dd,
+        )
 
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)

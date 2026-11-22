@@ -22,6 +22,9 @@ from .core.types import err_result, ok_result
 from .mutation_runner import tool_run_mutation
 from .result_normalizer import tool_normalize_sim_result
 from .sandbox_copier import tool_copy_sandbox
+from .sim_runner import verify_suite_identities, tool_run_sim
+from .tb_emitter import tool_emit_testbench
+from .core import sv_parser
 from .tb_linter import tool_lint_tb
 
 
@@ -73,12 +76,116 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
         a4_ok = not r_sb["ok"]
         checks.append({"id": "A4_SANDBOX_ROOT_GUARD", "passed": a4_ok, "detail": f"ok={r_sb['ok']}"})
 
+        # A5: verify_suite_identities 必须解析 sim.sh 真实格式日志，且漏跑被精确抓出。
+        # 这是 run_sim / normalize 的守门逻辑。历史缺陷：正则要求套件名后紧跟 `==`，
+        # 而真实日志是 `== sim: <name> (top=<top>) ==`，导致所有套件被误判 missing，
+        # 反静默通过护栏形同虚设。此检查锁死：真实格式能解析、漏跑能识别。
+        real_log = (
+            "== sim: counter (top=tb_counter) ==\nPASS: all 20 checks passed\n"
+            "== sim: sv (top=tb_axi_apb_sv) ==\nPASS: sv testbench\n"
+        )
+        a5 = verify_suite_identities(real_log, ["counter", "sv", "gaps"])
+        a5_ok = (
+            a5["observed"].get("counter") == "PASS"
+            and a5["observed"].get("sv") == "PASS"
+            and a5["missing"] == ["gaps"]
+            and a5["all_verified"] is False
+        )
+        checks.append({
+            "id": "A5_SUITE_IDENTITY_REAL_FORMAT",
+            "passed": a5_ok,
+            "detail": f"observed={a5['observed']} missing={a5['missing']}",
+        })
+
+        # A6: 全部预期套件齐且都 PASS 时必须 all_verified=True（不能假报警）
+        a6 = verify_suite_identities(real_log, ["counter", "sv"])
+        a6_ok = a6["all_verified"] is True and a6["missing"] == [] and a6["failed"] == []
+        checks.append({
+            "id": "A6_SUITE_IDENTITY_ALL_PASS",
+            "passed": a6_ok,
+            "detail": f"all_verified={a6['all_verified']} missing={a6['missing']}",
+        })
+
+        # A7: run_sim 必须在 Verilator 版本不达标时显式拒绝（E020），不能静默跑。
+        # 伪造一个 meets_min_version=False 的 EDA 环境，确认 E020 守卫生效。
+        import fpga_toolbox.sim_runner as _sr
+        _orig_probe = _sr.probe_eda_env
+        r_sim = None
+        e020 = False
+
+        def _fake_env():
+            return {
+                "verilator": {"path": "/nonexistent", "version": "5.020",
+                              "meets_min_version": False, "message": "Verilator 5.020 < 5.040"},
+                "slang": {"path": None, "available": False},
+                "stdbuf": {"path": "/usr/bin/stdbuf", "available": True},
+            }
+
+        try:
+            _sr.probe_eda_env = _fake_env
+            _sim_dir = root / "simproj"
+            _sim_dir.mkdir()
+            _sim_script = _sim_dir / "sim.sh"
+            _sim_script.write_text("#!/bin/bash\necho dummy\n", encoding="utf-8")
+            r_sim = tool_run_sim(str(_sim_script), suite="counter", timeout_sec=10)
+            e020 = any(d.get("code") == "E020" for d in (r_sim.get("diagnostics") or []))
+            a7_ok = (not r_sim["ok"]) and e020
+        finally:
+            _sr.probe_eda_env = _orig_probe
+        checks.append({
+            "id": "A7_RUN_SIM_VERSION_GUARD",
+            "passed": a7_ok,
+            "detail": f"ok={r_sim['ok']} e020={e020}",
+        })
+
+        # A8: emit_testbench 在 spec 缺 AXI4-Lite boundary 时必须 fail-fast，
+        # 而不是带着空 port_map 往下 emit 到 KeyError('awaddr')（历史缺陷）。
+        apb_only = root / "apb_only.json"
+        apb_only.write_text(
+            '{"$schema":"apb-regfile-spec/v2","module":"m","bus":{"protocol":"APB",'
+            '"addr_width":8,"data_width":32,"wait_cycles":2},"registers":[]}',
+            encoding="utf-8",
+        )
+        r_emit = tool_emit_testbench(str(apb_only), str(root / "tb_out"))
+        a8_ok = (not r_emit["ok"]) and ("awaddr" not in str(r_emit.get("error") or "")) \
+            and ("axi4_lite" in str(r_emit.get("error") or "").lower()
+                 or "boundary" in str(r_emit.get("error") or "").lower())
+        checks.append({
+            "id": "A8_EMIT_FAIL_FAST",
+            "passed": a8_ok,
+            "detail": f"ok={r_emit['ok']} error={str(r_emit.get('error') or '')[:60]}",
+        })
+
+        # A9: slang 不可用（或解析失败）时必须对调用方可见（W013 诊断），
+        # 而不是静默退回 builtin——否则「可选 slang AST 后端」就是虚报。
+        # 伪造 slang 不在 PATH，确认 builtin 回退会产出 W013。
+        import fpga_toolbox.core.sv_parser as _sp
+        _orig_which = _sp.shutil.which
+        try:
+            _sp.shutil.which = lambda name: None if name == "slang" else _orig_which(name)
+            _rtl = root / "probe.sv"
+            _rtl.write_text("module probe(input logic a, output logic y);\nassign y = a;\nendmodule\n",
+                            encoding="utf-8")
+            diags: list = []
+            _sp.parse_sv_file(_rtl, backend="auto", diagnostics=diags)
+            a9_ok = any("slang" in d for d in diags)
+        finally:
+            _sp.shutil.which = _orig_which
+        checks.append({
+            "id": "A9_SLANG_FALLBACK_VISIBLE",
+            "passed": a9_ok,
+            "detail": f"slang-missing diagnostics={len(diags)} visible={a9_ok}",
+        })
+
     failed = [c for c in checks if not c["passed"]]
     data = {"total": len(checks), "passed": len(checks) - len(failed), "failed": len(failed), "checks": checks}
     if failed and strict:
+        # 自审计失败时仍带 data：调用方需要看到逐项 passed/failed（哪些护栏失效），
+        # 而非只有一句汇总。与 lint_tb / run_mutation 同类修复。
         return err_result(
             "audit_harness",
             f"Self-audit failed on {len(failed)} check(s): {[c['id'] for c in failed]}",
+            data=data,
             diagnostics=[{"severity": "ERROR", "code": "E040", "path": c["id"], "message": c["detail"]} for c in failed],
         )
     return ok_result("audit_harness", data)

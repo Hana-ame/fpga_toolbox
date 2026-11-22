@@ -71,6 +71,17 @@ def tool_run_mutation(
     timeout_sec: int = 120,
     only_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # 同 run_sim：MCP / CLI 可能把数字序列化成字符串，边界处显式转换，
+    # 避免 subprocess.run(timeout=str) 与 score < min_score 抛 TypeError。
+    try:
+        min_score = float(min_score)
+    except (TypeError, ValueError):
+        return err_result("run_mutation", f"min_score must be a number, got {min_score!r}")
+    try:
+        timeout_sec = int(timeout_sec)
+    except (TypeError, ValueError):
+        return err_result("run_mutation", f"timeout_sec must be an integer, got {timeout_sec!r}")
+
     wd = Path(workdir)
     sp = Path(mutation_spec)
     if not wd.is_dir():
@@ -136,9 +147,12 @@ def tool_run_mutation(
         "results": results,
     }
     if score < min_score:
+        # 分数低于门槛时仍带 data：调用方需要看到逐个变异的 killed/survived
+        # 结果（哪些变异存活 = 测试盲区），否则只能看到一句「50% < 100%」。
         return err_result(
             "run_mutation",
             f"Mutation score {score}% is below threshold {min_score}%.",
+            data=data,
             diagnostics=[{"severity": "ERROR", "code": "E031", "path": "mutation_score", "message": f"{killed}/{total} killed ({score}% < {min_score}%)."}],
         )
     return ok_result("run_mutation", data)

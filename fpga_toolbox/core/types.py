@@ -58,8 +58,10 @@ def ok_result(tool: str, data: Dict[str, Any], diagnostics: Optional[List[Dict[s
     return ToolResult(ok=True, tool=tool, data=data, diagnostics=diagnostics or []).to_dict()
 
 
-def err_result(tool: str, message: str, diagnostics: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    return ToolResult(ok=False, tool=tool, data={}, diagnostics=diagnostics or [], error=message).to_dict()
+def err_result(tool: str, message: str, diagnostics: Optional[List[Dict[str, Any]]] = None, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # data 默认 {} 保持向后兼容；需要携带结构化汇总的工具（如 lint_tb 违规时
+    # 仍要返回 error_count/warning_count/findings）可显式传 data。
+    return ToolResult(ok=False, tool=tool, data=data if data is not None else {}, diagnostics=diagnostics or [], error=message).to_dict()
 
 
 @dataclass(frozen=True)

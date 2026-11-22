@@ -147,9 +147,13 @@ def test_verilator_log_normalizer_and_visual() -> None:
     with tempfile.TemporaryDirectory() as td:
         td_p = Path(td)
         log = td_p / "sim.log"
+        # 用 sim.sh 的真实格式：`== sim: <name> (top=<top>) ==`。套件名后带
+        # 参数。旧正则要求套件名后紧跟 `==`，对这种真实日志永远匹配不到，
+        # 会把所有套件误判为 missing —— 「逐套件身份核对」护栏对真实日志
+        # 从不生效。这里特意用真实格式锁死该缺陷。
         log.write_text(
-            "== sim: counter ==\nPASS: all 20 checks passed\n"
-            "== sim: axi ==\nPASS: all 35 checks passed\n",
+            "== sim: counter (top=tb_counter) ==\nPASS: all 20 checks passed\n"
+            "== sim: axi (top=tb_axi_apb) ==\nPASS: all 35 checks passed\n",
             encoding="utf-8",
         )
         r_ok = call_tool("normalize_sim_result", {
@@ -182,7 +186,11 @@ def test_verilator_log_normalizer_and_visual() -> None:
 def test_audit_and_registry() -> None:
     print("fusion: audit_harness & 12-tool registry/CLI")
     r_aud = call_tool("audit_harness", {"strict": True})
-    check(r_aud["ok"] and r_aud["data"]["passed"] == 4, "audit_harness 4/4 fault-injection checks passed")
+    # 动态断言：检查数会随新护栏覆盖扩展（已从 4 增至 9，含 A5-A9 套件身份核对、版本守卫、emit fail-fast、slang 回退可见性）。
+    # 这里只要求「全部通过」，不再硬编码具体数字，避免加检查时误判为回归。
+    aud = r_aud.get("data", {})
+    check(r_aud["ok"] and aud.get("failed") == 0 and aud.get("passed", 0) >= 9,
+          f"audit_harness all fault-injection checks passed (passed={aud.get('passed')}/{aud.get('total')})")
 
     schemas = list_tool_schemas()
     names = {s["name"] for s in schemas}
@@ -193,13 +201,251 @@ def test_audit_and_registry() -> None:
     check(proc.returncode == 0 and '"ok": true' in proc.stdout, "CLI `python -m fpga_toolbox audit_harness` exits 0")
 
 
+def test_slang_backend_real_rtl() -> None:
+    """锁死 slang 后端两个历史缺陷（仅在装了 slang 时验证）。
+
+    缺陷 1：slang --ast-json - 把人类可读 banner（"Top level design units:"
+            / "Build succeeded:")和 JSON 混在同一个 stdout，旧实现直接
+            json.loads 整段输出必然失败 → slang 后端从未真正生效。
+    缺陷 2：slang 遇到未知 package 时 exit 非 0 但仍输出完整 AST JSON，
+            旧实现因 returncode != 0 整段丢弃；且回退到 builtin 时对调用方
+            无任何信号 —— 恰是本项目批判的「静默通过」。
+    """
+    import shutil
+
+    print("fusion: slang AST backend on real RTL (banner handling + fallback visibility)")
+    if not shutil.which("slang"):
+        print("  skip slang not installed (W013/回退诊断在无 slang 时仍可验证)")
+        return
+
+    # 1) 真实桥文件（带跨文件 import）必须真的走 slang 后端，不能静默回退
+    bridge = REF / "axi" / "axi_apb_bridge.sv"
+    if bridge.is_file():
+        r = call_tool("extract_interfaces", {
+            "rtl_file": str(bridge), "parser_backend": "slang",
+        })
+        check(r.get("ok") is True, "slang backend parses bridge with cross-file imports")
+        mods = r.get("data", {}).get("modules", [])
+        if mods:
+            check(mods[0].get("parser_backend") == "slang",
+                  f"bridge really used slang backend (got {mods[0].get('parser_backend')})")
+
+    # 2) auto 后端应优先选 slang，且不产生「回退」诊断
+    if bridge.is_file():
+        r = call_tool("extract_interfaces", {"rtl_file": str(bridge)})
+        mods = r.get("data", {}).get("modules", [])
+        if mods:
+            check(mods[0].get("parser_backend") == "slang",
+                  "auto backend prefers slang when available")
+            diags = r.get("diagnostics") or []
+            check(not any(d.get("code") == "W013" for d in diags),
+                  "no W013 fallback warning when slang succeeds")
+
+    # 3) 覆盖率：靶场里含 module 的 .sv 文件应全部走 slang（零静默回退）
+    from fpga_toolbox.core.sv_parser import parse_sv_file
+    rtl_files = sorted(REF.rglob("*.sv"))
+    with_mod = []
+    for f in rtl_files:
+        if "module " in f.read_text(encoding="utf-8", errors="replace"):
+            with_mod.append(f)
+    slang_hits = 0
+    fallback_diags = 0
+    for f in with_mod:
+        diag: list = []
+        m = parse_sv_file(f, backend="auto", diagnostics=diag)
+        if m and m[0].parser_backend == "slang":
+            slang_hits += 1
+        elif diag:
+            fallback_diags += 1
+    check(slang_hits == len(with_mod),
+          f"all {len(with_mod)} module-bearing .sv files parsed by slang (got {slang_hits})")
+    check(fallback_diags == 0,
+          "no silent builtin fallback (fallbacks are reported via diagnostics)")
+
+    # 4) 无 slang 的环境必须产出回退诊断（可见信号）
+    from fpga_toolbox.core import sv_parser as sp
+    if bridge.is_file():
+        diag2: list = []
+        m2 = parse_sv_file(bridge, backend="auto", diagnostics=diag2)
+        check(m2 is not None, "auto backend still returns modules when diagnostics collected")
+
+
+def test_emit_testbench_error_paths() -> None:
+    """锁死 emit_testbench 的两个错误路径（历史缺陷：报错只有 'awaddr' 一个词）。
+
+    缺陷：spec 缺 AXI4-Lite boundary（如纯 APB 寄存器文件）时，build_and_validate_ir
+    静默构造出空 port_map 的 axil IR，往下 emit 在 _emit_wrap 抛 KeyError('awaddr')，
+    调用方只看到一个单词、看不出根因。修复后必须给出明确错误。
+    """
+    import tempfile
+
+    print("fusion: emit_testbench clear error paths (no cryptic KeyError)")
+    with tempfile.TemporaryDirectory() as tmp:
+        # 1) 纯 APB 寄存器 spec（无 axi4_lite boundary）→ 必须明确拒绝
+        r = call_tool("emit_testbench", {
+            "spec_path": str(REF / "axi" / "regfile_spec.json"),
+            "out_dir": str(Path(tmp) / "apb_only"),
+        })
+        check(r.get("ok") is False,
+              "pure-APB spec rejected (no AXI4-Lite boundary)")
+        err = str(r.get("error") or "")
+        check("awaddr" != err,
+              f"error is not a bare 'awaddr' (got {err[:60]!r})")
+        check("axi4_lite" in err.lower() or "boundary" in err.lower(),
+              "error mentions the missing AXI4-Lite boundary")
+
+        # 2) 完整链路但缺必需 port_map → 必须报 E001 而非崩在生成阶段
+        # 构造一个含 axi4_lite 但缺 wstrb 的契约
+        bad = Path(tmp) / "no_wstrb.yaml"
+        bad.write_text(
+            "boundary:\n"
+            "  module_name: foo\n"
+            "  rtl_files: [foo.sv]\n"
+            "  clock: {port: ACLK}\n"
+            "  reset: {port: ARESETn, active_low: true}\n"
+            "  axi4_lite:\n"
+            "    addr_width: 8\n"
+            "    data_width: 32\n"
+            "    role: slave\n"
+            "    port_map:\n"
+            "      awaddr: AWADDR\n"  # 故意只给一个信号，缺 wstrb 等
+            "test_plan:\n"
+            "  protocol_rules: {check_valid_stability: true, check_reset_outputs: true, max_resp_cycles: 16, allow_unaligned_addr: false}\n"
+            "  register_rules: []\n"
+            "  illegal_addr_rules: []\n"
+            "  stress_profile: {random_backpressure: false, iterations: 1, seed: 1}\n",
+            encoding="utf-8",
+        )
+        r2 = call_tool("emit_testbench", {
+            "spec_path": str(bad),
+            "out_dir": str(Path(tmp) / "no_wstrb"),
+        })
+        check(r2.get("ok") is False,
+              "incomplete port_map rejected with E001")
+        err2 = str(r2.get("error") or "")
+        check("E001" in err2,
+              f"error surfaces the E001 diagnostic (got {err2[:70]!r})")
+        check(len(r2.get("diagnostics") or []) >= 1,
+              "E001 diagnostic is propagated to the caller")
+
+
+def test_suite_identity_real_format() -> None:
+    """锁死 verify_suite_identities 对 sim.sh 真实日志格式的解析。
+
+    sim.sh 打印 `== sim: <name> (top=<top>) ==`，套件名后带 (top=...) /
+    (WAIT=...) 参数。旧正则 `==\s*sim:\s*(\w+)\s*==` 对此永远匹配不到，
+    会把所有套件判为 missing——反静默通过护栏形同虚设。
+    """
+    from fpga_toolbox.sim_runner import verify_suite_identities
+
+    print("fusion: suite identity parsing on real sim.sh log format")
+    real = (
+        "== sim: counter (top=tb_counter) ==\nPASS: all 20 checks passed\n"
+        "== sim: latency (WAIT=93) ==\nPASS: latency suite ok\n"
+        "== sim: sv (top=tb_axi_apb_sv) ==\n[MON] monitor clean\nPASS: sv txn testbench\n"
+        "== sim: gaps (top=tb_gaps_sv) ==\nFAIL: coverage-gap testbench\n"
+    )
+    r = verify_suite_identities(real, ["counter", "latency", "sv", "gaps", "dual"])
+    check(r["observed"].get("counter") == "PASS", f"counter parsed PASS (got {r['observed'].get('counter')})")
+    check(r["observed"].get("latency") == "PASS", f"latency (WAIT=) format parsed (got {r['observed'].get('latency')})")
+    check(r["observed"].get("sv") == "PASS", f"sv parsed PASS despite non-PASS monitor line (got {r['observed'].get('sv')})")
+    check(r["observed"].get("gaps") == "FAIL", f"gaps with FAIL detected (got {r['observed'].get('gaps')})")
+    check(r["missing"] == ["dual"], f"only 'dual' missing (got {r['missing']})")
+    check(r["all_verified"] is False, "all_verified False when a suite missing")
+
+
+def test_lint_wait_form() -> None:
+    """锁死 lint_tb 的 wait() 握手检测（第三方 TB 广泛使用 wait 而非 while）。
+
+    历史缺陷：R1/R3 只匹配 `while (!BVALID)`，不识别语义等价的
+    `wait (BVALID)`。真实第三方 testbench（如 GH 的 AXI4_Lite_APB4_Bridge）
+    大量用 wait()，旧实现完全漏报。本检查用最小 fixture 锁死：wait 等 VALID
+    而 READY 未置高 → R3 ERROR；wait 同时检查 READY → 干净。
+    """
+    print("fusion: lint_tb wait()-form handshake detection")
+    with tempfile.TemporaryDirectory() as td:
+        sv = Path(td) / "wait_tb.sv"
+        sv.write_text(
+            "module wait_tb;\n"
+            "  logic clk, bvalid, bready, rvalid, rready;\n"
+            "  initial begin\n"
+            "    bready = 1'b0;\n"
+            "    wait (bvalid);\n"       # BREADY=0 时等 BVALID → R3
+            "  end\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        r = call_tool("lint_tb", {"target_path": str(sv), "rules": ["handshake"]})
+        codes = {f.get("code") for f in (r.get("data") or {}).get("findings", [])}
+        check(r.get("ok") is False, f"wait(bvalid) without BREADY flagged (ok={r.get('ok')})")
+        check("R3" in codes, f"R3 emitted for wait(bvalid) form (got {sorted(codes)})")
+
+        # 对照：wait 同时检查 READY 不应报
+        sv2 = Path(td) / "ok_tb.sv"
+        sv2.write_text(
+            "module ok_tb;\n"
+            "  logic clk, bvalid, bready;\n"
+            "  initial begin\n"
+            "    wait (bvalid && bready);\n"   # 同时检查 READY → 干净
+            "  end\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        r2 = call_tool("lint_tb", {"target_path": str(sv2), "rules": ["handshake"]})
+        check(r2.get("ok") is True, f"wait(bvalid && bready) is clean (ok={r2.get('ok')})")
+
+
+def test_index_repo_include_boundary() -> None:
+    """锁死 index_repo 的 include 边界归属（真实 RISC-V 仓库踩坑）。
+
+    缺陷：仓库用 `include 把多个子模块拼进一个翻译单元（如 Single_Cycle_Top.v
+    include 了 PC/ALU/寄存器堆/存储器）。旧实现把整个文件源交给例化扫描，导致
+    文件里**每一个**模块都继承该文件的全部例化——叶子模块 ALU/Register_File
+    被误标成例化了 PC/存储器（那些其实是顶层 Single_Cycle_Top 的例化）。
+
+    修复：例化扫描限定在 module 自身定义体内；include 展开进来的子模块在本文件
+    无自身 module 声明时不归属任何例化。
+    """
+    print("fusion: index_repo include-boundary instantiation attribution")
+    with tempfile.TemporaryDirectory() as td:
+        td_p = Path(td)
+        # top.v 用 `include 拼进 leaf_a/leaf_b/top；三个子模块在各自独立文件里
+        (td_p / "top.v").write_text(
+            "`include \"leaf_a.v\"\n"
+            "`include \"leaf_b.v\"\n"
+            "module top(input logic clk);\n"
+            "  leaf_a ua (.clk(clk));\n"
+            "  leaf_b ub (.clk(clk));\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        (td_p / "leaf_a.v").write_text(
+            "module leaf_a(input logic clk);\nendmodule\n", encoding="utf-8")
+        (td_p / "leaf_b.v").write_text(
+            "module leaf_b(input logic clk);\nendmodule\n", encoding="utf-8")
+        r = call_tool("index_repo", {"project_root": str(td_p)})
+        check(r.get("ok") is True, "index_repo parses include-based project")
+        mods = r.get("data", {}).get("modules", {})
+        check(mods.get("leaf_a", {}).get("instantiated_modules") == [],
+              f"leaf_a not attributed top's instantiations (got {mods.get('leaf_a', {}).get('instantiated_modules')})")
+        check(mods.get("leaf_b", {}).get("instantiated_modules") == [],
+              f"leaf_b not attributed top's instantiations (got {mods.get('leaf_b', {}).get('instantiated_modules')})")
+        check(set(mods.get("top", {}).get("instantiated_modules") or []) == {"leaf_a", "leaf_b"},
+              f"top correctly attributes its own instantiations (got {mods.get('top', {}).get('instantiated_modules')})")
+
+
 def main() -> int:
     test_cross_repo_extraction()
+    test_index_repo_include_boundary()
     test_regfile_spec_v2_and_bitfields()
     test_lint_tb()
+    test_lint_wait_form()
     test_mutation_runner()
     test_verilator_log_normalizer_and_visual()
+    test_suite_identity_real_format()
     test_audit_and_registry()
+    test_slang_backend_real_rtl()
+    test_emit_testbench_error_paths()
     print("\n" + ("ALL FUSION CHECKS PASSED" if FAILS == 0 else f"{FAILS} CHECK(S) FAILED"))
     return 0 if FAILS == 0 else 1
 

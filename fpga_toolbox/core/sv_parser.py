@@ -356,21 +356,132 @@ class SVModuleParser:
         return mods
 
 
-def _parse_with_slang(rtl_path: Path, slang_bin: str) -> Optional[List[SVModuleAST]]:
+def _find_slang_context(rtl_path: Path) -> Tuple[List[str], List[str]]:
+    """为 slang 推导同批编译文件与 include 目录。
+
+    真实 RTL 普遍 `import xxx_pkg::*`。只把单个文件喂给 slang 时，它无法解析
+    这些 import，会报 `unknown package` 并以非 0 退出（但仍可能输出合法 AST
+    JSON）。为了让 slang 后端对真实项目生效，这里：
+      1) 收集目标文件所在目录及其父目录下所有 `*_pkg.sv` 作为同批编译文件；
+      2) 把这些目录也作为 `-I` include 目录传给 slang。
+    """
+    extra_files: List[str] = []
+    inc_dirs: List[str] = []
+    seen_dirs = set()
+    # 用绝对路径：slang 子进程的 cwd 与调用方可能不同，相对路径会解析失败
+    rtl_abs = rtl_path.resolve()
+    for d in (rtl_abs.parent, *rtl_abs.parent.parents):
+        if not d.is_dir() or d in seen_dirs:
+            continue
+        seen_dirs.add(d)
+        # 收集同目录的 package 定义（*_pkg.sv）和 SV interface 定义（*_if.sv）
+        # ——真实 RTL 里模块会 `import xxx_pkg::*`、引用 SV interface（如
+        # axi_lite_if.slave）。不把它们的定义文件一起喂给 slang，会报
+        # unknown package / unknown interface。timescale 报错属于源文件自身
+        # 缺声明，slang 会提示但不妨碍输出可用 AST。
+        for pat in ("*_pkg.sv", "*_if.sv"):
+            for pf in sorted(d.glob(pat)):
+                if pf != rtl_abs:
+                    extra_files.append(str(pf))
+        # 即使本目录没有收集到定义文件，也作为 include 目录（可能被间接引用）
+        inc_dirs.append(str(d))
+        # 只向上走两层，避免在大仓库里扫描过多目录拖慢 slang
+        if len(seen_dirs) >= 3:
+            break
+    # 去重保序
+    seen_f = set()
+    extra_files = [f for f in extra_files if not (f in seen_f or seen_f.add(f))]
+    return extra_files, inc_dirs
+
+
+def _run_slang(
+    slang_bin: str,
+    rtl_path: Path,
+    extra_files: List[str],
+    inc_dirs: List[str],
+) -> Tuple[Optional[Any], List[str]]:
+    """跑 slang --ast-json。返回 (AST tree, diagnostics)。
+
+    判定策略（关键）：slang 在遇到未知 package 时会 **exit 非 0 但仍输出完整
+    AST JSON**。旧实现因 `returncode != 0` 整段丢弃，导致 slang 后端对几乎
+    所有真实 RTL 静默失效、回退到 builtin。这里改为「stdout 有合法 JSON 就用」，
+    同时把 stderr 诊断透传给调用方，绝不静默丢弃。
+    """
+    diags: List[str] = []
+    # 用绝对路径：slang 子进程 cwd 可能与调用方不同
+    rtl_arg = str(rtl_path.resolve())
+    # 先带依赖包编译（最可能干净通过），失败再退回只编译目标文件
+    inc_args: List[str] = []
+    for d in inc_dirs:
+        inc_args += ["-I", d]
+    # 大量 RTL 不写 `timescale`，slang 会为此报 error（噪声，不影响 AST）。
+    # 提供默认 timescale 消除这类报错，让 stderr 里只剩真正的问题。
+    timescale_args = ["--timescale", "1ns/1ps"]
+
+    attempts: List[Tuple[List[str], bool]] = []  # (cmd, is_single_file_attempt)
+    # 顺序关键：**先只编译目标文件**，失败才带同目录依赖文件重试。
+    # 旧实现反过来（先带 *_if.sv/*_pkg.sv），会把依赖文件里的模块也解析进
+    # 结果——实测 /tmp/ghsv 下 gen_mux.v + arr_if.sv 同目录时，extract 把
+    # arr_if.sv 的 arr_user/axi_bus 也算成 gen_mux.v 的模块（多出 2 个不
+    # 属于目标文件的模块）。先单文件可保证「只返回目标文件的模块」，只有
+    # 目标文件真有跨文件依赖（import/interface）解析失败时才带上依赖重试。
+    attempts.append(([slang_bin, "--ast-json", "-", *inc_args, *timescale_args, rtl_arg], True))
+    if extra_files:
+        attempts.append((
+            [slang_bin, "--ast-json", "-", *inc_args, *timescale_args, *extra_files, rtl_arg],
+            False,
+        ))
+
+    for cmd, is_single_file in attempts:
+        attempt_diags: List[str] = []
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, check=False
+            )
+        except Exception as exc:
+            attempt_diags.append(f"slang invocation error: {exc}")
+            diags.extend(attempt_diags)
+            continue
+        if proc.stderr.strip():
+            for line in proc.stderr.strip().splitlines():
+                if "error" in line.lower() or "warning" in line.lower():
+                    attempt_diags.append(line.strip()[:200])
+        out = proc.stdout.strip()
+        if not out:
+            diags.extend(attempt_diags)
+            continue
+        # slang --ast-json - 会把人类可读 banner（"Top level design units:"
+        # / "Build succeeded: ...") 和 JSON 混在同一个 stdout，JSON 从第一个
+        # "{" 开始。直接 json.loads 整段必然失败，必须先定位 JSON 起点。
+        brace = out.find("{")
+        if brace < 0:
+            attempt_diags.append("slang stdout contained no JSON object")
+            diags.extend(attempt_diags)
+            continue
+        try:
+            tree = json.loads(out[brace:])
+        except Exception as exc:
+            attempt_diags.append(f"slang AST JSON parse error: {exc}")
+            diags.extend(attempt_diags)
+            continue
+        # 该 attempt 拿到合法 JSON。若是「只编译单文件」的 attempt 1 成功，
+        # 它的 stderr 里会有 unknown interface/package 之类**预期噪声**（单文件
+        # 必然缺跨文件定义），不应作为 W013 报给调用方。只有 attempt 2（带依赖）
+        # 的 stderr 才是真实诊断。
+        if is_single_file:
+            attempt_diags = []
+        return tree, attempt_diags
+    return None, diags
+
+
+def _parse_with_slang(
+    rtl_path: Path, slang_bin: str
+) -> Tuple[Optional[List[SVModuleAST]], List[str]]:
     """Optional slang AST JSON backend when slang is installed on PATH."""
-    try:
-        proc = subprocess.run(
-            [slang_bin, "--ast-json", "-", str(rtl_path)],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            return None
-        tree = json.loads(proc.stdout)
-    except Exception:
-        return None
+    extra_files, inc_dirs = _find_slang_context(rtl_path)
+    tree, diags = _run_slang(slang_bin, rtl_path, extra_files, inc_dirs)
+    if tree is None:
+        return None, diags or ["slang produced no usable AST JSON"]
 
     mods: List[SVModuleAST] = []
 
@@ -392,8 +503,24 @@ def _parse_with_slang(rtl_path: Path, slang_bin: str) -> Optional[List[SVModuleA
                     dmap = {"In": "input", "Out": "output", "InOut": "inout"}
                     d = dmap.get(str(mem.get("direction", "")), "input")
                     tstr = str(mem.get("type", "logic"))
+                    # slang 对 `parameter type T` 这类参数化类型端口，type 字段会
+                    # 混入内存地址前缀（如 "2209501365464 complex.T" 或
+                    # "2209501365464 complex.T$[0:7]"）。剥掉地址前缀和模块限定符，
+                    # 否则下面的 [n:m] 正则可能匹配到地址里的数字，或对 T（无
+                    # [n:m]）错误回退成 1 位。
+                    tstr = re.sub(r"^\d+\s+", "", tstr)          # 剥地址前缀
+                    tstr = re.sub(r"^\w+\.", "", tstr)            # 剥模块限定符 complex.
+                    # 解包数组端口（如 T din[N]）：slang 把解包维度也写进 type
+                    # 的 [0:N-1]，packed 维度在前、解包在后。宽度应取二者乘积，
+                    # 但这里只取 packed 部分（保守：不重复计解包维度）。
                     m_rng = re.search(r"\[(\d+):(\d+)\]", tstr)
-                    w = abs(int(m_rng.group(1)) - int(m_rng.group(2))) + 1 if m_rng else 1
+                    if m_rng:
+                        w = abs(int(m_rng.group(1)) - int(m_rng.group(2))) + 1
+                    elif re.search(r"\b(logic|bit|reg|wire|byte|int|shortint|longint)\b", tstr):
+                        w = 1  # 明确的 1 位标量类型
+                    else:
+                        # 参数化类型（T）等无法静态确定宽度，标记为 0 而非假装 1 位
+                        w = 0
                     ports.append(SVPortAST(str(mem.get("name", "")), d, tstr, w, 0))
                 elif mk == "InterfacePort":
                     ports.append(
@@ -418,17 +545,81 @@ def _parse_with_slang(rtl_path: Path, slang_bin: str) -> Optional[List[SVModuleA
                 _walk(v)
 
     _walk(tree)
-    return mods or None
+    # 返回 list（而非 tuple）以便调用方能原地补齐 interface 信息
+    return (list(mods) or None), diags
 
 
-def parse_sv_file(rtl_path: Path, backend: str = "auto") -> List[SVModuleAST]:
-    """Parse an RTL file using slang AST when available (backend='auto'/'slang'), else builtin parser."""
+def parse_sv_file(
+    rtl_path: Path,
+    backend: str = "auto",
+    diagnostics: Optional[List[str]] = None,
+) -> List[SVModuleAST]:
+    """Parse an RTL file using slang AST when available (backend='auto'/'slang'), else builtin parser.
+
+    当 slang 不可用或解析失败而回退到 builtin 时，把原因追加到 `diagnostics`
+    （若调用方提供该 list）。这样「slang 后端没生效」对调用方是可见信号，
+    而不是静默回退——否则「可选 slang AST 后端」就是虚报。
+    """
     if backend in ("auto", "slang"):
         slang_bin = shutil.which("slang")
         if slang_bin:
-            slang_mods = _parse_with_slang(rtl_path, slang_bin)
+            slang_mods, slang_diags = _parse_with_slang(rtl_path, slang_bin)
             if slang_mods:
-                return slang_mods
+                # 已知限制（实测）：slang 12.x 的 ast-json 不导出 InterfacePort
+                # 的 interfaceDef/modport，只给 {name,kind,addr,isGeneric}。为
+                # 不丢这些信息，用 builtin 解析的 interface 类型/modport 补齐
+                # slang 结果里为空的 interface 端口。
+                # _parse_with_slang 返回 tuple，转成 list 以便原地补齐
+                slang_list = list(slang_mods)
+                _enrich_from_builtin(rtl_path, slang_list)
+                if diagnostics is not None:
+                    diagnostics.extend(slang_diags)
+                return slang_list
+            if diagnostics is not None:
+                diagnostics.extend(slang_diags)
+                diagnostics.append(
+                    f"slang backend produced no modules for {rtl_path.name}; "
+                    "falling back to builtin parser"
+                )
+        elif diagnostics is not None:
+            diagnostics.append("slang not found on PATH; using builtin parser")
         if backend == "slang":
             raise RuntimeError("Requested parser backend 'slang' is unavailable or failed to parse.")
     return SVModuleParser(sv_tokenize(rtl_path.read_text(encoding="utf-8")), str(rtl_path)).parse_all()
+
+
+def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
+    """用 builtin 解析结果补齐 slang 缺失的 interface 类型/modport。
+
+    slang mods 是 frozen dataclass，因此直接改写其 ports tuple 里匹配端口的
+    三个字段（新建 SVPortAST）。builtin 拿不到对应模块/端口时保持原值不动。
+    """
+    try:
+        builtin_mods = SVModuleParser(
+            sv_tokenize(rtl_path.read_text(encoding="utf-8")), str(rtl_path)
+        ).parse_all()
+    except Exception:
+        return
+    builtin_ports = {}
+    for bm in builtin_mods:
+        for bp in bm.ports:
+            if bp.is_interface and bp.interface_type:
+                builtin_ports.setdefault(bp.name, (bp.interface_type, bp.modport))
+
+    enriched = []
+    changed = False
+    for sm in slang_mods:
+        new_ports = list(sm.ports)
+        for i, sp_ in enumerate(new_ports):
+            if sp_.is_interface and not sp_.interface_type and sp_.name in builtin_ports:
+                itype, modp = builtin_ports[sp_.name]
+                new_ports[i] = SVPortAST(
+                    name=sp_.name, direction=sp_.direction, width_expr=sp_.width_expr,
+                    width=sp_.width, line=sp_.line, is_interface=True,
+                    interface_type=itype, modport=modp,
+                )
+                changed = True
+        enriched.append(SVModuleAST(sm.name, sm.file_path, sm.parameters, tuple(new_ports), sm.parser_backend))
+    if changed:
+        # 原地替换（slang_mods 是调用方持有的 list，直接改写其元素）
+        slang_mods[:] = enriched

@@ -22,8 +22,13 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
     """Ported from agent/verilog/suite_verify.py: verify each named suite passed, not just PASS line count."""
     results: Dict[str, str] = {}
     current: Optional[str] = None
+    # 真实 sim.sh 打印的 header 是 `== sim: <name> (top=<top>) ==`，套件名后可能
+    # 带 (top=...) / (WAIT=...) 等参数。旧正则要求套件名后紧跟 `==`，对真实日志
+    # 永远匹配不到 → 把所有套件误判为 missing，「逐套件身份核对」这个反静默
+    # 通过护栏对真实日志从不生效（实测踩过）。
+    hdr_re = re.compile(r"==\s*sim:\s*([A-Za-z0-9_-]+)")
     for line in log_text.splitlines():
-        m_hdr = re.search(r"==\s*sim:\s*([A-Za-z0-9_-]+)\s*==", line)
+        m_hdr = hdr_re.search(line)
         if m_hdr:
             current = m_hdr.group(1)
             results.setdefault(current, "STARTED")
@@ -52,6 +57,24 @@ def tool_run_sim(
     wait_cycles: Optional[int] = None,
     require_slang: bool = False,
 ) -> Dict[str, Any]:
+    # MCP / CLI 调用方常把数字参数序列化成字符串（JSON number → str），
+    # schema 虽声明 integer，但 call_tool 不做类型强制。若直接把 str 传给
+    # subprocess.run(timeout=...)，其内部 `timeout - (now - start)` 会报
+    # `unsupported operand type(s) for +: 'float' and 'str'`（实测踩过）。
+    # 这里在边界显式转换并给出可读错误，而不是让 TypeError 冒泡。
+    try:
+        timeout_sec = int(timeout_sec)
+    except (TypeError, ValueError):
+        return err_result("run_sim", f"timeout_sec must be an integer, got {timeout_sec!r}")
+    for _name, _val in (("seed", seed), ("wait_cycles", wait_cycles)):
+        if _val is not None:
+            try:
+                int(_val)
+            except (TypeError, ValueError):
+                return err_result("run_sim", f"{_name} must be an integer, got {_val!r}")
+    seed = int(seed) if seed is not None else None
+    wait_cycles = int(wait_cycles) if wait_cycles is not None else None
+
     script_p = Path(sim_script)
     if not script_p.is_file():
         return err_result("run_sim", f"Simulation entry script not found: {sim_script}")

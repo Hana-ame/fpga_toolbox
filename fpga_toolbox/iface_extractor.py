@@ -202,7 +202,10 @@ def tool_extract_interfaces(
     p = Path(rtl_file)
     if not p.is_file():
         return err_result("extract_interfaces", f"RTL file not found: {rtl_file}")
-    mods = parse_sv_file(p, backend=parser_backend)
+    # 收集 slang 后端的回退原因：slang 装了却没生效时对调用方可见，
+    # 而不是静默退回 builtin（否则「可选 slang AST 后端」就是虚报）。
+    parse_diags: List[str] = []
+    mods = parse_sv_file(p, backend=parser_backend, diagnostics=parse_diags)
     if not mods:
         return err_result("extract_interfaces", f"No modules found in {rtl_file}")
     selected = [m for m in mods if m.name == module_name] if module_name else mods
@@ -213,6 +216,14 @@ def tool_extract_interfaces(
     data: Dict[str, Any] = {"rtl_file": str(p.resolve()), "modules": extracted}
 
     diagnostics: List[Dict[str, Any]] = []
+    # 把 slang 回退/解析诊断透传（W013），避免静默降级
+    for pd in parse_diags:
+        diagnostics.append({
+            "severity": "WARNING",
+            "code": "W013",
+            "path": p.name,
+            "message": f"Parser backend: {pd}",
+        })
     for m in extracted:
         if m["clock"] is None:
             diagnostics.append({"severity": "WARNING", "code": "W010", "path": m["module_name"], "message": "No clock port detected; defaulting to aclk@100MHz."})
