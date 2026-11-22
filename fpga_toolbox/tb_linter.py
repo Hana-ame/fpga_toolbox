@@ -132,13 +132,16 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                     "message": f"wait() waits only on {sig} without checking {ready or 'READY'}.",
                     "context": raw.strip(),
                 })
-        mwhile = re.search(r"while\s*\((.*)\)", ln)
+        mwhile = re.search(r"while\s*\(([^)]*)\)", ln, re.IGNORECASE)
         if mwhile:
             cond = mwhile.group(1)
-            has_v = re.search(r"[A-Z_]+VALID", cond)
-            has_r = re.search(r"[A-Z_]+READY", cond)
+            # 兼容裸信号名（bvalid）与带前缀（axi.BVALID），大小写不敏感。
+            # 旧实现用 [A-Z_]+VALID（大写敏感），漏报小写 bvalid/rvalid —— 真实
+            # 第三方 TB 大量用小写，全部漏报（与 wait() 同根，此处对齐）。
+            has_v = re.search(r"([A-Za-z_][A-Za-z0-9_.]*VALID)", cond, re.IGNORECASE)
+            has_r = re.search(r"[A-Za-z_][A-Za-z0-9_.]*READY", cond, re.IGNORECASE)
             if has_v and not has_r:
-                sig = has_v.group(0)
+                sig = has_v.group(1)
                 ready = _READY_OF.get(sig.replace("axi.", ""))
                 safe = bool(ready and _ready_raised_before(i, ready))
                 code = "R1" if safe else "R3"
