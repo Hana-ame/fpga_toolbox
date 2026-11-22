@@ -1,4 +1,4 @@
-"""Tool 4: Extract AXI4-Lite, AXI4-Stream, clk/rst, and sideband ports from RTL AST."""
+"""Tool 4: Extract AXI4-Lite, AXI4-Stream, APB, SV interface, clk/rst, and sideband ports from RTL AST."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ if __package__ in (None, ""):
     __package__ = "fpga_toolbox"
 
 from .core.sv_parser import SVModuleAST, SVPortAST, parse_sv_file
-from .core.types import REQUIRED_AXIL_SIGNALS, err_result, ok_result
+from .core.types import REQUIRED_APB_SIGNALS, REQUIRED_AXIL_SIGNALS, err_result, ok_result
 
 _AXIL_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("awaddr",  re.compile(r"(?:^|_)aw_?addr$", re.I)),
@@ -48,6 +48,18 @@ _AXIS_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("tkeep",  re.compile(r"(?:^|_)t_?keep$", re.I)),
 )
 
+_APB_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("psel",    re.compile(r"(?:^|_)p_?sel\d*$", re.I)),
+    ("penable", re.compile(r"(?:^|_)p_?enable$", re.I)),
+    ("pwrite",  re.compile(r"(?:^|_)p_?write$", re.I)),
+    ("paddr",   re.compile(r"(?:^|_)p_?addr$", re.I)),
+    ("pwdata",  re.compile(r"(?:^|_)p_?wdata$", re.I)),
+    ("pstrb",   re.compile(r"(?:^|_)p_?strb$", re.I)),
+    ("pprot",   re.compile(r"(?:^|_)p_?prot$", re.I)),
+    ("pready",  re.compile(r"(?:^|_)p_?ready$", re.I)),
+    ("prdata",  re.compile(r"(?:^|_)p_?rdata$", re.I)),
+    ("pslverr", re.compile(r"(?:^|_)p_?slverr$", re.I)),
+)
 
 # Clock / reset naming. Anchored, so ``reset_done`` or ``clk_div2`` never match,
 # while every common prefix style (``s_axi_aresetn``, ``i_rst_n``, ``core_clk``) does.
@@ -76,10 +88,21 @@ def _reset_active_low(name: str) -> bool:
     return bool(re.match(r"^(?:[a-z0-9]+_)*[aps]?(?:reset|rst)[nb]$", n))
 
 
+def _infer_sv_iface_protocol(iface_type: str, port_name: str) -> str:
+    probe = f"{iface_type} {port_name}".lower()
+    if "axi" in probe and ("stream" in probe or "axis" in probe):
+        return "axi4_stream"
+    if "axi" in probe:
+        return "axi4_lite"
+    if "apb" in probe:
+        return "apb"
+    return "sv_interface"
+
+
 def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
     claimed, clk, rst = set(), None, None
     for p in mod.ports:
-        if p.direction != "input" or p.width != 1:
+        if p.is_interface or p.direction != "input" or p.width != 1:
             continue
         if clk is None and _is_clock(p.name):
             clk = p
@@ -88,9 +111,27 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
             rst = p
             claimed.add(p.name)
 
-
     ifaces: List[Dict[str, Any]] = []
-    for proto, pats, min_cnt in (("axi4_lite", _AXIL_PATS, 6), ("axi4_stream", _AXIS_PATS, 2)):
+    # First classify explicit SystemVerilog interface/modport ports so they are never misclassified as 1-bit tie-offs.
+    for p in mod.ports:
+        if not p.is_interface:
+            continue
+        claimed.add(p.name)
+        proto = _infer_sv_iface_protocol(p.interface_type, p.name)
+        mp = p.modport.lower()
+        role = "slave" if "slave" in mp or "slv" in mp else ("master" if "master" in mp or "mst" in mp else "unknown")
+        ifaces.append({
+            "protocol": proto,
+            "group_prefix": p.name,
+            "role": role,
+            "addr_width": mod.parameters.get("AW"),
+            "data_width": mod.parameters.get("DW"),
+            "port_map": {},
+            "sv_interface": {"port": p.name, "interface_type": p.interface_type, "modport": p.modport},
+            "missing_signals": [],
+        })
+
+    for proto, pats, min_cnt in (("axi4_lite", _AXIL_PATS, 6), ("axi4_stream", _AXIS_PATS, 2), ("apb", _APB_PATS, 4)):
         groups: Dict[str, Dict[str, SVPortAST]] = {}
         for p in mod.ports:
             if p.name in claimed:
@@ -104,11 +145,19 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
             if len(sigs) < min_cnt:
                 continue
             claimed.update(p.name for p in sigs.values())
-            v_port = sigs.get("awvalid") or sigs.get("arvalid") or sigs.get("tvalid")
+            if proto == "apb":
+                v_port = sigs.get("psel") or sigs.get("penable")
+                req = REQUIRED_APB_SIGNALS
+                aw_p, dw_p = sigs.get("paddr"), sigs.get("pwdata") or sigs.get("prdata")
+            elif proto == "axi4_lite":
+                v_port = sigs.get("awvalid") or sigs.get("arvalid")
+                req = REQUIRED_AXIL_SIGNALS
+                aw_p, dw_p = sigs.get("awaddr") or sigs.get("araddr"), sigs.get("wdata") or sigs.get("rdata")
+            else:
+                v_port = sigs.get("tvalid")
+                req = ("tdata", "tvalid", "tready")
+                aw_p, dw_p = None, sigs.get("tdata")
             role = ("slave" if v_port.direction == "input" else "master") if v_port else "unknown"
-            aw_p = sigs.get("awaddr") or sigs.get("araddr")
-            dw_p = sigs.get("wdata") or sigs.get("rdata") or sigs.get("tdata")
-            req = REQUIRED_AXIL_SIGNALS if proto == "axi4_lite" else ("tdata", "tvalid", "tready")
             ifaces.append({
                 "protocol": proto,
                 "group_prefix": grp,
@@ -133,6 +182,7 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
     return {
         "module_name": mod.name,
         "rtl_file": mod.file_path,
+        "parser_backend": mod.parser_backend,
         "parameters": mod.parameters,
         "total_ports": len(mod.ports),
         "clock": {"port": clk.name, "freq_mhz": 100.0} if clk else None,
@@ -147,11 +197,12 @@ def tool_extract_interfaces(
     module_name: Optional[str] = None,
     emit_draft_yaml: Optional[str] = None,
     staged_rtl_files: Optional[List[str]] = None,
+    parser_backend: str = "auto",
 ) -> Dict[str, Any]:
     p = Path(rtl_file)
     if not p.is_file():
         return err_result("extract_interfaces", f"RTL file not found: {rtl_file}")
-    mods = parse_sv_file(p)
+    mods = parse_sv_file(p, backend=parser_backend)
     if not mods:
         return err_result("extract_interfaces", f"No modules found in {rtl_file}")
     selected = [m for m in mods if m.name == module_name] if module_name else mods
@@ -167,10 +218,19 @@ def tool_extract_interfaces(
             diagnostics.append({"severity": "WARNING", "code": "W010", "path": m["module_name"], "message": "No clock port detected; defaulting to aclk@100MHz."})
         if m["reset"] is None:
             diagnostics.append({"severity": "WARNING", "code": "W011", "path": m["module_name"], "message": "No reset port detected; defaulting to aresetn active-low."})
+        for iface in m["interfaces"]:
+            if "sv_interface" in iface and m.get("parser_backend") != "slang":
+                diagnostics.append({
+                    "severity": "WARNING",
+                    "code": "W012",
+                    "path": f"{m['module_name']}.{iface['sv_interface']['port']}",
+                    "message": f"SV interface port '{iface['sv_interface']['interface_type']}.{iface['sv_interface']['modport']}' detected by builtin parser; install slang to expand member signals.",
+                })
 
     if emit_draft_yaml:
         m0 = extracted[0]
         axil = next((i for i in m0["interfaces"] if i["protocol"] == "axi4_lite"), None)
+        apb = next((i for i in m0["interfaces"] if i["protocol"] == "apb"), None)
         boundary: Dict[str, Any] = {
             "module_name": m0["module_name"],
             "rtl_files": staged_rtl_files or [m0["rtl_file"]],
@@ -180,11 +240,18 @@ def tool_extract_interfaces(
             "axi4_lite": {
                 "addr_width": (axil["addr_width"] or 12) if axil else 12,
                 "data_width": (axil["data_width"] or 32) if axil else 32,
-                "role": "slave",
+                "role": (axil["role"] if axil and axil["role"] != "unknown" else "slave"),
                 "port_map": axil["port_map"] if axil else {},
             },
             "out_of_scope_ports": m0["out_of_scope_ports"],
         }
+        if apb:
+            boundary["apb"] = {
+                "addr_width": apb["addr_width"] or 8,
+                "data_width": apb["data_width"] or 32,
+                "role": apb["role"] if apb["role"] != "unknown" else "slave",
+                "port_map": apb["port_map"],
+            }
         if m0.get("instance_hierarchy"):
             boundary["instance_hierarchy"] = m0["instance_hierarchy"]
         draft = {

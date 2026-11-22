@@ -1,12 +1,13 @@
 """Tool 8: Render standalone SVG dependency topology + rule audit HTML dashboard.
 
 Writes both ``<out>.html`` (dashboard) and ``<out>.svg`` (standalone topology),
-so the diagram can be embedded in a report or an agent transcript on its own.
+and runs a built-in HTML consistency check (inspired by agent/verilog/axi/docs_check.py).
 """
 
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -44,6 +45,29 @@ def _build_svg(report: Dict[str, Any], dep_graph: Dict[str, Any], ifaces: List[D
 </svg>"""
 
 
+def _check_html_consistency(page: str, expected_checks: int) -> List[Dict[str, Any]]:
+    diags: List[Dict[str, Any]] = []
+    for tag in ("table", "tbody", "html", "body"):
+        opens = len(re.findall(rf"<{tag}\b", page, re.I))
+        closes = len(re.findall(rf"</{tag}>", page, re.I))
+        if opens != closes:
+            diags.append({
+                "severity": "WARNING",
+                "code": "W050",
+                "path": f"html.{tag}",
+                "message": f"Unbalanced <{tag}> tags (open={opens}, close={closes}).",
+            })
+    rendered_rows = len(re.findall(r"<tbody>(.*?)</tbody>", page, re.S)[0].split("<tr>")) - 1 if "<tbody>" in page else 0
+    if expected_checks > 0 and rendered_rows != expected_checks:
+        diags.append({
+            "severity": "WARNING",
+            "code": "W051",
+            "path": "html.checks",
+            "message": f"Rendered check rows ({rendered_rows}) != report checks ({expected_checks}).",
+        })
+    return diags
+
+
 def tool_render_visual_report(
     report: Dict[str, Any],
     dep_graph: Dict[str, Any],
@@ -60,29 +84,44 @@ def tool_render_visual_report(
     color = "#065F46" if status == "PASS" else ("#1E3A8A" if status == "NO_RESULTS" else "#991B1B")
     svg = _build_svg(report, dep_graph, extracted_interfaces)
 
+    checks_list = [c for c in report.get("checks", []) if isinstance(c, dict)]
     rows = "".join(
         f"<tr><td><code>{html.escape(str(c.get('rule_id', '')))}</code></td><td>{html.escape(str(c.get('category', '')))}</td>"
         f"<td><strong>{html.escape(str(c.get('status', '')))}</strong></td><td>{html.escape(str(c.get('detail', '')))}</td></tr>"
-        for c in report.get("checks", []) if isinstance(c, dict)
+        for c in checks_list
     ) or '<tr><td colspan="4">no checks recorded</td></tr>'
     summary = report.get("summary", {}) if isinstance(report.get("summary"), dict) else {}
+
+    extra_bits: List[str] = []
+    if isinstance(report.get("coverage_summary"), dict):
+        cov = report["coverage_summary"]
+        extra_bits.append(f"rtl_cov={html.escape(str(cov.get('rtl_pct', 'n/a')))}%")
+    if isinstance(report.get("mutation_summary"), dict):
+        mut = report["mutation_summary"]
+        extra_bits.append(f"mutation={html.escape(str(mut.get('mutation_score', 'n/a')))}%")
+    extra_s = (" · " + " · ".join(extra_bits)) if extra_bits else ""
 
     page = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>{mod} 验证视图</title>
 <style>body{{font-family:sans-serif;max-width:1040px;margin:40px auto;padding:0 24px;color:#111827}}
 table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{padding:9px 10px;border-bottom:1px solid #E5E7EB;text-align:left}}
 .st{{color:{color};font-weight:700}}code{{background:#F3F4F6;padding:1px 5px;border-radius:3px}}</style></head><body>
 <h1>FPGA 模块验证视图：{mod} <span class="st">[{status}]</span></h1>
-<p>checks={summary.get('total', 0)} · pass={summary.get('passed', 0)} · fail={summary.get('failed', 0)} · pass_rate={summary.get('pass_rate', 0)}</p>
+<p>checks={summary.get('total', 0)} · pass={summary.get('passed', 0)} · fail={summary.get('failed', 0)} · pass_rate={summary.get('pass_rate', 0)}{extra_s}</p>
 {svg}
 <table><thead><tr><th>Rule ID</th><th>Category</th><th>Status</th><th>Detail</th></tr></thead><tbody>{rows}</tbody></table>
 </body></html>"""
 
+    diags = _check_html_consistency(page, len(checks_list))
     out_p = Path(out_html_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     out_p.write_text(page, encoding="utf-8")
     svg_p = out_p.with_suffix(".svg")
     svg_p.write_text(svg, encoding="utf-8")
-    return ok_result("render_visual_report", {"html_path": str(out_p.resolve()), "svg_path": str(svg_p.resolve())})
+    return ok_result(
+        "render_visual_report",
+        {"html_path": str(out_p.resolve()), "svg_path": str(svg_p.resolve()), "consistency_ok": len(diags) == 0},
+        diagnostics=diags,
+    )
 
 
 if __name__ == "__main__":

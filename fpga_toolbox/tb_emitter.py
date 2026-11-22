@@ -137,7 +137,7 @@ def _emit_cocotb(u: CompiledUnitIR) -> str:
     ills = json.dumps([asdict(i) for i in tp.illegal_addr_rules], indent=2)
     rst_assert = 0 if b.reset.active_low else 1
     rst_idle = 1 - rst_assert
-    return f'''import json, cocotb
+    return f'''import json, random, cocotb
 from pathlib import Path
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
@@ -145,6 +145,7 @@ from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
 
 REGS = json.loads(r"""{regs}""")
 ILLS = json.loads(r"""{ills}""")
+STRESS = {{"random_backpressure": {tp.stress_profile.random_backpressure}, "iterations": {tp.stress_profile.iterations}, "seed": {tp.stress_profile.seed}}}
 REPORT = {{"module": "{b.module_name}", "seed": {tp.stress_profile.seed}, "checks": []}}
 
 def _rec(rid, cat, ok, detail):
@@ -153,21 +154,65 @@ def _rec(rid, cat, ok, detail):
 
 @cocotb.test()
 async def test_axil_rules(dut):
+    # Phase 1: startup (power-on reset & settle)
+    rng = random.Random(STRESS["seed"])
     cocotb.start_soon(Clock(dut.{b.clock.port}, {round(1000.0 / b.clock.freq_mhz, 3)}, units="ns").start())
     dut.{b.reset.port}.value = {rst_assert}
-    for _ in range(4): await RisingEdge(dut.{b.clock.port})
+    for _ in range(4):
+        await RisingEdge(dut.{b.clock.port})
     dut.{b.reset.port}.value = {rst_idle}
-    await RisingEdge(dut.{b.clock.port})
+    for _ in range(2):
+        await RisingEdge(dut.{b.clock.port})
     m = AxiLiteMaster(AxiLiteBus.from_prefix(dut, "s_axil"), dut.{b.clock.port}, dut.{b.reset.port}, reset_active_level={not b.reset.active_low})
+
+    # Phase 2: reset value + write/readback (honoring access mode & write_mask)
     for r in REGS:
-        if r["access"] != "WO":
+        acc = r["access"]
+        if acc != "WO":
             res = await m.read(r["offset"], {ax.strb_width})
             got = int.from_bytes(res.data, "little") & r["read_mask"]
             exp = r["reset_value"] & r["read_mask"]
             _rec(r["rule_id"], "reset_value", res.resp == AxiResp.OKAY and got == exp, f"got=0x{{got:X}} exp=0x{{exp:X}}")
+        if acc == "RW" and r["write_mask"]:
+            pat = 0xA5A55A5A & r["write_mask"]
+            wres = await m.write(r["offset"], pat.to_bytes({ax.strb_width}, "little"))
+            rres = await m.read(r["offset"], {ax.strb_width})
+            got = int.from_bytes(rres.data, "little") & r["write_mask"] & r["read_mask"]
+            exp = pat & r["read_mask"]
+            _rec(r["rule_id"] + "_WR", "rw_write_readback", wres.resp == AxiResp.OKAY and rres.resp == AxiResp.OKAY and got == exp, f"got=0x{{got:X}} exp=0x{{exp:X}}")
+        elif acc in ("RO", "RSVD"):
+            await m.write(r["offset"], (0xFFFFFFFF & {ax.data_mask}).to_bytes({ax.strb_width}, "little"))
+            rres = await m.read(r["offset"], {ax.strb_width})
+            got = int.from_bytes(rres.data, "little") & r["read_mask"]
+            exp = r["reset_value"] & r["read_mask"]
+            _rec(r["rule_id"] + "_RO", "ro_immutable", rres.resp == AxiResp.OKAY and got == exp, f"got=0x{{got:X}} exp=0x{{exp:X}}")
+
+    # Phase 3: illegal address checks
     for ill in ILLS:
         res = await m.read(ill["offset"], {ax.strb_width})
         _rec(ill["rule_id"], "illegal_addr", res.resp.name == ill["expected_resp"], f"got={{res.resp.name}} exp={{ill['expected_resp']}}")
+
+    # Phase 4: stress iterations with optional random idle gaps
+    rw_regs = [r for r in REGS if r["access"] == "RW" and r["write_mask"]]
+    for it in range(min(STRESS["iterations"], 64) if rw_regs else 0):
+        r = rng.choice(rw_regs)
+        pat = rng.getrandbits({ax.data_width}) & r["write_mask"]
+        await m.write(r["offset"], pat.to_bytes({ax.strb_width}, "little"))
+        if STRESS["random_backpressure"]:
+            for _ in range(rng.randint(0, 2)):
+                await RisingEdge(dut.{b.clock.port})
+        rres = await m.read(r["offset"], {ax.strb_width})
+        got = int.from_bytes(rres.data, "little") & r["write_mask"] & r["read_mask"]
+        if got != (pat & r["read_mask"]):
+            _rec(f"STRESS_{{it}}", "stress_rw", False, f"reg={{r['name']}} got=0x{{got:X}} exp=0x{{pat & r['read_mask']:X}}")
+            break
+    else:
+        if rw_regs and STRESS["iterations"] > 0:
+            _rec("STRESS_SUMMARY", "stress_rw", True, f"completed={{min(STRESS['iterations'], 64)}}")
+
+    # Phase 5: drain & finalize
+    for _ in range(3):
+        await RisingEdge(dut.{b.clock.port})
 '''
 
 
@@ -179,7 +224,16 @@ def tool_validate_contract(spec_path: str, rtl_file: Optional[str] = None) -> Di
     dd = [asdict(d) for d in diags]
     if unit is None:
         return err_result("validate_contract", "Semantic validation failed.", diagnostics=dd)
-    return ok_result("validate_contract", {"module": unit.boundary.module_name, "rtl_cross_checked": bool(rtl_file)}, diagnostics=dd)
+    return ok_result(
+        "validate_contract",
+        {
+            "module": unit.boundary.module_name,
+            "rtl_cross_checked": bool(rtl_file),
+            "has_apb": unit.boundary.apb is not None,
+            "register_count": len(unit.test_plan.register_rules),
+        },
+        diagnostics=dd,
+    )
 
 
 def tool_emit_testbench(spec_path: str, out_dir: str, rtl_file: Optional[str] = None) -> Dict[str, Any]:

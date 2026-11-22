@@ -22,7 +22,23 @@ AXIL_SLAVE_EXPECTED_DIR = {
     "rdata": "output", "rresp": "output", "rvalid": "output", "rready": "input",
 }
 
-VALID_ACCESS_MODES = ("RW", "RO", "W1C", "WO")
+REQUIRED_APB_SIGNALS = (
+    "psel", "penable", "pwrite", "paddr", "pwdata",
+    "pready", "prdata", "pslverr",
+)
+OPTIONAL_APB_SIGNALS = ("pstrb", "pprot")
+
+APB_SLAVE_EXPECTED_DIR = {
+    "psel": "input", "penable": "input", "pwrite": "input",
+    "paddr": "input", "pwdata": "input", "pstrb": "input", "pprot": "input",
+    "pready": "output", "prdata": "output", "pslverr": "output",
+}
+
+APB_MASTER_EXPECTED_DIR = {
+    k: ("output" if v == "input" else "input") for k, v in APB_SLAVE_EXPECTED_DIR.items()
+}
+
+VALID_ACCESS_MODES = ("RW", "RO", "W1C", "W1S", "RC", "RSVD", "WO")
 RESP_CODE_MAP = {"OKAY": 0, "EXOKAY": 1, "SLVERR": 2, "DECERR": 3}
 
 
@@ -93,6 +109,29 @@ class AxiLiteBoundaryIR:
 
 
 @dataclass(frozen=True)
+class ApbBoundaryIR:
+    addr_width: int
+    data_width: int
+    role: str
+    port_map: Dict[str, str]
+    wait_cycles: int = 0
+
+
+@dataclass(frozen=True)
+class BitFieldIR:
+    name: str
+    msb: int
+    lsb: int
+    access: str
+    reset_value: int = 0
+    description: str = ""
+
+    @property
+    def width(self) -> int:
+        return self.msb - self.lsb + 1
+
+
+@dataclass(frozen=True)
 class BoundaryIR:
     module_name: str
     instance_hierarchy: Optional[str]
@@ -102,6 +141,7 @@ class BoundaryIR:
     reset: ResetSpecIR
     axil: AxiLiteBoundaryIR
     out_of_scope_ports: Tuple[OutOfScopePortIR, ...]
+    apb: Optional[ApbBoundaryIR] = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +161,7 @@ class RegisterRuleIR:
     access: str
     write_mask: int
     read_mask: int
+    fields: Tuple[BitFieldIR, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -138,11 +179,20 @@ class StressProfileIR:
 
 
 @dataclass(frozen=True)
+class QualityGatesIR:
+    min_rtl_coverage: float = 90.0
+    min_mutation_score: float = 80.0
+    require_lint_clean: bool = True
+    require_suite_identity_check: bool = True
+
+
+@dataclass(frozen=True)
 class TestPlanIR:
     protocol_rules: ProtocolRuleIR
     register_rules: Tuple[RegisterRuleIR, ...]
     illegal_addr_rules: Tuple[IllegalAddrRuleIR, ...]
     stress_profile: StressProfileIR
+    quality_gates: QualityGatesIR = QualityGatesIR()
 
 
 @dataclass(frozen=True)

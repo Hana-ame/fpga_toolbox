@@ -1,9 +1,10 @@
-"""Tool 7: Normalize cocotb / SVA results into a strict VerificationReport schema.
+"""Tool 7: Normalize cocotb / SVA / Verilator suite results into a strict VerificationReport schema.
 
 Accepted inputs:
-  * cocotb JUnit XML (``results.xml``)  -- what cocotb actually writes
-  * a JSON envelope carrying a ``checks`` list (native schema)
-  * a JSON envelope carrying a ``tests`` list, or a bare JSON list of tests
+  * cocotb JUnit XML (``results.xml``)
+  * JSON envelope carrying a ``checks`` or ``tests`` list, or a bare JSON list
+  * SVA log containing ``[RULE:P_xxx]`` lines
+  * Verilator multi-suite regression log (with per-suite identity verification)
 
 Unrecognized input is reported as an error instead of silently yielding an
 empty PASS/NO_RESULTS report.
@@ -26,11 +27,14 @@ if __package__ in (None, ""):
     __package__ = "fpga_toolbox"
 
 from .core.types import err_result, ok_result
+from .sim_runner import verify_suite_identities
 
 _SVA_ERR_RE = re.compile(r"\[RULE:(P_\d+)\]\s*(.+)")
-_STATUS_MAP = {"PASS": "PASS", "PASSED": "PASS", "OK": "PASS",
-               "FAIL": "FAIL", "FAILED": "FAIL", "ERROR": "FAIL",
-               "SKIP": "SKIP", "SKIPPED": "SKIP"}
+_STATUS_MAP = {
+    "PASS": "PASS", "PASSED": "PASS", "OK": "PASS",
+    "FAIL": "FAIL", "FAILED": "FAIL", "ERROR": "FAIL",
+    "SKIP": "SKIP", "SKIPPED": "SKIP",
+}
 
 
 def _norm_status(raw: Any) -> str:
@@ -95,10 +99,14 @@ def tool_normalize_sim_result(
     module_name: str,
     cocotb_results_json: Optional[str] = None,
     sva_log_path: Optional[str] = None,
+    verilator_log_path: Optional[str] = None,
+    expected_suites: Optional[List[str]] = None,
+    coverage_summary: Optional[Dict[str, Any]] = None,
+    mutation_summary: Optional[Dict[str, Any]] = None,
     out_report_json: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if not cocotb_results_json and not sva_log_path:
-        return err_result("normalize_sim_result", "Provide cocotb_results_json and/or sva_log_path.")
+    if not cocotb_results_json and not sva_log_path and not verilator_log_path:
+        return err_result("normalize_sim_result", "Provide cocotb_results_json, sva_log_path, and/or verilator_log_path.")
 
     checks: List[Dict[str, Any]] = []
     seed: Optional[int] = None
@@ -128,12 +136,34 @@ def tool_normalize_sim_result(
                 checks.append({"rule_id": m.group(1), "category": "sva_protocol", "status": "FAIL", "detail": m.group(2).strip()})
         sources.append(str(p))
 
+    if verilator_log_path:
+        p = Path(verilator_log_path)
+        if not p.is_file():
+            return err_result("normalize_sim_result", f"Verilator log not found: {verilator_log_path}")
+        log_txt = p.read_text(encoding="utf-8", errors="ignore")
+        ident = verify_suite_identities(log_txt, expected_suites or [])
+        for sname, st in ident["observed"].items():
+            checks.append({
+                "rule_id": f"SUITE_{sname}",
+                "category": "verilator_suite",
+                "status": "PASS" if st == "PASS" else "FAIL",
+                "detail": f"suite={sname} status={st}",
+            })
+        for miss in ident["missing"]:
+            checks.append({
+                "rule_id": f"SUITE_{miss}",
+                "category": "verilator_suite",
+                "status": "FAIL",
+                "detail": f"Expected suite '{miss}' missing from log (silent skip guard).",
+            })
+        sources.append(str(p))
+
     passed = sum(1 for c in checks if c["status"] == "PASS")
     failed = sum(1 for c in checks if c["status"] == "FAIL")
     skipped = sum(1 for c in checks if c["status"] == "SKIP")
     overall = "PASS" if (passed > 0 and failed == 0) else ("FAIL" if failed > 0 else "NO_RESULTS")
-    report = {
-        "schema_version": "1.0",
+    report: Dict[str, Any] = {
+        "schema_version": "1.1",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "module": module_name,
         "seed": seed,
@@ -149,6 +179,11 @@ def tool_normalize_sim_result(
         "failed_rules": [c for c in checks if c["status"] == "FAIL"],
         "checks": checks,
     }
+    if coverage_summary is not None:
+        report["coverage_summary"] = coverage_summary
+    if mutation_summary is not None:
+        report["mutation_summary"] = mutation_summary
+
     if out_report_json:
         out = Path(out_report_json)
         out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,13 +1,16 @@
-"""Verilog-2001 / SystemVerilog lexer & recursive-descent module header parser."""
+"""Verilog-2001 / SystemVerilog lexer, recursive-descent parser & optional slang AST backend."""
 
 from __future__ import annotations
 
 import ast
+import json
 import operator
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,9 @@ class SVPortAST:
     width_expr: str
     width: int
     line: int
+    is_interface: bool = False
+    interface_type: str = ""
+    modport: str = ""
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,7 @@ class SVModuleAST:
     file_path: str
     parameters: Dict[str, int]
     ports: Tuple[SVPortAST, ...]
+    parser_backend: str = "builtin"
 
 
 _TOKEN_RE = re.compile(
@@ -221,9 +228,47 @@ class SVModuleParser:
             w = 1
         return expr, w, end
 
+    def _try_parse_interface_port(self, item: List[SVToken]) -> Optional[SVPortAST]:
+        """Recognize SV interface/modport port declarations like `axi_lite_if.slave axi` or `interface.mp name`."""
+        if not item:
+            return None
+        if any(t.value in self._DIRS for t in item):
+            return None
+        # Form 1: <iface_type> . <modport> <port_name>
+        if len(item) >= 4 and item[0].kind == "IDENT" and item[1].value == "." and item[2].kind == "IDENT" and item[3].kind == "IDENT":
+            return SVPortAST(
+                name=item[3].value,
+                direction="interface",
+                width_expr="interface",
+                width=0,
+                line=item[3].line,
+                is_interface=True,
+                interface_type=item[0].value,
+                modport=item[2].value,
+            )
+        # Form 2: <iface_type> <port_name> where iface_type looks like *_if or generic interface
+        if len(item) == 2 and item[0].kind == "IDENT" and item[1].kind == "IDENT":
+            tname = item[0].value
+            if tname == "interface" or tname.lower().endswith("_if"):
+                return SVPortAST(
+                    name=item[1].value,
+                    direction="interface",
+                    width_expr="interface",
+                    width=0,
+                    line=item[1].line,
+                    is_interface=True,
+                    interface_type=tname,
+                    modport="",
+                )
+        return None
+
     def _parse_ansi(self, toks: List[SVToken], params: Dict[str, int]) -> List[SVPortAST]:
         ports, cur_dir, cur_wexpr, cur_w = [], "input", "1", 1
         for item in self._split_top(toks):
+            iface_port = self._try_parse_interface_port(item)
+            if iface_port is not None:
+                ports.append(iface_port)
+                continue
             idx = 0
             while idx < len(item):
                 v = item[idx].value
@@ -295,7 +340,9 @@ class SVModuleParser:
             if self._peek() and self._peek().value == "(":
                 ptoks = self._read_balanced("(", ")")
                 self._match(";")
-                if any(t.value in self._DIRS for t in ptoks):
+                has_dir = any(t.value in self._DIRS for t in ptoks)
+                has_iface = any(self._try_parse_interface_port(g) is not None for g in self._split_top(ptoks))
+                if has_dir or has_iface:
                     ports = self._parse_ansi(ptoks, params)
                 else:
                     names = [g[0].value for g in self._split_top(ptoks) if g and g[0].kind == "IDENT"]
@@ -305,9 +352,83 @@ class SVModuleParser:
             while self.i < self.n and self._peek().value != "endmodule":
                 self._adv()
             self._match("endmodule")
-            mods.append(SVModuleAST(mod_name, self.file_path, params, tuple(ports)))
+            mods.append(SVModuleAST(mod_name, self.file_path, params, tuple(ports), parser_backend="builtin"))
         return mods
 
 
-def parse_sv_file(rtl_path: Path) -> List[SVModuleAST]:
+def _parse_with_slang(rtl_path: Path, slang_bin: str) -> Optional[List[SVModuleAST]]:
+    """Optional slang AST JSON backend when slang is installed on PATH."""
+    try:
+        proc = subprocess.run(
+            [slang_bin, "--ast-json", "-", str(rtl_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        tree = json.loads(proc.stdout)
+    except Exception:
+        return None
+
+    mods: List[SVModuleAST] = []
+
+    def _walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("kind") == "Instance" and isinstance(node.get("body"), dict):
+            body = node["body"]
+            mname = str(body.get("name") or node.get("name") or "")
+            params: Dict[str, int] = {}
+            ports: List[SVPortAST] = []
+            for mem in body.get("members", []):
+                mk = mem.get("kind")
+                if mk == "Parameter" and isinstance(mem.get("value"), (int, str)):
+                    val = eval_int_expr(str(mem["value"]), params)
+                    if val is not None and mem.get("name"):
+                        params[str(mem["name"])] = val
+                elif mk == "Port":
+                    dmap = {"In": "input", "Out": "output", "InOut": "inout"}
+                    d = dmap.get(str(mem.get("direction", "")), "input")
+                    tstr = str(mem.get("type", "logic"))
+                    m_rng = re.search(r"\[(\d+):(\d+)\]", tstr)
+                    w = abs(int(m_rng.group(1)) - int(m_rng.group(2))) + 1 if m_rng else 1
+                    ports.append(SVPortAST(str(mem.get("name", "")), d, tstr, w, 0))
+                elif mk == "InterfacePort":
+                    ports.append(
+                        SVPortAST(
+                            name=str(mem.get("name", "")),
+                            direction="interface",
+                            width_expr="interface",
+                            width=0,
+                            line=0,
+                            is_interface=True,
+                            interface_type=str(mem.get("interfaceDef", "")),
+                            modport=str(mem.get("modport", "")),
+                        )
+                    )
+            if mname:
+                mods.append(SVModuleAST(mname, str(rtl_path), params, tuple(ports), parser_backend="slang"))
+        for v in node.values():
+            if isinstance(v, list):
+                for item in v:
+                    _walk(item)
+            elif isinstance(v, dict):
+                _walk(v)
+
+    _walk(tree)
+    return mods or None
+
+
+def parse_sv_file(rtl_path: Path, backend: str = "auto") -> List[SVModuleAST]:
+    """Parse an RTL file using slang AST when available (backend='auto'/'slang'), else builtin parser."""
+    if backend in ("auto", "slang"):
+        slang_bin = shutil.which("slang")
+        if slang_bin:
+            slang_mods = _parse_with_slang(rtl_path, slang_bin)
+            if slang_mods:
+                return slang_mods
+        if backend == "slang":
+            raise RuntimeError("Requested parser backend 'slang' is unavailable or failed to parse.")
     return SVModuleParser(sv_tokenize(rtl_path.read_text(encoding="utf-8")), str(rtl_path)).parse_all()

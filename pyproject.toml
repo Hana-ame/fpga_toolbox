@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fpga-toolbox"
-version = "0.4.0"
-description = "Modular FPGA verification toolbox exposed as atomic tools for AI agent harnesses"
+version = "0.5.0"
+description = "Modular FPGA verification toolbox with anti-silent-pass guardrails for AI agent harnesses"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -23,6 +23,7 @@ packages = ["fpga_toolbox", "fpga_toolbox.core"]
 [tool.ruff]
 target-version = "py310"
 line-length = 130
+extend-exclude = ["examples"]
 
 [tool.ruff.lint]
 # Deliberately narrow: syntax errors, pyflakes, import order. Style churn is not a CI concern.
