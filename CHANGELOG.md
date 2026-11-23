@@ -2,6 +2,17 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — 自动畸形矩阵扫出的 3 个 TB 生成器缺陷
+
+前四轮是「测一个点修一个点」，本轮改成写自动扫描器（8 种畸形 RTL × `verilator --lint-only -Wall`）一次抓全。
+
+### Fixed
+- **缺 reset 端口时硬连不存在的 `rst_n`**（`protocol_tb_emitter.py`）。`extract_interfaces` 已正确报 `W011` 并给 `reset=None`，emitter 却回退到猜的名字 `rst_n`，生成 `.rst_n(rst_n)` → `%Error-PINNOTFOUND`，工具仍报 `ok=True`。修复：clock/reset 任一缺失即 fail-fast 并说明原因。
+- **DUT 带额外端口时 `PINMISSING` 阻断构建**。`.*` 只连 TB 声明过的同名变量，真实设计常带 `dbg`/`test_mode`/`scan_en` 等 TB 不关心的端口；Verilator 报 `PINMISSING` 且**默认把 warning 当错误**（`Exiting due to 1 warning(s)`），而 `run_*.sh` 没关它。修复：TB 插 `lint_off PINMISSING` + 脚本补 `-Wno-PINMISSING`。
+- **多模块文件盲取 `mods[0]`**。文件里第一个模块是 helper 时报 `Protocol 'apb' not found in helper`，尽管文件里有带 APB 的模块。修复：遍历所有模块挑含目标协议的那个；报错列出全部模块及协议。
+
+扫描器自身踩的两个坑（否则结论全错）：产物按模块名命名（不是用例名）导致找错文件；`-Wall` 下任何 warning 都 rc=1，不能把 rc!=0 当硬错误。新增 6 项回归检查。详见 [`changelog/18-emitter-robustness-matrix.md`](changelog/18-emitter-robustness-matrix.md)。
+
 ## [Unreleased] — TB 测试向量随位宽缩放
 
 ### Fixed

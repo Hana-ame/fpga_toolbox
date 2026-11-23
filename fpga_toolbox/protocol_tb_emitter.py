@@ -603,6 +603,26 @@ endmodule
 """
 
 
+def add_lint_off(tb_src: str) -> str:
+    """在生成的 TB 里关掉 PINMISSING。
+
+    DUT 常带有 TB 不关心的额外端口（调试口、test_mode、scan_en 等）。模板用
+    `.*` 通配连接，只覆盖 TB 里声明了同名变量的端口，其余会触发 Verilator 的
+    PINMISSING 警告——而 `emit` 的 run 脚本默认把 warning 当错误，构建直接
+    "Exiting due to 1 warning(s)" 失败，工具却已返回 ok=True。
+    """
+    out = []
+    for line in tb_src.splitlines(keepends=True):
+        out.append(line)
+        if line.startswith("module tb_") and line.rstrip().endswith(";"):
+            out.append(
+                "  // DUT 可能有 TB 不关心的额外端口（调试/测试/scan），\n"
+                "  // `.*` 覆盖不到会触发 PINMISSING 并阻断构建，故显式关闭。\n"
+                "  /* verilator lint_off PINMISSING */\n"
+            )
+    return "".join(out)
+
+
 def _emit_run_script(proto: str, mod: str, rtl_abs: Path, tb_abs: Path) -> str:
     top = f"tb_{mod}_{proto}"
     if proto == "pcie":
@@ -645,7 +665,7 @@ run_one() {{
   echo "== sim: $name (top=$top) =="
   if [ "$need_build" -eq 1 ]; then
     rm -rf "$out"
-    "$VLT" --binary --build-jobs 4 -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME --top-module "$top" -Mdir "$out" "$@" >/dev/null
+    "$VLT" --binary --build-jobs 4 -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME -Wno-PINMISSING --top-module "$top" -Mdir "$out" "$@" >/dev/null
   fi
   "$bin"
 }}
@@ -679,31 +699,56 @@ def emit_protocol_testbench(
     if not mods:
         return err_result("emit_testbench", f"No modules found in {rtl_file}.")
 
-    m = mods[0]
-    mod_name = str(m.get("module_name") or rp.stem)
-    clk = str(((m.get("clock") or {}).get("port")) or "clk")
-    rst = str(((m.get("reset") or {}).get("port")) or "rst_n")
-    ifaces = m.get("interfaces") or []
-
+    # 模块选择：一个文件里可以有多个 module（helper/package wrapper/顶层），
+    # 旧实现固定取 mods[0]——若第一个是 helper，就会报 "Protocol 'apb' not found
+    # in helper" 而拒绝一个完全合法的文件。正确做法是在所有模块里挑**含目标
+    # 协议接口**的那个（auto 时挑第一个含任一支持协议的）。
+    want = None if (not protocol or protocol == "auto") else protocol
+    m = None
     chosen = None
-    if protocol and protocol != "auto":
-        for i in ifaces:
-            if i.get("protocol") == protocol:
-                chosen = i
+    for cand in mods:
+        cand_ifaces = cand.get("interfaces") or []
+        for i in cand_ifaces:
+            if want is not None:
+                if i.get("protocol") == want:
+                    m, chosen = cand, i
+                    break
+            elif i.get("protocol") in SUPPORTED_MULTI_PROTOCOLS:
+                m, chosen = cand, i
                 break
-        if chosen is None:
-            return err_result("emit_testbench", f"Protocol '{protocol}' not found in {mod_name}.")
-    else:
-        for i in ifaces:
-            if i.get("protocol") in SUPPORTED_MULTI_PROTOCOLS:
-                chosen = i
-                break
-        if chosen is None:
-            return err_result(
-                "emit_testbench",
-                f"No supported multi-bus interface found in {mod_name} (found: {[i.get('protocol') for i in ifaces]}).",
-            )
-
+        if m is not None:
+            break
+    if m is None or chosen is None:
+        found = {cand.get("module_name"): [i.get("protocol") for i in (cand.get("interfaces") or [])] for cand in mods}
+        return err_result(
+            "emit_testbench",
+            f"{'Protocol ' + repr(want) + ' not found' if want else 'No supported multi-bus interface found'} "
+            f"in any module of {rp.name} (modules: {found}).",
+        )
+    mod_name = str(m.get("module_name") or rp.stem)
+    # 时钟/复位必须从 RTL 真实推断出来，不能回退到 "clk"/"rst_n" 这类猜的名字：
+    # DUT 没有 reset 端口时（extract_interfaces 会报 W011 并给 reset=None），
+    # 旧实现仍硬连 `.rst_n(rst_n)`，得到 `%Error-PINNOTFOUND: Pin not found:
+    # 'rst_n'` —— 编译失败但工具报 ok=True。
+    clk_port = (m.get("clock") or {}).get("port")
+    rst_port = (m.get("reset") or {}).get("port")
+    if not clk_port:
+        return err_result(
+            "emit_testbench",
+            f"Cannot emit a '{protocol or 'auto'}' testbench for {mod_name}: no clock "
+            "port detected in the RTL (the template must drive a clock). "
+            "Add a clock port (clk/aclk/hclk/...) or wire it explicitly.",
+        )
+    if not rst_port:
+        return err_result(
+            "emit_testbench",
+            f"Cannot emit a '{protocol or 'auto'}' testbench for {mod_name}: no reset "
+            "port detected in the RTL. The generated template hard-wires a reset pin, "
+            "so a fabricated name would not compile (PINNOTFOUND). "
+            "Add a reset port (rst/rst_n/aresetn/hresetn/...) or drive the DUT without one.",
+        )
+    clk = str(clk_port)
+    rst = str(rst_port)
     proto = str(chosen["protocol"])
 
     # 生成前校验 TB 模板硬连的端口在 DUT 上确实存在，避免产出无法编译的 TB
@@ -761,8 +806,11 @@ def emit_protocol_testbench(
     else:
         return err_result("emit_testbench", f"Unsupported protocol: {proto}")
 
+    # 给生成的 TB 插入 PINMISSING lint_off：DUT 常有 TB 不关心的额外端口
+    # （调试/测试/scan 模式），`.*` 通配覆盖不到，Verilator 会报 PINMISSING
+    # 并以 "Exiting due to N warning(s)" 阻断构建，而工具已报 ok=True。
     tb_path = od / f"tb_{mod_name}_{proto}.sv"
-    tb_path.write_text(tb_src, encoding="utf-8")
+    tb_path.write_text(add_lint_off(tb_src), encoding="utf-8")
 
     sim_path = od / f"run_{mod_name}_{proto}.sh"
     sim_path.write_text(_emit_run_script(proto, mod_name, rp, tb_path), encoding="utf-8")

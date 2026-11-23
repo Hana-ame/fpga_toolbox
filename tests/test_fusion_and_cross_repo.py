@@ -631,6 +631,63 @@ def test_multi_bus_emitter_port_guard() -> None:
                   "narrow-bus vectors are width-scaled (no over-wide literals)")
             check("8'h78" in ntb or "8'h" in ntb, "scaled 8-bit patterns present")
 
+        # 缺失 reset 端口：extract_interfaces 会报 W011 并给 reset=None，旧实现
+        # 仍硬连 .rst_n(rst_n) → PINNOTFOUND 编译失败但工具报 ok=True。回归 44。
+        no_rst = tdp / "apb_no_reset.sv"
+        no_rst.write_text(
+            "`timescale 1ns/1ps\n"
+            "module apb_no_reset(input logic clk,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+            "   output logic pready, output logic [31:0] prdata, output logic pslverr); endmodule\n",
+            encoding="utf-8",
+        )
+        r_no_rst = call_tool("emit_testbench", {
+            "rtl_file": str(no_rst), "out_dir": str(tdp / "tb_no_rst"), "protocol": "apb",
+        })
+        check(r_no_rst["ok"] is False, f"APB without reset rejected (got ok={r_no_rst['ok']})")
+        check("reset" in str(r_no_rst.get("error")).lower(),
+              f"error mentions missing reset (got {str(r_no_rst.get('error'))[:100]})")
+
+        # 多模块文件：必须挑含目标协议的模块，而不是盲取 mods[0]。回归 46。
+        multi = tdp / "two_modules.sv"
+        multi.write_text(
+            "`timescale 1ns/1ps\n"
+            "module helper(input logic x); endmodule\n"
+            "module apb_dut(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+            "   output logic pready, output logic [31:0] prdata, output logic pslverr); endmodule\n",
+            encoding="utf-8",
+        )
+        r_multi = call_tool("emit_testbench", {
+            "rtl_file": str(multi), "out_dir": str(tdp / "tb_multi"), "protocol": "apb",
+        })
+        check(r_multi["ok"] is True, f"multi-module file picks the APB module (got {str(r_multi.get('error'))[:100]})")
+        if r_multi["ok"]:
+            check(r_multi["data"]["module_name"] == "apb_dut",
+                  f"picked apb_dut not helper (got {r_multi['data']['module_name']})")
+
+        # DUT 带额外 inout 端口：`.*` 覆盖不到 → PINMISSING 阻断构建（回归 45）。
+        extra = tdp / "apb_extra_port.sv"
+        extra.write_text(
+            "`timescale 1ns/1ps\n"
+            "module apb_extra_port(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+            "   output logic pready, output logic [31:0] prdata, output logic pslverr,\n"
+            "   inout wire [7:0] dbg); endmodule\n",
+            encoding="utf-8",
+        )
+        r_extra = call_tool("emit_testbench", {
+            "rtl_file": str(extra), "out_dir": str(tdp / "tb_extra"), "protocol": "apb",
+        })
+        if r_extra["ok"]:
+            etb = Path(r_extra["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+            check("lint_off PINMISSING" in etb, "TB suppresses PINMISSING for unrelated DUT ports")
+            ers = Path(r_extra["data"]["artifacts"]["sim_script"]).read_text(encoding="utf-8")
+            check("-Wno-PINMISSING" in ers, "run script passes -Wno-PINMISSING")
+
         # 端口齐全的官方靶场必须仍能生成
         ref = Path(__file__).resolve().parents[1] / "examples" / "multi_bus_ref"
         for fname, proto in (
