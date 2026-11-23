@@ -50,6 +50,19 @@ APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ 
   未克隆子模块）。此时 `resolve_deps` 会返回 `closure_is_complete: false`，明确告知依赖
   闭包不完整，不要把该文件清单直接当作可编译沙箱。
 
+**`eda_campaign`（Synopsys VCS/DC/PT 论文复跑集成）专用码 `E046–E050`**：
+
+| 码 | 含义 |
+|---|---|
+| `E046` | DC K-2015.06 `UID-423`，或输出 <700B 且仅含 `No paths.` 的假成功报告 |
+| `E047` | `set_max_fanout` 施加在 net 对象报 `UID-119` |
+| `E048` | K-2015.06 调用 `write_db` / `-format db` 报 `UID-530` |
+| `E049` | `Received Signal 15` 或 `No space left on device` |
+| `E050` | 旧 `simv` / 截断日志（少于 3 行或缺 `UVM_ERROR :` 汇总）|
+
+> 注：这批码原设计用 `E040–E045`，但 `E040` 已被 `audit_harness` 占用（自审计护栏失效），
+> 故整体平移至空闲的 `E046–E050`，避免同一码两种语义。
+
 ## 快速验证与测试
 
 ```bash

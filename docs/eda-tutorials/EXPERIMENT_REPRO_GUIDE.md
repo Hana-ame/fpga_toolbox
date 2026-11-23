@@ -1,15 +1,23 @@
 # Synopsys VCS / DC K-2015.06 / PrimeTime K-2015.06 论文复跑与工具箱集成指南
 
-> ⚠ **实现状态：`fpga_toolbox.eda_campaign` 尚未在本仓库实现。**
+> ✅ **实现状态：`fpga_toolbox.eda_campaign` 已实现**（`fpga_toolbox/eda_campaign.py`，366 行）。
 >
-> 本文档是**设计说明 / 待实现方案**，不是已有功能的用户手册。文中出现的
+> 本文档描述的 API 均已落地并接入 CI（`tests/test_eda_campaign.py`）：
 > `generate_remote_run_script` / `parse_uvm_log` / `parse_dc_pt_qor` /
 > `aggregate_seed_medians` / `verify_paired_baseline_reproducibility` /
-> `tool_clean_pt_netlist` 以及 `E040–E045` 诊断码目前**均不存在于代码库**，
-> 示例代码无法直接运行。
+> `clean_netlist_for_pt` / `tool_clean_pt_netlist`。
 >
-> 另：`E040` 在本仓库已由 `audit_harness` 使用（含义为「自审计护栏失效」），
-> 若将来实现本模块需重新分配该码，避免语义冲突。
+> **诊断码说明**：本文档原先使用 `E040–E045`，但 `E040` 已被本仓库的
+> `audit_harness` 占用（含义为「自审计护栏失效」）。为避免同一码两种语义，
+> `eda_campaign` 的这批码已整体平移为 **`E046–E050`**：
+>
+> | 码 | 含义 |
+> |---|---|
+> | `E046` | DC K-2015.06 `UID-423` / 输出 <700B 且仅含 `No paths.` 的假成功报告 |
+> | `E047` | `set_max_fanout` 施加在 net 对象报 `UID-119` |
+> | `E048` | K-2015.06 调用 `write_db` / `-format db` 报 `UID-530` |
+> | `E049` | `Received Signal 15` 或 `No space left on device` |
+> | `E050` | 旧 `simv` / 截断日志（少于 3 行或缺 `UVM_ERROR :` 汇总）|
 
 本指南将 **Paper 1 (DLR-MAC)** 与 **Paper 2 (RS+GBN)** 的远端实机复跑流程直接与 `fpga_toolbox.eda_campaign` 结合，把人工目测、正则解析、K-2015.06 死坑拦截和 PrimeTime 黑盒清理全部固化为可复用的自动化门禁。
 
@@ -38,7 +46,7 @@ script = generate_remote_run_script(
 `parse_uvm_log(log_text, expected_frames=10000)` 内置黄金正则与自动判据：
 - 自动提取：`delivered`、`fid_bad`、`NP_LAT`（`min` / `avg` / `max`）、`all_retry`、`send_nums`、`UVM_ERROR`、`win_span` 最大值、以及注入标定 `pcs_words / flips_exp / flips_act`。
 - 严格通过判据：`delivered == expected_frames && fid_bad == 0 && UVM_ERROR == 0`。
-- **旧 `simv` / 截断日志防呆 (`E045`)**：若日志少于 3 行或缺少 `UVM_ERROR :` 汇总，直接判失败，杜绝拿错旧 `simv` 误判。
+- **旧 `simv` / 截断日志防呆 (`E050`)**：若日志少于 3 行或缺少 `UVM_ERROR :` 汇总，直接判失败，杜绝拿错旧 `simv` 误判。
 - 使用 `aggregate_seed_medians(runs)` 自动输出 Table 3 所需的 **5 种子中位数**与实际翻转率标定（`Σflips_act / Σflips_exp`、`Σflips_act / Σpcs_words`）。
 
 ## 3. DC K-2015.06 综合报告解析与四大死坑自动拦截
@@ -47,10 +55,10 @@ script = generate_remote_run_script(
 
 | 错误码 | 拦截的真实死坑 | 自动建议修复 |
 |---|---|---|
-| `E040` | DC `report_timing -group async_default` 报 `UID-423` 或输出 `<700B` 且仅含 `No paths.` 的假成功报告 | 改用 PrimeTime 的 `{**async_default**}` 测量 recovery |
-| `E041` | `set_max_fanout` 施加在 net 对象报 `UID-119`（或在 pin 上 no-op） | 改用 `enable_recovery_removal_arcs true` + `high_fanout_net_threshold 100000` |
-| `E042` | K-2015.06 调用 `write_db` / `-format db` 报 `UID-530` | 仅导出 `.v` / `.sdc` / `.sdf` 给 PrimeTime |
-| `E043` | 出现 `Received Signal 15` 或 `No space left on device` | 工作目录迁至 `/dev/shm` 且限制并发 DC ≤ 2 |
+| `E046` | DC `report_timing -group async_default` 报 `UID-423` 或输出 `<700B` 且仅含 `No paths.` 的假成功报告 | 改用 PrimeTime 的 `{**async_default**}` 测量 recovery |
+| `E047` | `set_max_fanout` 施加在 net 对象报 `UID-119`（或在 pin 上 no-op） | 改用 `enable_recovery_removal_arcs true` + `high_fanout_net_threshold 100000` |
+| `E048` | K-2015.06 调用 `write_db` / `-format db` 报 `UID-530` | 仅导出 `.v` / `.sdc` / `.sdf` 给 PrimeTime |
+| `E049` | 出现 `Received Signal 15` 或 `No space left on device` | 工作目录迁至 `/dev/shm` 且限制并发 DC ≤ 2 |
 
 配对实验双跑校验：`verify_paired_baseline_reproducibility(run_a, run_b)` 严格核对两次基线综合的 Leaf Cell Count 与总面积逐位一致（如 `74,265` / `50,656.129 µm²`）。
 

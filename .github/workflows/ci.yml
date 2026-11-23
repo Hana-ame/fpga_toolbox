@@ -108,6 +108,9 @@ jobs:
       - name: Fusion & cross-repo AXI/APB benchmark suite
         run: python tests/test_fusion_and_cross_repo.py
 
+      - name: EDA campaign parsers (UVM / DC-PT QoR / PT netlist cleaner)
+        run: python tests/test_eda_campaign.py
+
       - name: Self-audit gate (anti-silent-pass)
         run: python -m fpga_toolbox audit_harness
 

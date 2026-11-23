@@ -14,27 +14,28 @@ EDA Tutorials & Verification Docs Bundle
 解压后直接用任意浏览器双击 .html 文件即可离线查看。
 两个 HTML 引用了 Google Fonts（在线字体），断网时会回退到系统字体，正文内容不受影响。
 
-⚠ 重要：与当前代码库的状态差异
+✅ 与当前代码库的状态（已实现）
 --------------------------------
-`EXPERIMENT_REPRO_GUIDE.md` 描述的 `fpga_toolbox.eda_campaign` 模块**尚未在本仓库实现**。
-该文档引用的以下 API 目前都不存在：
+`EXPERIMENT_REPRO_GUIDE.md` 描述的 `fpga_toolbox.eda_campaign` 模块**已实现**
+于 `fpga_toolbox/eda_campaign.py`，测试见 `tests/test_eda_campaign.py`（已接入 CI）。
 
+已落地 API：
   eda_campaign.generate_remote_run_script
   eda_campaign.parse_uvm_log
   eda_campaign.parse_dc_pt_qor
   eda_campaign.aggregate_seed_medians
   eda_campaign.verify_paired_baseline_reproducibility
+  eda_campaign.clean_netlist_for_pt
   eda_campaign.tool_clean_pt_netlist
 
-因此该文档应视为**设计说明 / 待实现方案**，其中的示例代码不能直接运行。
-若将来实现该模块，请按文档中的函数签名与错误码语义落地。
+诊断码说明
+----------
+本模块诊断码为 E046–E050：
+  E046  DC UID-423 / 输出 <700B 且仅含 "No paths." 的假成功报告
+  E047  set_max_fanout 施加在 net 对象报 UID-119
+  E048  K-2015.06 调用 write_db / -format db 报 UID-530
+  E049  Received Signal 15 或 No space left on device
+  E050  旧 simv / 截断日志（少于 3 行或缺 UVM_ERROR : 汇总）
 
-诊断码冲突提醒
---------------
-文档里 E040–E045 是 `eda_campaign` 计划使用的码，其中：
-
-  E040  文档: DC report_timing 假成功报告（UID-423 / 输出仅 "No paths."）
-        **本仓库现状: E040 已由 audit_harness 使用 = 自审计护栏失效**
-
-同一码在本仓库已有其它含义。若将来实现 `eda_campaign`，必须先重新分配这一批
-诊断码，不要复用 E040，否则调用方无法区分是自审计失败还是 DC 假报告。
+注：原设计用 E040–E045，但 E040 在本仓库已被 audit_harness 占用
+（含义为「自审计护栏失效」），故整体平移至空闲段 E046–E050。

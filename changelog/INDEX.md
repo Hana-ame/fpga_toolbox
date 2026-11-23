@@ -12,6 +12,10 @@
 - [08-full-conversion-matrix-buf-cycs-syntax-color.md](08-full-conversion-matrix-buf-cycs-syntax-color.md) — Real direction/width pills (zero `-`), SV syntax color highlighting, configurable `BUF_CYCS=0/2/4` bridges (`APB→AXI4`, `PCIe→AXI4`, `AXI4→DDR3`), and full 256B sweeps (97 Verilator + 7 cocotb checks)
 - [09-unified-omni-bus-hub-hotplug-buf.md](09-unified-omni-bus-hub-hotplug-buf.md) — Unified 6-IF all-directional hub (`soc_omni_bus_hub.sv`), Ethernet/PCIe hot-plug disconnect/reconnect, tri-domain sleep/wake, `BUF_CYCS=0/2/4`, 115 Verilator + 7 cocotb checks, and 15/15 (100%) RTL mutations
 
+## eda_campaign 集成
+
+- [10-synopsys-vcs-dc-pt-campaign-integration.md](10-synopsys-vcs-dc-pt-campaign-integration.md) — Synopsys VCS/UVM `parse_uvm_log`、DC/PT `parse_dc_pt_qor`、PT 黑盒网表清理与远端 `csh`/`/dev/shm` 启动器。⚠ 诊断码已从 `E040–E045` 平移为 `E046–E050`（`E040` 被 `audit_harness` 占用）
+
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
