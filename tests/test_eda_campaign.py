@@ -175,10 +175,90 @@ def test_clean_netlist_param_and_comment_edges() -> None:
     assert s4["removed_instances"] == 0, f"lookalike module wrongly removed: {s4}"
 
 
+
+
+def test_aggregate_rejects_toolresult_envelope() -> None:
+    """aggregate_seed_medians 误传 ToolResult 外层时必须报错，不能静默返回空。
+
+    回归 51：入参约定是 parse_uvm_log(...)["data"]，但误传整条 ToolResult
+    （{ok, tool, data, ...}）时，旧实现静默得出 n_passed=0 / lat_avg_median=None，
+    调用方会误以为「所有种子都失败」或「没数据」。
+    """
+    good_log = (
+        "[C3900] FID: delivered=100 fid_bad=0\n"
+        "[C3900] NP_LAT: frames=100 min=4 avg=5 max=6\n"
+        "UVM_ERROR : 0\n"
+    )
+    r = parse_uvm_log(good_log, expected_frames=100)
+    assert r["ok"]
+    # 正确用法
+    agg = aggregate_seed_medians([r["data"]] * 5)
+    assert agg["n_passed"] == 5 and agg["lat_avg_median"] == 5
+    # 错误用法必须显式报错
+    try:
+        aggregate_seed_medians([r] * 5)
+    except ValueError as exc:
+        assert "inner data" in str(exc) or "ToolResult" in str(exc)
+    else:
+        raise AssertionError("wrong-level input silently accepted")
+
+
+def test_paired_baseline_requires_both_metrics() -> None:
+    """bit-exact 必须要求 leaf 与 area 都有值且相等。
+
+    回归 52：旧实现只要求 leaf_cell_count 非 None，于是 total_cell_area 双方
+    缺失时 `None == None` 被判为「逐位一致」，bit_exact=True——用不完整数据
+    证明核心结论（文档要求两个指标共同证明可复现性）。
+    """
+    only_leaf = verify_paired_baseline_reproducibility(
+        {"leaf_cell_count": 74265}, {"leaf_cell_count": 74265},
+    )
+    assert only_leaf["ok"] is False, "missing area must not be bit-exact"
+    assert only_leaf["data"]["bit_exact"] is False
+
+    full = {"leaf_cell_count": 74265, "total_cell_area": 50656.129}
+    both = verify_paired_baseline_reproducibility(full, dict(full))
+    assert both["ok"] is True and both["data"]["bit_exact"] is True
+
+
+def test_remote_script_rejects_shell_injection() -> None:
+    """生成脚本会被 scp 到远端执行，参数含 shell 元字符即构成命令注入。
+
+    回归 53：实测 host='x"; touch /tmp/PWNED; "' 会让生成脚本真的执行 touch。
+    现在 host/tag/local_script_name 都做白名单校验。
+    """
+    ok = generate_remote_run_script(
+        host="lzc@192.168.108.128", tag="p1_base", local_script_name="run_base.sh",
+    )
+    assert "lzc@192.168.108.128" in ok and "/dev/shm/p1_base" in ok
+
+    bad_calls = [
+        dict(host='x"; touch /tmp/PWNED; "', tag="t", local_script_name="s.sh"),
+        dict(host="h$(id)", tag="t", local_script_name="s.sh"),
+        dict(host="h`id`", tag="t", local_script_name="s.sh"),
+        dict(host="h", tag='t"; touch /tmp/PWNED; "', local_script_name="s.sh"),
+        dict(host="h", tag="t", local_script_name="../../etc/passwd"),
+        dict(host="h", tag="t", local_script_name="s.sh; rm -rf /"),
+    ]
+    for kwargs in bad_calls:
+        try:
+            generate_remote_run_script(**kwargs)
+        except ValueError:
+            continue
+        raise AssertionError(f"injection not rejected: {kwargs}")
+
+    # 合法边界仍应工作（IPv6 / 域名 / 下划线 / 连字符）
+    for host in ("lzc@[::1]", "user@host.example.com", "h_1", "a.b-c"):
+        generate_remote_run_script(host=host, tag="t-1", local_script_name="a.sh")
+
+
 if __name__ == "__main__":
     test_parse_uvm_log_and_medians()
     test_parse_dc_pt_qor_and_pitfalls()
     test_clean_netlist_for_pt()
     test_clean_netlist_param_and_comment_edges()
+    test_aggregate_rejects_toolresult_envelope()
+    test_paired_baseline_requires_both_metrics()
+    test_remote_script_rejects_shell_injection()
     test_generate_remote_run_script()
     print("ALL EDA CAMPAIGN TESTS PASSED")

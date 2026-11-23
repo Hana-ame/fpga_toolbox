@@ -129,7 +129,21 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
 
 
 def aggregate_seed_medians(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute Table-3 style 5-seed medians and aggregate calibration rates."""
+    """Compute Table-3 style 5-seed medians and aggregate calibration rates.
+
+    入参必须是 **``parse_uvm_log(...)["data"]``** 的内层数据，而不是它的返回值
+    本身。若误传整条 ToolResult（``{ok, tool, data, diagnostics, error}``），
+    旧实现会静默得出 ``n_passed=0 / lat_avg_median=None``——调用方看到的是
+    「全部种子失败」或「没有数据」，而不是「参数层级传错了」。这里显式探测
+    并抛 ``ValueError``，把静默错误变成立刻可见的错误。
+    """
+    for r in runs:
+        if isinstance(r, dict) and "data" in r and "ok" in r and "tool" in r:
+            raise ValueError(
+                "aggregate_seed_medians() expects the inner data dict (take the "
+                '\'data\' key of parse_uvm_log(...)), not the full ToolResult '
+                "envelope. Pass [r['data'] for r in results]."
+            )
     lats = [r["lat_avg"] for r in runs if r.get("lat_avg") is not None]
     retries = [r["retry_rate"] for r in runs if r.get("retry_rate") is not None]
     tot_words = sum((r.get("calibration") or {}).get("pcs_words") or 0 for r in runs)
@@ -228,17 +242,26 @@ def parse_dc_pt_qor(report_text: str, raw_log_text: str = "") -> Dict[str, Any]:
         "timing_clean": (_first_float(_QOR_SLACK_RE, report_text) is not None and _first_float(_QOR_SLACK_RE, report_text) >= 0.0 and _first_int(_QOR_VIOL_RE, report_text) == 0),
     }
     if diags:
-        res = err_result("parse_dc_pt_qor", f"Detected {len(diags)} Synopsys DC/PT pitfall(s).", diagnostics=diags)
-        res["data"] = data
-        return res
+        return err_result(
+            "parse_dc_pt_qor",
+            f"Detected {len(diags)} Synopsys DC/PT pitfall(s).",
+            diagnostics=diags,
+            data=data,
+        )
     return ok_result("parse_dc_pt_qor", data)
 
 
 def verify_paired_baseline_reproducibility(run_a: Dict[str, Any], run_b: Dict[str, Any]) -> Dict[str, Any]:
     """Verify bit-exact reproducibility between two baseline DC runs (§2.4 & §8.1)."""
-    exact_cells = run_a.get("leaf_cell_count") == run_b.get("leaf_cell_count")
-    exact_area = run_a.get("total_cell_area") == run_b.get("total_cell_area")
-    ok = exact_cells and exact_area and run_a.get("leaf_cell_count") is not None
+    # 两个指标都必须**有值且相等**才算 bit-exact。旧实现只要求
+    # leaf_cell_count 非 None，于是 total_cell_area 双方缺失时 `None == None`
+    # 会判为「逐位一致」，bit_exact=True——用小样本证明核心结论，属假通过
+    # （文档 §2.4 / §8.1 要求用 Leaf Cell Count **与**总面积共同证明）。
+    ca, cb = run_a.get("leaf_cell_count"), run_b.get("leaf_cell_count")
+    aa, ab = run_a.get("total_cell_area"), run_b.get("total_cell_area")
+    exact_cells = ca is not None and cb is not None and ca == cb
+    exact_area = aa is not None and ab is not None and aa == ab
+    ok = exact_cells and exact_area
     data = {
         "bit_exact": ok,
         "leaf_cell_count_a": run_a.get("leaf_cell_count"),
@@ -374,6 +397,13 @@ def clean_netlist_for_pt(
     }
 
 
+# host / tag / 文件名允许的字符。生成的脚本会被 scp 到远端执行，参数若含
+# shell 元字符就能注入任意命令（实测 host='x"; touch /tmp/PWNED; "' 会真的
+# 执行 touch）。这里做白名单校验，从源头挡住注入。
+_HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+$")
+_TAG_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
 def generate_remote_run_script(
     host: str,
     tag: str,
@@ -381,7 +411,30 @@ def generate_remote_run_script(
     remote_work_dir: str = "~/work",
     use_dev_shm: bool = True,
 ) -> str:
-    """Generate a csh-safe remote SSH/SCP launcher with /dev/shm staging & progress tracking (§0.1, §9)."""
+    """Generate a csh-safe remote SSH/SCP launcher with /dev/shm staging & progress tracking (§0.1, §9).
+
+    参数会被写入待执行的 shell 脚本，因此做严格白名单校验：``host`` 只允许
+    主机名/用户@主机/IPv6 括号形式，``tag`` 只允许 ``[A-Za-z0-9_.-]``，
+    ``local_script_name`` 必须是纯文件名（不含路径与 shell 元字符）。
+    非法输入抛 ``ValueError`` 而不是生成一个带注入的脚本。
+    """
+    if not _HOST_RE.match(host):
+        raise ValueError(
+            f"Invalid host {host!r}: allowed characters are [A-Za-z0-9_.@:[]-] "
+            "(user@host / IPv4 / [IPv6]). Shell metacharacters are rejected "
+            "because the generated script is executed on the remote side."
+        )
+    if not _TAG_RE.match(tag):
+        raise ValueError(
+            f"Invalid tag {tag!r}: allowed characters are [A-Za-z0-9_.-]. "
+            "The tag is used as a /dev/shm directory name in the generated script."
+        )
+    base = Path(local_script_name).name
+    if base != local_script_name or not re.match(r"^[A-Za-z0-9_.-]+$", base):
+        raise ValueError(
+            f"Invalid local_script_name {local_script_name!r}: must be a bare file "
+            "name with only [A-Za-z0-9_.-] (no directories, no shell metacharacters)."
+        )
     shm_line = (
         f'  mkdir -p /dev/shm/{tag} && cd /dev/shm/{tag}\n'
         if use_dev_shm
