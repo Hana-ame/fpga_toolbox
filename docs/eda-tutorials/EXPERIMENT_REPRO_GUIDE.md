@@ -1,6 +1,6 @@
 # Synopsys VCS / DC K-2015.06 / PrimeTime K-2015.06 论文复跑与工具箱集成指南
 
-> ✅ **实现状态：`fpga_toolbox.eda_campaign` 已实现**（`fpga_toolbox/eda_campaign.py`，366 行）。
+> ✅ **实现状态：`fpga_toolbox.eda_campaign` 已实现**（`fpga_toolbox/eda_campaign.py`，504 行）。
 >
 > 本文档描述的 API 均已落地并接入 CI（`tests/test_eda_campaign.py`）：
 > `generate_remote_run_script` / `parse_uvm_log` / `parse_dc_pt_qor` /

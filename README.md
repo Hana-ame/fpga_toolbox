@@ -2,11 +2,11 @@
 
 将 **`fpga_toolbox`** 的 AI Agent / MCP 控制面与 **`agent/verilog`** 沉淀出的硬件验证与反静默通过护栏融为一体：
 
-- **控制面（零 EDA 强依赖，仅 PyYAML）**：12 个原子工具统一走 `ToolResult(ok / tool / data / diagnostics / error)` 信封，自动导出 MCP JSON Schema 与 CLI 子命令。
+- **控制面（零 EDA 强依赖，仅 PyYAML）**：13 个原子工具统一走 `ToolResult(ok / tool / data / diagnostics / error)` 信封，自动导出 MCP JSON Schema 与 CLI 子命令。
 - **验证与防假通过护栏**：支持 APB 协议分类、SV `interface/modport` 识别与可选 `slang` AST 后端、位域契约校验（兼容 `apb-regfile-spec/v2`）、三套静态反踩坑 Lint（时钟竞争 / AXI 握手 / 静默通过）、参数化变异测试（`try/finally` 强还原 + 残留拦截）、Verilator ≥ 5.040 封装与故障注入自审计。
 - **参考靶场（`examples/axi_apb_ref/`）**：完整保留原 `agent/verilog` 的 AXI4-Lite ↔ APB 串行/并发桥、25 个 Verilator 测试套件、VIP/UVM-lite 与 `regfile_spec.json` 作为跨库集成回归基准。
 
-## 12 个原子工具一览
+## 13 个原子工具一览
 
 | # | 工具 | 职责 |
 |---|---|---|
@@ -21,7 +21,8 @@
 | 9 | `lint_tb` | 静态反踩坑检查：时钟沿竞争（C1–C2）、AXI 握手死锁（R1–R4）、静默通过（S1–S3） |
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
-| 12 | `audit_harness` | 故障注入式自审计（A1–A9），证明验证护栏出错时不会静默通过 |
+| 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
+| 13 | `audit_harness` | 故障注入式自审计（A1–A9），证明验证护栏出错时不会静默通过 |
 
 ### 多总线原生测试台（`protocol=`）
 
@@ -82,7 +83,7 @@ python3 -m fpga_toolbox list
 | [`eda-tools-dark-guide.html`](docs/eda-tutorials/eda-tools-dark-guide.html) | Synopsys 六大 EDA 工具的指令、Flag、参数范围与错误码参考（夜间版） |
 | [`paper-repro-guide.html`](docs/eda-tutorials/paper-repro-guide.html) | Paper 1 (DLR-MAC) / Paper 2 (RS+GBN) 实验复跑教程解读 |
 | [`multi_bus_verification_report.html`](docs/eda-tutorials/multi_bus_verification_report.html) | 六接口全向核心（`examples/multi_bus_ref/omni_hub/`）的验证审计报告 |
-| [`EXPERIMENT_REPRO_GUIDE.md`](docs/eda-tutorials/EXPERIMENT_REPRO_GUIDE.md) | Synopsys VCS/DC/PT 集成方案（**设计稿**，`eda_campaign` 模块尚未实现，详见该文件顶部声明） |
+| [`EXPERIMENT_REPRO_GUIDE.md`](docs/eda-tutorials/EXPERIMENT_REPRO_GUIDE.md) | Synopsys VCS/DC/PT 集成方案（对应 `fpga_toolbox.eda_campaign` 库模块，已实现并接入 CI） |
 
 另见 [`docs/TEST_REPORT_AND_PLAN.md`](docs/TEST_REPORT_AND_PLAN.md) 与
 [`docs/verification-schemes-report.html`](docs/verification-schemes-report.html)。

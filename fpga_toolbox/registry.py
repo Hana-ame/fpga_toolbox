@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 from .core.types import err_result
+from .eda_campaign import tool_clean_pt_netlist
 from .iface_extractor import tool_extract_interfaces
 from .mutation_runner import tool_run_mutation
 from .repo_indexer import tool_index_repo, tool_resolve_deps
@@ -164,6 +165,20 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "only_id": {"type": "string", "description": "Optional single mutation id to run (for targeted verification)."},
             },
             "required": ["workdir", "mutation_spec", "test_cmd"],
+            "additionalProperties": False
+            },
+    },
+    "clean_pt_netlist": {
+        "fn": tool_clean_pt_netlist,
+        "description": "Strip unresolved parameterized blackbox instances (RDBUS/CLKCROSSBUS/CLKCROSSDFF) from a DC Verilog netlist and insert scalar tie-offs so PrimeTime link_design succeeds.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "in_verilog": {"type": "string", "description": "Input DC-exported Verilog netlist path containing unresolved blackbox instances."},
+                "out_verilog": {"type": "string", "description": "Output path for the cleaned netlist (parent dirs are created as needed)."},
+                "blackbox_modules": {"type": "array", "items": {"type": "string"}, "description": "Blackbox module names to strip (default: RDBUS, CLKCROSSBUS, CLKCROSSDFF)."},
+            },
+            "required": ["in_verilog", "out_verilog"],
             "additionalProperties": False
             },
     },

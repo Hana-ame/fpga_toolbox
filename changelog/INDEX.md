@@ -26,6 +26,9 @@
 ## eda_campaign 审计
 
 - [22-eda-campaign-audit-3.md](22-eda-campaign-audit-3.md) — 第三轮审 `parse_uvm_log` 正则层：千分位 `10,000` 被截成 `10`（**可致假通过**）、`delivered=` 依赖字段顺序
+## 集成层修复
+
+- [23-clean-pt-netlist-tool-registration.md](23-clean-pt-netlist-tool-registration.md) — `tool_clean_pt_netlist` 是 ToolResult 信封却不注册（CLI/MCP 都调不到）；README 仍称 `eda_campaign`「尚未实现」；顺带把硬编码 `tools==12` 断言改为下限
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

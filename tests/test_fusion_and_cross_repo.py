@@ -8,7 +8,7 @@ Verifies:
   5. run_mutation guaranteed try/finally restore, mutation score calculation, and E030 residual-mutation guard
   6. normalize_sim_result Verilator per-suite identity verification (rejecting silent skips)
   7. visual_renderer HTML consistency check + coverage/mutation summary rendering
-  8. audit_harness fault-injection self-audit & 12-tool MCP registry/CLI contract
+  8. audit_harness fault-injection self-audit & >=13-tool MCP registry/CLI contract
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ def test_verilator_log_normalizer_and_visual() -> None:
 
 
 def test_audit_and_registry() -> None:
-    print("fusion: audit_harness & 12-tool registry/CLI")
+    print("fusion: audit_harness & 13-tool registry/CLI")
     r_aud = call_tool("audit_harness", {"strict": True})
     # 动态断言：检查数会随新护栏覆盖扩展（已从 4 增至 9，含 A5-A9 套件身份核对、版本守卫、emit fail-fast、slang 回退可见性）。
     # 这里只要求「全部通过」，不再硬编码具体数字，避免加检查时误判为回归。
@@ -200,7 +200,10 @@ def test_audit_and_registry() -> None:
 
     schemas = list_tool_schemas()
     names = {s["name"] for s in schemas}
-    check(len(schemas) == 12, f"12 tools registered (got {len(schemas)})")
+    # 断言「下限」而不是精确值：新增工具不应误报为回归，删除工具仍会被抓
+    # （历史：硬编码 passed==4 / tools==12 都曾在正常增项时误报）。
+    check(len(schemas) >= 13, f"at least 13 tools registered (got {len(schemas)})")
+    check("clean_pt_netlist" in {s["name"] for s in schemas}, "clean_pt_netlist registered in MCP schemas")
     check({"lint_tb", "run_sim", "run_mutation", "audit_harness"}.issubset(names), "all 4 new tools in MCP schemas")
 
     proc = subprocess.run([sys.executable, "-m", "fpga_toolbox", "audit_harness"], cwd=str(ROOT), capture_output=True, text=True, check=False)
