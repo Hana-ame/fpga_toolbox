@@ -30,7 +30,10 @@ from .core.types import err_result, ok_result
 # instance.」会误报非 interface 的层次引用（如 u_dut.internal_reg = x）。
 # 折中：识别 SV interface 实例的常见命名 —— *_if / *_bus / axi / apb，
 # 这覆盖了绝大多数真实写法，且不会把 u_dut 这类模块实例误当 interface。
-_IFACE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*_(?:if|bus)|axi|apb)\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)", re.IGNORECASE)
+# interface 端口的 blocking drive：`instance.signal = value`（点号层次赋值）。
+# 覆盖常见 AXI/APB interface 实例命名约定：*_if / *_bus / axi / apb / s_axi /
+# m_axi / s_apb / u_axi / axi_m 等。C1/C2 只在 @(posedge) 上下文触发，误报风险可控。
+_IFACE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*_(?:if|bus)|[sm]_[ap]x[i]|axi|apb)\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)", re.IGNORECASE)
 _WAIT_RE = re.compile(r"@\s*\(\s*posedge|@\s*\(\s*negedge|repeat\s*\(|#\s*\d")
 _READY_OF = {
     "AWVALID": "AWREADY",
