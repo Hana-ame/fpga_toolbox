@@ -699,6 +699,51 @@ def test_generated_cocotb_tb_writes_completion(tmp: Path) -> None:
         py = Path(em["data"]["artifacts"]["cocotb_testbench"]).read_text(encoding="utf-8")
         check("completion starts False", '"completed": False' in py, "init missing")
         check("completion set True at end", 'REPORT["completed"] = True' in py, "finalize missing")
+def test_verilator_missing_summary_is_failure(tmp: Path) -> None:
+    """Verilator 套件缺 PASS/FAIL 汇总行时必须判 FAIL。
+
+    回归 67：生成的 TB 必定在 $finish 前打印一条 `PASS:`/`FAIL:` 汇总。
+    旧实现只看已有的 `[CHECK]` 行，于是「CHECK 之后崩溃」与「完整跑完」
+    结果完全相同（都 PASS）。
+
+    另需保证不误伤：汇总行首词不一定是套件名（真实 sim.sh 打印
+    `PASS: apb all 8 checks passed`，而某些 TB 打印 `PASS: all 20 checks
+    passed`），因此用**计数法**（启动 N 个套件需 ≥N 条汇总）而非逐名匹配。
+    """
+    def norm(log_text: str, name: str) -> dict:
+        f = tmp / name
+        f.write_text(log_text, encoding="utf-8")
+        return call_tool("normalize_sim_result", {"module_name": "m", "verilator_log_path": str(f)})
+
+    # 完整 2 套件 => PASS
+    r_ok = norm(
+        "== sim: apb (top=t) ==\nPASS: apb passed\n"
+        "== sim: axi (top=t) ==\nPASS: axi passed\n", "vl_ok.log")
+    check("complete 2 suites => PASS", r_ok["data"]["overall_status"] == "PASS",
+          str(r_ok["data"]["overall_status"]))
+
+    # 第二个套件崩（无汇总）=> FAIL
+    r_partial = norm(
+        "== sim: apb (top=t) ==\nPASS: apb passed\n"
+        "== sim: axi (top=t) ==\n[CHECK] id=A1 | status=PASS\n", "vl_partial.log")
+    check("second suite aborted => FAIL", r_partial["data"]["overall_status"] == "FAIL",
+          str(r_partial["data"]["overall_status"]))
+    check("VERILATOR_NO_SUMMARY emitted",
+          any(c["rule_id"] == "VERILATOR_NO_SUMMARY" and c["status"] == "FAIL"
+              for c in r_partial["data"]["checks"]),
+          str(r_partial["data"]["checks"]))
+
+    # 完全没有汇总行 => FAIL
+    r_none = norm("== sim: apb (top=t) ==\n[CHECK] id=A1 | status=PASS\n", "vl_none.log")
+    check("no summary at all => FAIL", r_none["data"]["overall_status"] == "FAIL",
+          str(r_none["data"]["overall_status"]))
+
+    # 汇总行首词不是套件名：不得误判
+    r_word = norm(
+        "== sim: counter (top=t) ==\nPASS: all 20 checks passed\n"
+        "== sim: axi (top=t) ==\nPASS: all 35 checks passed\n", "vl_word.log")
+    check("summary not named after suite still PASS",
+          r_word["data"]["overall_status"] == "PASS", str(r_word["data"]["overall_status"]))
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -718,6 +763,7 @@ def main() -> int:
         test_generated_sva_checker_has_heartbeat(tmp)
         test_cocotb_incomplete_report_is_failure(tmp)
         test_generated_cocotb_tb_writes_completion(tmp)
+        test_verilator_missing_summary_is_failure(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

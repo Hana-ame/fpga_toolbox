@@ -44,6 +44,9 @@
 ## 输出侧一致性
 
 - [28-cocotb-incomplete-report.md](28-cocotb-incomplete-report.md) — cocotb 每记录一条 check 就落盘却无「已跑完」信号，测试崩在第 1 条断言时残缺报告仍判 PASS；加 `completed` 标记 + `COCOTB_INCOMPLETE`
+## 输出侧一致性
+
+- [29-verilator-missing-summary.md](29-verilator-missing-summary.md) — Verilator 套件在 CHECK 之后崩、无 `PASS:`/`FAIL:` 汇总行时仍被判 PASS；改用「启动套件数 vs 汇总行数」计数校验（逐名匹配会误伤 `PASS: all 20 ...` 这类日志）
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

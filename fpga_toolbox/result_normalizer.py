@@ -34,6 +34,10 @@ _SVA_ERR_RE = re.compile(r"\[RULE:(P_\d+)\]\s*(.+)")
 # 生成器在通过时没有 [RULE:...] 输出，只有这个周期性命中；
 # 心跳存在 = checker 在场且无违例，从而与「checker 根本没跑」区分开。
 _SVA_HBEAT_RE = re.compile(r"\[SVA:HBEAT\]")
+# 套件结束汇总行：生成的 TB 必定成对打印 PASS:/FAIL:（$finish 前）。
+# 缺这一行说明仿真是**中途崩溃**（CHECK 之后没走到 $finish），
+# 不能仅凭已有的若干 CHECK PASS 就判通过。
+_SUITE_SUMMARY_RE = re.compile(r"^\s*(PASS|FAIL)\s*:\s*(.+)$", re.MULTILINE)
 _STATUS_MAP = {
     "PASS": "PASS", "PASSED": "PASS", "OK": "PASS",
     "FAIL": "FAIL", "FAILED": "FAIL", "ERROR": "FAIL",
@@ -234,6 +238,30 @@ def tool_normalize_sim_result(
                 "category": "verilator_suite",
                 "status": "FAIL",
                 "detail": f"Expected suite '{miss}' missing from log (silent skip guard).",
+            })
+        # 完整性闸门：每个**启动过**的套件（`== sim: <name> ==` 头）都必须有
+        # 对应的 `PASS:` / `FAIL:` 结束汇总行。生成的 TB 一定成对打印——
+        # 缺这一行说明仿真在 CHECK 之后、$finish 之前崩溃。旧实现只看已有的
+        # CHECK 行，于是「跑到一半崩了」与「完整跑完」可能都判 PASS。
+        # 汇总行文本不保证以套件名开头：真实 sim.sh 打印
+        # `PASS: apb all 8 checks passed`（首词是套件名），但测试夹具/其它 TB
+        # 可能打印 `PASS: all 20 checks passed`（首词是 "all"）。因此不能按
+        # 「汇总行首词 == 套件名」逐一套，那会误伤合法日志。
+        # 采用计数法：**启动了几个套件，就必须至少有几条汇总行**——
+        # 生成/运行一个套件必然在 $finish 前打印恰好一条。数量不足即说明
+        # 有套件在中途崩溃。
+        _summary_list = [m for m in _SUITE_SUMMARY_RE.finditer(log_txt)]
+        _started = list(ident["observed"].keys())
+        if _started and len(_summary_list) < len(_started):
+            missing_count = len(_started) - len(_summary_list)
+            checks.append({
+                "rule_id": "VERILATOR_NO_SUMMARY",
+                "category": "verilator_run_integrity",
+                "status": "FAIL",
+                "detail": f"{len(_started)} suite(s) started ({_started}) but only "
+                          f"{len(_summary_list)} 'PASS:'/'FAIL:' summary line(s) found "
+                          f"({missing_count} suite(s) aborted before $finish). "
+                          "Treat as failure, not partial pass.",
             })
         sources.append(str(p))
 
