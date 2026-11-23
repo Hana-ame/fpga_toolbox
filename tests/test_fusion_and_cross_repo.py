@@ -609,6 +609,28 @@ def test_multi_bus_emitter_port_guard() -> None:
               f"error explains direction mismatch (got {str(r4.get('error'))[:120]})")
         check(not (out4 / "tb_apb_wrong_dir_apb.sv").exists(), "no hanging TB written")
 
+        # 测试向量必须随位宽缩放：dw=8 时若仍写 `8'h12345678`，Verilator 报
+        # WIDTHDIGITS 且数据被截断，断言值失真但测试仍"跑通"。回归 43。
+        narrow = tdp / "apb_narrow.sv"
+        narrow.write_text(
+            "`timescale 1ns/1ps\n"
+            "module apb_narrow(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [3:0] paddr, input logic [7:0] pwdata, input logic [0:0] pstrb,\n"
+            "   output logic pready, output logic [7:0] prdata, output logic pslverr); endmodule\n",
+            encoding="utf-8",
+        )
+        rn = call_tool("emit_testbench", {
+            "rtl_file": str(narrow), "out_dir": str(tdp / "tb_narrow"), "protocol": "apb",
+        })
+        check(rn["ok"] is True, f"narrow-bus APB still emits (got {str(rn.get('error'))[:100]})")
+        if rn["ok"]:
+            ntb = Path(rn["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+            # 不应出现 8 位宽标注配 8 个十六进制数字这种超宽字面量
+            check("8'h12345678" not in ntb and "8'h000000" not in ntb,
+                  "narrow-bus vectors are width-scaled (no over-wide literals)")
+            check("8'h78" in ntb or "8'h" in ntb, "scaled 8-bit patterns present")
+
         # 端口齐全的官方靶场必须仍能生成
         ref = Path(__file__).resolve().parents[1] / "examples" / "multi_bus_ref"
         for fname, proto in (

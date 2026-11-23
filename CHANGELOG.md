@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — TB 测试向量随位宽缩放
+
+### Fixed
+- **`emit_testbench --protocol apb` 测试向量写死 32 位，窄总线上被静默截断**（`protocol_tb_emitter.py`）。模板用 `{dw}'h12345678` 这类「宽度标注可变、值写死」的写法，对 `data_width=8` 的设备生成 `8'h12345678`，Verilator 报 8 条 `WIDTHDIGITS` + 1 条 `WIDTHTRUNC`——测试仍显示跑通，但断言的是截断后的错误值。
+
+  修复：按 `dw`/`aw` 计算掩码与十六进制位数。三个非平凡点：只掩码值不够（`{val:08X}` 仍写出 8 个十六进制数字，位数必须一起缩放）；地址字面量同样超宽；必须保留 `APB_002` 的 `4'b1010` 部分写语义（第一版改成全字节使能使 32 位标准靶场 `APB_003` 直接失败）。
+
+  过程中一次失误：批量替换 `"0040"` 误伤 axi4/ahb_lite 的地址字面量，导致两协议 `NameError: ahex`。靠 7 协议全矩阵生成发现，用 `git show HEAD:` 整段还原修复。详见 [`changelog/17-tb-vectors-scale-with-width.md`](changelog/17-tb-vectors-scale-with-width.md)。
+
 ## [Unreleased] — 端口方向校验（防仿真永久挂起）
 
 ### Fixed

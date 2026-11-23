@@ -21,3 +21,4 @@
 - [14-multi-bus-tb-port-guard.md](14-multi-bus-tb-port-guard.md) — 多总线 TB 生成器未校验必需端口，对 APB3 风格 DUT 产出 `PINNOTFOUND` 坏 TB 却报 `ok=True`；新增 `REQUIRED_TB_PORTS` 生成前校验
 - [15-ddr-hbm-pcie-port-guard.md](15-ddr-hbm-pcie-port-guard.md) — DDR3/DDR4/HBM/PCIe 模板用 `.*` 兜底，DUT 端口名不匹配（如三态 `inout ddr3_dq`）时生成 `Can't find definition of variable` 坏 TB 却报 `ok=True`；补齐 4 协议端口校验
 - [16-port-direction-guard.md](16-port-direction-guard.md) — 端口方向反向（如 `pready` 写成 input）时 TB 的握手等待永久挂起，工具却报 `ok=True`；新增 `EXPECTED_TB_DIR` 方向校验
+- [17-tb-vectors-scale-with-width.md](17-tb-vectors-scale-with-width.md) — APB 测试向量写死 32 位字面量，窄总线上 `WIDTHDIGITS` 截断、断言值失真；按 `dw`/`aw` 缩放值与十六进制位数，并保留部分写语义
