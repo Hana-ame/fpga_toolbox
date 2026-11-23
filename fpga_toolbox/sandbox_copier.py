@@ -11,6 +11,7 @@ Safety contract:
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List
@@ -25,6 +26,43 @@ if __package__ in (None, ""):
 from .core.types import err_result, ok_result
 
 MARKER_NAME = ".fpga_sandbox"
+
+_INC_LOCAL_RE = re.compile(r'`include\s+"([^"]+)"')
+
+
+def _missing_included_files(dst_root: Path, copied: List[Dict[str, Any]], root: Path) -> List[str]:
+    """检测沙箱内文件的 `include "xxx"` 指向的本地文件是否未进沙箱。
+
+    背景（真实踩坑）：copy_sandbox 按调用方给的 relative_files 复制，但调用方
+    （AI agent）常只列顶层文件而漏掉被 `include 的子模块 —— 沙箱静默缺依赖，
+    里面的 RTL 无法编译。这里主动扫描沙箱内文件的 `include，指向的本地文件
+    存在但不在沙箱时给出告警，把「静默产生不可编译的沙箱」变成「主动提醒」。
+    纯信息性（不改 ok 状态）：调用方可能有意只复制部分文件。
+    """
+    missing = []
+    staged = {c["staged_rel"].replace("\\", "/") for c in copied}
+    for c in copied:
+        dst = Path(c["staged_path"])
+        try:
+            txt = dst.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in _INC_LOCAL_RE.finditer(txt):
+            inc = m.group(1)
+            # 只关心带 .v/.sv/.vh/.svh 后缀的本地 include（跳过 <> 形式）
+            if not inc.endswith((".v", ".sv", ".vh", ".svh")):
+                continue
+            # 已在沙箱内（按相对布局或同目录）
+            if inc in staged:
+                continue
+            # 项目里是否存在这个被 include 的文件（按 staged 文件的相对布局找）
+            proj_candidate = (root / c["source_rel"]).parent / inc
+            if proj_candidate.exists() and inc not in staged:
+                missing.append(
+                    f"{c['staged_rel']} includes {inc} — exists in project but not staged "
+                    "(sandbox RTL may not compile)")
+    return missing
+
 
 
 def _is_within(child: Path, parent: Path) -> bool:
@@ -120,6 +158,9 @@ def tool_copy_sandbox(
         "layout_preserved": True,
         "file_count": len(copied),
         "files": copied,
+        # include 完整性检查：沙箱内文件若 `include "xxx"` 指向存在但未复制
+        # 的本地文件，沙箱将无法编译。主动报告，避免静默缺依赖。
+        "include_warnings": _missing_included_files(dst_root, copied, root),
     })
 
 
