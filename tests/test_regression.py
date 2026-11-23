@@ -328,22 +328,18 @@ def test_subprocess_encoding_robust(tmp: Path) -> None:
     import subprocess
     import sys as _sys
 
-    # 直接验证修复所依赖的 subprocess 语义：默认 text=True 会抛，
-    # 显式 encoding + errors="replace" 不会。
     code = "import sys; sys.stdout.buffer.write(b'\\xff\\xfe bad \\x8f\\n'); sys.stdout.flush()"
-    raised = False
-    try:
-        subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, check=False)
-    except UnicodeDecodeError:
-        raised = True
-    check("text=True alone can raise on invalid utf8", raised,
-          "expected UnicodeDecodeError without explicit encoding")
 
+    # 只断言「修复后的写法一定能拿到文本」——这是 sv_parser/sim_runner 依赖的
+    # 语义。不断言「不显式编码必定抛异常」：Windows 上解码发生在 subprocess
+    # 的 reader 线程里，异常不传播到主线程（CI 实测该断言在 Windows 失败），
+    # 跨平台行为不一致，断言它本身就是脆的。
     proc = subprocess.run(
         [_sys.executable, "-c", code], capture_output=True, text=True,
         encoding="utf-8", errors="replace", check=False,
     )
-    check("explicit utf-8 + replace does not raise", True)
+    check("explicit utf-8 + replace returns text", isinstance(proc.stdout, str),
+          type(proc.stdout).__name__)
     check("replacement chars present", "\ufffd" in (proc.stdout or ""), repr(proc.stdout))
 
     # sv_parser 里两个 slang 调用点都必须带显式编码
