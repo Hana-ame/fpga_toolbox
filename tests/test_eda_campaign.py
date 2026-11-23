@@ -252,6 +252,61 @@ def test_remote_script_rejects_shell_injection() -> None:
         generate_remote_run_script(host=host, tag="t-1", local_script_name="a.sh")
 
 
+
+
+def test_uvm_thousands_separator_and_field_order() -> None:
+    r"""千分位逗号与字段顺序（审计发现的 2 个真实缺陷）。
+
+    缺陷 D（严重）：数字正则只写 (\d+)，`delivered=10,000` 被截成 10。
+    当 expected_frames=10 时会**误判通过**——实际交付 10000 帧却报 delivered=10
+    并 PASS。真实 VCS 日志常用千分位。
+
+    缺陷 E：`delivered=` 必须紧跟 `[C3900] FID:`，字段顺序变成
+    `FID: fid_bad=0 delivered=10000` 时完全匹配不到 -> delivered=None ->
+    正确场次被判 FAIL。
+    """
+    log = (
+        "[C3900] FID: delivered=10,000 fid_bad=0\n"
+        "[C3900] NP_LAT: frames=10,000 min=4 avg=5 max=6\n"
+        "UVM_ERROR : 0\n"
+    )
+    r = parse_uvm_log(log, expected_frames=10000)
+    assert r["ok"] is True, f"thousands separator broke parse: {r.get('data')}"
+    assert r["data"]["delivered"] == 10000
+    assert r["data"]["frames_expected"] == 10000
+    assert r["data"]["lat_avg"] == 5
+
+    # 关键：不能因截断把 10000 帧判成 expected=10 的通过
+    r_bad = parse_uvm_log(log, expected_frames=10)
+    assert r_bad["ok"] is False, "10000 frames wrongly passed expected=10 (truncation bug)"
+    assert r_bad["data"]["delivered"] == 10000
+
+    # 字段顺序：fid_bad 在前
+    log_reordered = (
+        "[C3900] FID: fid_bad=0 delivered=10,000\n"
+        "[C3900] NP_LAT: frames=10,000 min=4 avg=5 max=6\n"
+        "UVM_ERROR : 0\n"
+    )
+    r2 = parse_uvm_log(log_reordered, expected_frames=10000)
+    assert r2["data"]["delivered"] == 10000, "field order broke delivered parse"
+    assert r2["ok"] is True
+
+
+def test_qor_thousands_separator() -> None:
+    """DC/PT QoR 报告同样使用千分位，必须正确解析。"""
+    report = """Leaf Cell Count: 74,265
+Combinational Area: 23,456.789
+Noncombinational Area: 27,199.340
+Critical Path Slack: 0.00
+No. of Violating Paths: 0
+"""
+    d = parse_dc_pt_qor(report, "")["data"]
+    assert d["leaf_cell_count"] == 74265, f"leaf: {d['leaf_cell_count']}"
+    assert d["total_cell_area"] == 50656.129, f"area: {d['total_cell_area']}"
+    assert d["violating_paths"] == 0
+    assert d["timing_clean"] is True
+
+
 if __name__ == "__main__":
     test_parse_uvm_log_and_medians()
     test_parse_dc_pt_qor_and_pitfalls()
@@ -260,5 +315,7 @@ if __name__ == "__main__":
     test_aggregate_rejects_toolresult_envelope()
     test_paired_baseline_requires_both_metrics()
     test_remote_script_rejects_shell_injection()
+    test_uvm_thousands_separator_and_field_order()
+    test_qor_thousands_separator()
     test_generate_remote_run_script()
     print("ALL EDA CAMPAIGN TESTS PASSED")

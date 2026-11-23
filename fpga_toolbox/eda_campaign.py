@@ -25,22 +25,47 @@ if __package__ in (None, ""):
 from .core.types import err_result, ok_result
 
 # ---- VCS / UVM Golden Regexes (Paper 1 DLR-MAC §1.2) ----
-_UVM_DELIVERED_RE = re.compile(r"\[C3900\]\s+FID:\s+delivered=(\d+)")
-_UVM_FID_BAD_RE = re.compile(r"fid_bad=(\d+)")
-_UVM_LAT_RE = re.compile(r"\[C3900\]\s+NP_LAT:\s+frames=(\d+)(?:\s+min=(\d+))?\s+avg=(\d+)(?:\s+max=(\d+))?")
-_UVM_RETRY_RE = re.compile(r"all_retry=(\d+)")
-_UVM_SENT_RE = re.compile(r"send_nums=(\d+)")
-_UVM_ERR_RE = re.compile(r"UVM_ERROR\s*:\s+(\d+)")
-_UVM_WIN_SPAN_RE = re.compile(r"win_span=(\d+)")
-_UVM_CALIB_RE = re.compile(r"pcs_words=(\d+).*?flips_exp=([0-9.]+).*?flips_act=(\d+)")
+# 数字模式：允许千分位逗号（真实 VCS/DC 日志常写 `10,000`）。
+# 若只写 (\d+)，`delivered=10,000` 会被截成 10——实测当 expected_frames=10
+# 时会**误判通过**（实际交付 10000 帧却报 10 并 PASS），属静默错判。
+_NUM = r"\d[\d,]*"
+
+
+def _to_int(s: str) -> int:
+    """把可能带千分位逗号的数字串转 int。"""
+    return int(s.replace(",", ""))
+
+
+def _to_float(s: str) -> float:
+    return float(s.replace(",", ""))
+
+
+# 字段顺序未定义（真实日志可能写成 `FID: fid_bad=0 delivered=10000`），
+# 因此不能要求 `delivered=` 紧跟 `[C3900] FID:`。旧正则在前置 fid_bad 时
+# 完全匹配不到 -> delivered=None -> 该场次被判 FAIL。改为只锚定
+# `delivered=` 本身（仍限定在 FID 语义下的唯一字段名，不会误匹配其它行）。
+_UVM_DELIVERED_RE = re.compile(r"\bdelivered=(" + _NUM + r")")
+_UVM_FID_BAD_RE = re.compile(r"fid_bad=(" + _NUM + r")")
+_UVM_LAT_RE = re.compile(
+    r"\[C3900\]\s+NP_LAT:\s+frames=(" + _NUM + r")"
+    r"(?:\s+min=(" + _NUM + r"))?\s+avg=(" + _NUM + r")"
+    r"(?:\s+max=(" + _NUM + r"))?"
+)
+_UVM_RETRY_RE = re.compile(r"all_retry=(" + _NUM + r")")
+_UVM_SENT_RE = re.compile(r"send_nums=(" + _NUM + r")")
+_UVM_ERR_RE = re.compile(r"UVM_ERROR\s*:\s+(" + _NUM + r")")
+_UVM_WIN_SPAN_RE = re.compile(r"win_span=(" + _NUM + r")")
+_UVM_CALIB_RE = re.compile(
+    r"pcs_words=(" + _NUM + r").*?flips_exp=([0-9.,]+).*?flips_act=(" + _NUM + r")"
+)
 
 # ---- DC / PT QoR Regexes (§2.1, §3.2) ----
-_QOR_SLACK_RE = re.compile(r"Critical Path Slack:\s*([-+]?\d+(?:\.\d+)?)")
-_QOR_TNS_RE = re.compile(r"Total Negative Slack:\s*([-+]?\d+(?:\.\d+)?)")
-_QOR_VIOL_RE = re.compile(r"No\. of Violating Paths:\s*(\d+)")
-_QOR_LEAF_RE = re.compile(r"Leaf Cell Count:\s*(\d+)")
-_QOR_COMB_RE = re.compile(r"Combinational Area:\s*([0-9.]+)")
-_QOR_NONCOMB_RE = re.compile(r"Noncombinat(?:ional|orial) Area:\s*([0-9.]+)")
+_QOR_SLACK_RE = re.compile(r"Critical Path Slack:\s*([-+]?[\d,]+(?:\.\d+)?)")
+_QOR_TNS_RE = re.compile(r"Total Negative Slack:\s*([-+]?[\d,]+(?:\.\d+)?)")
+_QOR_VIOL_RE = re.compile(r"No\. of Violating Paths:\s*(" + _NUM + r")")
+_QOR_LEAF_RE = re.compile(r"Leaf Cell Count:\s*(" + _NUM + r")")
+_QOR_COMB_RE = re.compile(r"Combinational Area:\s*([0-9.,]+)")
+_QOR_NONCOMB_RE = re.compile(r"Noncombinat(?:ional|orial) Area:\s*([0-9.,]+)")
 
 
 def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[str, Any]:
@@ -50,7 +75,7 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
 
     def _last_int(pat: re.Pattern[str]) -> Optional[int]:
         matches = pat.findall(log_text)
-        return int(matches[-1]) if matches else None
+        return _to_int(matches[-1]) if matches else None
 
     delivered = _last_int(_UVM_DELIVERED_RE)
     fid_bad = _last_int(_UVM_FID_BAD_RE)
@@ -65,18 +90,18 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
     lat_max: Optional[int] = None
     if lat_matches:
         f_s, mn_s, av_s, mx_s = lat_matches[-1]
-        frames_obs = int(f_s)
-        lat_min = int(mn_s) if mn_s else None
-        lat_avg = int(av_s)
-        lat_max = int(mx_s) if mx_s else None
+        frames_obs = _to_int(f_s)
+        lat_min = _to_int(mn_s) if mn_s else None
+        lat_avg = _to_int(av_s)
+        lat_max = _to_int(mx_s) if mx_s else None
 
-    win_spans = [int(x) for x in _UVM_WIN_SPAN_RE.findall(log_text)]
+    win_spans = [_to_int(x) for x in _UVM_WIN_SPAN_RE.findall(log_text)]
     max_win_span = max(win_spans) if win_spans else None
 
     calib = _UVM_CALIB_RE.findall(log_text)
-    pcs_words = int(calib[-1][0]) if calib else None
-    flips_exp = float(calib[-1][1]) if calib else None
-    flips_act = int(calib[-1][2]) if calib else None
+    pcs_words = _to_int(calib[-1][0]) if calib else None
+    flips_exp = _to_float(calib[-1][1]) if calib else None
+    flips_act = _to_int(calib[-1][2]) if calib else None
 
     # Stale simv / truncated log detection (§7)
     if len(lines) <= 2 or uvm_error is None:
@@ -209,11 +234,11 @@ def parse_dc_pt_qor(report_text: str, raw_log_text: str = "") -> Dict[str, Any]:
 
     def _first_float(pat: re.Pattern[str], txt: str) -> Optional[float]:
         m = pat.search(txt)
-        return float(m.group(1)) if m else None
+        return _to_float(m.group(1)) if m else None
 
     def _first_int(pat: re.Pattern[str], txt: str) -> Optional[int]:
         m = pat.search(txt)
-        return int(m.group(1)) if m else None
+        return _to_int(m.group(1)) if m else None
 
     # Parse async_default section specifically if present (PrimeTime)
     async_sec = None

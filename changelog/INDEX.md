@@ -23,6 +23,9 @@
 ## eda_campaign 审计
 
 - [21-eda-campaign-audit-2.md](21-eda-campaign-audit-2.md) — 第二轮审计剩余 5 个函数：`generate_remote_run_script` **命令注入**（实测可执行任意命令）、`aggregate_seed_medians` 传错层级静默返回空、配对基线用不完整数据判「逐位一致」
+## eda_campaign 审计
+
+- [22-eda-campaign-audit-3.md](22-eda-campaign-audit-3.md) — 第三轮审 `parse_uvm_log` 正则层：千分位 `10,000` 被截成 `10`（**可致假通过**）、`delivered=` 依赖字段顺序
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
