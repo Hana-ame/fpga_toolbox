@@ -780,6 +780,9 @@ python3 -m fpga_toolbox audit_harness
 ## 相关文档
 
 - [`docs/FEATURES.md`](FEATURES.md) — 功能手册（13 工具详解 + 诊断码总表）
+- [`docs/FEATURES.html`](FEATURES.html) — 功能手册 HTML 版（侧栏目录 + 页内搜索，可离线打开）
 - [`docs/TEST_REPORT_AND_PLAN.md`](TEST_REPORT_AND_PLAN.md) — 全工具实测结果
 - [`README.md`](../README.md) — 项目概览
 - [`changelog/INDEX.md`](../changelog/INDEX.md) — 缺陷修复记录（每个都含现象/根因/修复/验证）
+
+> 本示例集的 HTML 版：[`EXAMPLES.html`](EXAMPLES.html)（由本文件生成，勿直接编辑）

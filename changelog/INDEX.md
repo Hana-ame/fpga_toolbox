@@ -42,6 +42,10 @@
 
 - [30-lint-tb-sv-silent-pass.md](30-lint-tb-sv-silent-pass.md) — `scan_silent_pass` 只被喂 `.sh`/`.py`，SV 测试台从不进入该扫描器，于是 README 头号宣传场景（TB 只 `$display("DONE")` 就结束、无任何判定）返回 `ok=True`；新增 `S4` 规则 + 自审计 `A11`
 
+## 文档交付
+
+- [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 3 个真实坑——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`；附产物自检（死链/锚点/转义泄漏）与 16 项回归断言
+
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

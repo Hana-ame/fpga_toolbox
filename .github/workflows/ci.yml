@@ -117,6 +117,11 @@ jobs:
       - name: Docs consistency gate (D1-D13 incl. diag code coverage)
         run: python examples/axi_apb_ref/axi/docs_check.py
 
+      # HTML 文档由 docs/*.md 派生。markdown 是唯一事实源，这里确保 HTML 没有
+      # 被人单独改过（或改了 md 忘了重新生成）。
+      - name: Docs HTML in sync with markdown
+        run: python docs/build_docs_html.py --check
+
       - name: CLI & MCP schema contract
         run: |
           python -m fpga_toolbox list

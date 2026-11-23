@@ -79,10 +79,20 @@ python3 -m fpga_toolbox list
 
 ### 功能手册与示例
 
-| 文件 | 内容 |
-|---|---|
-| [`docs/FEATURES.md`](docs/FEATURES.md) | **功能手册**：13 个工具的用途、参数与真实输出，诊断码总表，三种调用方式，边界与已知限制 |
-| [`docs/EXAMPLES.md`](docs/EXAMPLES.md) | **示例集**：10 个可直接运行的端到端示例（契约生成链、多协议 TB、静默通过检测、变异测试、三源日志归一化、PT 网表清理、自审计、沙箱逃逸） |
+Markdown 是唯一事实源，HTML 由它派生（带侧栏目录 + 页内搜索，完全自包含、
+双击即可离线打开）。
+
+| Markdown | HTML | 内容 |
+|---|---|---|
+| [`docs/FEATURES.md`](docs/FEATURES.md) | [`docs/FEATURES.html`](docs/FEATURES.html) | **功能手册**：13 个工具的用途、参数与真实输出，诊断码总表，三种调用方式，边界与已知限制 |
+| [`docs/EXAMPLES.md`](docs/EXAMPLES.md) | [`docs/EXAMPLES.html`](docs/EXAMPLES.html) | **示例集**：10 个可直接运行的端到端示例（契约生成链、多协议 TB、静默通过检测、变异测试、三源日志归一化、PT 网表清理、自审计、沙箱逃逸） |
+
+重新生成 HTML（改了 md 之后必须执行，CI 会校验同步）：
+
+```bash
+python3 docs/build_docs_html.py           # 生成
+python3 docs/build_docs_html.py --check   # 校验是否同步
+```
 
 ### EDA 工具资料
 

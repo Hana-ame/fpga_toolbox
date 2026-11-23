@@ -576,7 +576,10 @@ mcp_tools = list_tool_schemas()    # 直接喂给 MCP server 注册
 ## 7. 相关文档
 
 - [`docs/EXAMPLES.md`](EXAMPLES.md) — 端到端可运行示例（含真实输出）
+- [`docs/EXAMPLES.html`](EXAMPLES.html) — 示例集 HTML 版（侧栏目录 + 页内搜索，可离线打开）
 - [`docs/TEST_REPORT_AND_PLAN.md`](TEST_REPORT_AND_PLAN.md) — 全工具实测结果
 - [`docs/eda-tutorials/`](eda-tutorials/) — Synopsys 工具手册与论文复跑指南
-- [`changelog/INDEX.md`](../changelog/INDEX.md) — 67 个真实缺陷的修复记录
+- [`changelog/INDEX.md`](../changelog/INDEX.md) — 缺陷修复记录（每篇含现象 / 根因 / 修复 / 验证）
 - [`README.md`](../README.md) — 项目概览与快速开始
+
+> 本手册的 HTML 版：[`FEATURES.html`](FEATURES.html)（由本文件生成，勿直接编辑）

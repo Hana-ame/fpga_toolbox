@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fpga_toolbox 功能手册</title>
+<style>
+:root {
+  --paper:#0E1117; --band:#151B26; --band2:#1B2431;
+  --ink:#F8FAFC; --ink2:#CBD5E1; --mute:#94A3B8; --hair:#263042;
+  --accent:#38BDF8; --accent2:#34D399; --warn:#FBBF24; --err:#FDA4AF;
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  font-size:15px; line-height:1.7; -webkit-font-smoothing:antialiased;
+}
+code, pre {
+  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+.layout { display:flex; align-items:flex-start; }
+
+/* 侧栏 TOC */
+aside {
+  position:sticky; top:0; height:100vh; width:290px; flex:0 0 290px;
+  overflow-y:auto; padding:26px 18px 40px;
+  border-right:1px solid var(--hair); background:var(--band);
+}
+aside .brand {
+  font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--accent); font-weight:700; margin-bottom:6px;
+}
+aside .brand-sub { font-size:12px; color:var(--mute); margin-bottom:20px; }
+#filter {
+  width:100%; padding:8px 10px; margin-bottom:16px;
+  background:var(--paper); color:var(--ink);
+  border:1px solid var(--hair); border-radius:0; font-size:13px;
+}
+#filter:focus { outline:1px solid var(--accent); }
+aside nav a {
+  display:block; color:var(--ink2); text-decoration:none;
+  font-size:13px; padding:3px 8px; border-left:2px solid transparent;
+}
+aside nav a:hover { color:var(--accent); background:var(--band2); }
+aside nav a.lv2 { font-weight:600; color:var(--ink); margin-top:9px; }
+aside nav a.lv3 { padding-left:20px; font-size:12.5px; color:var(--mute); }
+aside nav a.lv4 { padding-left:32px; font-size:12px; color:var(--mute); }
+
+main { flex:1; min-width:0; padding:52px clamp(20px,4vw,64px) 100px; max-width:1080px; }
+.kicker {
+  font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--accent2); font-weight:700; margin-bottom:12px;
+}
+h1 {
+  font-size:clamp(30px,3.4vw,42px); line-height:1.16; letter-spacing:-.02em;
+  margin:0 0 14px; text-wrap:balance;
+}
+.deck { font-size:17px; color:var(--ink2); max-width:74ch; margin:0 0 30px; }
+h2 {
+  font-size:26px; margin:56px 0 16px; padding-top:26px;
+  border-top:1px solid var(--hair); letter-spacing:-.01em;
+}
+h3 { font-size:19px; margin:32px 0 10px; color:var(--accent); }
+h4 { font-size:16px; margin:24px 0 8px; color:var(--accent2); }
+p, li { max-width:82ch; }
+ul, ol { padding-left:24px; }
+li { margin:4px 0; }
+a { color:var(--accent); }
+hr { border:0; border-top:1px solid var(--hair); margin:38px 0; }
+
+code {
+  background:var(--band2); color:#7DD3FC;
+  padding:1.5px 5px; font-size:.9em; border-radius:0;
+}
+.code-block { margin:16px 0; border:1px solid var(--hair); background:var(--band); }
+.code-lang {
+  font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--mute); padding:6px 12px; border-bottom:1px solid var(--hair);
+  background:var(--band2);
+}
+.code-block pre { margin:0; padding:14px 16px; overflow-x:auto; }
+.code-block pre code { background:none; color:var(--ink2); padding:0; font-size:13px; }
+
+.table-wrap { overflow-x:auto; margin:18px 0; border:1px solid var(--hair); }
+table { border-collapse:collapse; width:100%; font-size:13.5px; }
+th {
+  background:var(--band2); text-align:left; padding:9px 12px;
+  color:var(--accent); font-weight:600; border-bottom:1px solid var(--hair);
+  white-space:nowrap;
+}
+td { padding:8px 12px; border-bottom:1px solid var(--hair); vertical-align:top; }
+tbody tr:last-child td { border-bottom:0; }
+tbody tr:hover { background:var(--band); }
+
+blockquote {
+  margin:18px 0; padding:2px 0 2px 16px;
+  border-left:3px solid var(--warn); color:var(--ink2);
+}
+blockquote p { margin:8px 0; }
+blockquote ul { margin:8px 0; }
+
+.hidden { display:none !important; }
+@media (max-width:900px) {
+  aside { display:none; }
+  main { padding:32px 18px 70px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside>
+  <div class="brand">功能手册</div>
+  <div class="brand-sub">fpga_toolbox v0.5.0</div>
+  <input id="filter" type="search" placeholder="过滤目录…" autocomplete="off">
+  <nav id="toc">
+    <a class="lv2" href="#1-它解决什么问题">1. 它解决什么问题</a>
+    <a class="lv2" href="#2-架构">2. 架构</a>
+    <a class="lv2" href="#3-工具分组">3. 工具分组</a>
+    <a class="lv3" href="#31-仓库理解13">3.1 仓库理解（1–3）</a>
+    <a class="lv4" href="#index_repo-仓库索引">index_repo — 仓库索引</a>
+    <a class="lv4" href="#resolve_deps-依赖闭包">resolve_deps — 依赖闭包</a>
+    <a class="lv4" href="#copy_sandbox-隔离沙箱">copy_sandbox — 隔离沙箱</a>
+    <a class="lv3" href="#32-接口与契约46">3.2 接口与契约（4–6）</a>
+    <a class="lv4" href="#extract_interfaces-多协议接口识别">extract_interfaces — 多协议接口识别</a>
+    <a class="lv4" href="#validate_contract-契约校验">validate_contract — 契约校验</a>
+    <a class="lv4" href="#emit_testbench-两条路径">emit_testbench — 两条路径</a>
+    <a class="lv3" href="#33-结果归一化与可视化78">3.3 结果归一化与可视化（7–8）</a>
+    <a class="lv4" href="#normalize_sim_result-三源合一">normalize_sim_result — 三源合一</a>
+    <a class="lv4" href="#render_visual_report-svg-html-看板">render_visual_report — SVG + HTML 看板</a>
+    <a class="lv3" href="#34-反踩坑与执行911">3.4 反踩坑与执行（9–11）</a>
+    <a class="lv4" href="#lint_tb-静态反踩坑">lint_tb — 静态反踩坑</a>
+    <a class="lv4" href="#run_sim-仿真封装">run_sim — 仿真封装</a>
+    <a class="lv4" href="#run_mutation-变异测试">run_mutation — 变异测试</a>
+    <a class="lv3" href="#35-工程辅助1213">3.5 工程辅助（12–13）</a>
+    <a class="lv4" href="#clean_pt_netlist-primetime-网表清理">clean_pt_netlist — PrimeTime 网表清理</a>
+    <a class="lv4" href="#audit_harness-故障注入自审计">audit_harness — 故障注入自审计</a>
+    <a class="lv2" href="#4-诊断码总表">4. 诊断码总表</a>
+    <a class="lv3" href="#校验类validate_contract">校验类（validate_contract）</a>
+    <a class="lv3" href="#运行时类">运行时类</a>
+    <a class="lv3" href="#警告类">警告类</a>
+    <a class="lv3" href="#eda_campaign-专用synopsys-论文复跑">eda_campaign 专用（Synopsys 论文复跑）</a>
+    <a class="lv2" href="#5-三种调用方式">5. 三种调用方式</a>
+    <a class="lv3" href="#python">Python</a>
+    <a class="lv3" href="#cli">CLI</a>
+    <a class="lv3" href="#mcp">MCP</a>
+    <a class="lv2" href="#6-边界与已知限制">6. 边界与已知限制</a>
+    <a class="lv2" href="#7-相关文档">7. 相关文档</a>
+  </nav>
+</aside>
+<main>
+<div class="kicker">功能手册</div>
+<h1>fpga_toolbox 功能手册</h1>
+<p class="deck">13 个原子工具、统一信封、37 个诊断码 —— 面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱</p>
+<p>面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱。13 个原子工具，统一信封、 统一错误码、可直接从 MCP / CLI / Python 三处调用。</p>
+<hr>
+<h2 id="1-它解决什么问题">1. 它解决什么问题</h2>
+<p>FPGA 验证里最常见的失败不是"断言失败"，而是<strong>看起来通过了</strong>：</p>
+<div class="table-wrap"><table><thead><tr><th>症状</th><th>真实原因</th><th>本工具箱的对策</th></tr></thead><tbody><tr><td>CI 全绿，上板挂</td><td>测试台只 <code>$display("DONE")</code>，没有任何判定</td><td><code>lint_tb</code> 的 S1/S2/S3 规则检出静默通过</td></tr><tr><td>报告写 "0 errors"</td><td>仿真崩在第 1 条断言，日志残缺</td><td><code>normalize_sim_result</code> 校验产物完整性</td></tr><tr><td>"覆盖率 100%"</td><td>覆盖率数据来自旧二进制</td><td><code>run_sim</code> 逐套件身份核对 + 版本守卫</td></tr><tr><td>"已清理网表"</td><td>清理器没匹配到实例，原样输出</td><td><code>clean_pt_netlist</code> 产物自检（E051）</td></tr><tr><td>"依赖完整"</td><td>例化了仓库外的模块，静默丢失</td><td><code>index_repo</code> 的 W102 + <code>closure_is_complete</code></td></tr></tbody></table></div>
+<p>工具箱的核心主张：<strong>任何"通过"都必须能被反问"你凭什么说它通过了"</strong>。 每个工具除了给出结果，还要给出让结果可被质疑的证据——诊断码、产物校验、 自审计项。</p>
+<hr>
+<h2 id="2-架构">2. 架构</h2>
+<div class="code-block"><div class="code-lang">text</div><pre><code>                    ┌─────────────────────────────┐
+   MCP / CLI / Python ──▶│  call_tool(name, params)    │
+                    │  ① 未知参数名校验            │
+                    │  ② required 校验             │
+                    │  ③ type 校验                 │
+                    │  ④ enum 校验                 │
+                    └──────────────┬──────────────┘
+                                   ▼
+                    ┌─────────────────────────────┐
+                    │  13 个原子工具（纯函数）      │
+                    └──────────────┬──────────────┘
+                                   ▼
+                    ┌─────────────────────────────┐
+                    │  ToolResult 统一信封         │
+                    │  {ok, tool, data,           │
+                    │   diagnostics, error}       │
+                    └─────────────────────────────┘</code></pre></div>
+<p><strong>统一信封</strong>意味着调用方只需写一次错误处理，13 个工具全部适用：</p>
+<div class="code-block"><div class="code-lang">python</div><pre><code>r = call_tool("index_repo", {"project_root": "."})
+if not r["ok"]:
+    print(r["error"])                       # 人类可读的一句话
+    for d in r["diagnostics"]:              # 结构化诊断
+        print(d["code"], d["path"], d["message"])</code></pre></div>
+<hr>
+<h2 id="3-工具分组">3. 工具分组</h2>
+<h3 id="31-仓库理解13">3.1 仓库理解（1–3）</h3>
+<h4 id="index_repo-仓库索引"><code>index_repo</code> — 仓库索引</h4>
+<p>解析 RTL 仓库，得到模块、例化关系、头文件归属。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox index_repo --project-root examples/multi_bus_ref</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "total_rtl_files": 36,
+    "modules": {
+      "apb_slave": {
+        "file_path": "apb_slave.sv",
+        "instantiated_modules": [],
+        "unresolved_instantiations": [],
+        "includes": []
+      }
+    },
+    "unresolved_instantiations": {}
+  }
+}</code></pre></div>
+<p><strong>关键能力</strong>：<code>unresolved_instantiations</code> 与 <code>W102</code>。</p>
+<p>当 RTL 例化了一个仓库里<strong>没有定义</strong>的模块（厂商 IP、加密 IP、尚未克隆的子模块）， 本工具不会静默忽略：</p>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "unresolved_instantiations": {"soc_top": ["vendor_ddr_phy", "secure_boot_rom"]},
+  "diagnostics": [
+    {"severity": "WARNING", "code": "W102", "path": "soc_top",
+     "message": "Instantiation of module 'vendor_ddr_phy' has no definition in this repo; ..."}
+  ]
+}</code></pre></div>
+<blockquote><p>为什么重要：这类模块在真实项目里极常见。静默丢弃会让依赖闭包"看起来完整"， 沙箱缺文件、综合缺模块，而所有中间步骤都报成功。</p></blockquote>
+<h4 id="resolve_deps-依赖闭包"><code>resolve_deps</code> — 依赖闭包</h4>
+<p>BFS 计算目标模块的传递依赖。带环不死循环，并透传上游的未解析例化信息。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox resolve_deps --target-module axi_apb_bridge --project-root examples/axi_apb_ref</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "dependency_closure": ["axi_apb_bridge", "apb_slave_regs"],
+    "dependency_edges": [{"from": "axi_apb_bridge", "to": "apb_slave_regs"}],
+    "rtl_files": ["axi/sv/axi_apb_bridge_sv.sv", "..."],
+    "unresolved_instantiations": {},
+    "closure_is_complete": true
+  }
+}</code></pre></div>
+<p><code>closure_is_complete: false</code> 是给调用方的<strong>单点信号</strong>：这份文件清单不完整， 别直接拿去建沙箱。</p>
+<h4 id="copy_sandbox-隔离沙箱"><code>copy_sandbox</code> — 隔离沙箱</h4>
+<p>带 SHA-256 校验的复制，且拒绝越界。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox copy_sandbox \
+  --project-root examples/axi_apb_ref \
+  --relative-files axi/axi_apb_bridge.sv axi/apb_slave_regs.sv \
+  --sandbox-dir /tmp/sandbox</code></pre></div>
+<p>安全边界（都有测试锁定）：</p>
+<div class="table-wrap"><table><thead><tr><th>行为</th><th>结果</th></tr></thead><tbody><tr><td>沙箱 = 项目根</td><td>拒绝</td></tr><tr><td>沙箱是项目根的祖先</td><td>拒绝</td></tr><tr><td>清理非空目录但无 <code>.fpga_sandbox</code> 标记</td><td>拒绝（除非 <code>force=true</code>）</td></tr><tr><td>相对路径含 <code>..</code> 或绝对路径</td><td>拒绝</td></tr><tr><td><strong>项目内符号链接指向项目外</strong></td><td><strong>拒绝</strong>（解析真实路径后校验）</td></tr></tbody></table></div>
+<p>最后一条是实测发现的：<code>rtl/link.sv -&gt; /outside/creds.txt</code> 这样的符号链接 曾能把项目外文件内容搬进沙箱。项目<strong>内部</strong>的符号链接（解析后仍在根内）正常放行。</p>
+<hr>
+<h3 id="32-接口与契约46">3.2 接口与契约（4–6）</h3>
+<h4 id="extract_interfaces-多协议接口识别"><code>extract_interfaces</code> — 多协议接口识别</h4>
+<p>从 RTL 识别 11 种接口，支持内置解析器与可选 <code>slang</code> AST 后端。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox extract_interfaces --rtl-file examples/multi_bus_ref/pcie_tlp_ep.sv</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "modules": [{
+      "module_name": "pcie_tlp_ep",
+      "clock": {"port": "clk", "freq_mhz": 100.0},
+      "reset": {"port": "rst_n", "active_low": true, "sync": true},
+      "interfaces": [{
+        "protocol": "pcie",
+        "role": "endpoint",
+        "pcie_gen": 4,
+        "pcie_lanes": 4,
+        "port_map": {"tx_valid": "pcie_tx_tvalid", "...": "..."}
+      }]
+    }]
+  }
+}</code></pre></div>
+<p>支持的协议：<code>axi4_lite</code> · <code>axi4</code>（Full）· <code>axi4_stream</code> · <code>apb</code> · <code>ahb_lite</code> · <code>ddr3</code> · <code>ddr4</code> · <code>hbm</code> · <code>pcie</code> · <code>spi</code> · <code>ethernet</code>，外加 SV <code>interface</code>/<code>modport</code>。</p>
+<p>时钟/复位识别支持常见命名：<code>clk</code>/<code>aclk</code>/<code>pclk</code>/<code>hclk</code>、<code>rst_n</code>/<code>aresetn</code>/<code>hresetn</code>/<code>presetn</code>。</p>
+<h4 id="validate_contract-契约校验"><code>validate_contract</code> — 契约校验</h4>
+<p>校验 YAML/JSON 边界契约与寄存器位域规则。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox validate_contract --spec-path /tmp/bad_spec.yaml</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": false,
+  "error": "Semantic validation failed.",
+  "diagnostics": [
+    {"severity": "ERROR", "code": "E001",
+     "path": "boundary.axi4_lite.port_map.awvalid",
+     "message": "Missing required 'awvalid'."}
+  ]
+}</code></pre></div>
+<p>诊断码（校验类）：</p>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>含义</th></tr></thead><tbody><tr><td><code>E000</code></td><td>缺 <code>boundary</code> / <code>test_plan</code> 段</td></tr><tr><td><code>E001</code></td><td>必需端口未映射</td></tr><tr><td><code>E002</code></td><td><code>data_width</code> 不是 32/64</td></tr><tr><td><code>E011</code></td><td>契约里的端口在 RTL 中不存在</td></tr><tr><td><code>E012</code></td><td>端口方向与预期不符</td></tr><tr><td><code>E013</code></td><td>位域重叠</td></tr><tr><td><code>E014</code></td><td>位域超宽</td></tr><tr><td><code>E015</code></td><td>位域 <code>bits</code> 顺序写反（<code>hi&lt;lo</code>）</td></tr></tbody></table></div>
+<p><code>E015</code> 值得一提：<code>bits: "7:0"</code> 写成 <code>"0:7"</code> 时，旧实现报 <code>E014 越界</code>， 误导用户去改宽度。现在专门报"顺序反了"。</p>
+<h4 id="emit_testbench-两条路径"><code>emit_testbench</code> — 两条路径</h4>
+<p><strong>路径 A：契约驱动</strong>（生成 AXI4-Lite wrapper + SVA + bind + cocotb）</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
+  --spec-path contract.yaml --out-dir /tmp/tb --rtl-file dut.sv</code></pre></div>
+<p>产出 4 个工件：<code>unit_isolation_wrapper</code> / <code>sva_protocol_checker</code> / <code>in_situ_bind_file</code> / <code>cocotb_testbench</code>。若 DUT 是双侧桥（AXI4-Lite + APB master）， 额外生成 <code>apb_slave_model</code> 并报 <code>dual_side: true</code>。</p>
+<p><strong>路径 B：多协议直出</strong>（从 RTL 直接生成自检 SV TB）</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
+  --rtl-file examples/multi_bus_ref/apb_slave.sv \
+  --out-dir /tmp/tb_apb --protocol apb</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{"ok": true, "data": {"protocol": "apb", "suites": ["apb"],
+ "artifacts": {"sv_testbench": "...", "sim_script": "..."}}}</code></pre></div>
+<p>7 种协议可用：<code>apb</code> / <code>axi4</code> / <code>ahb_lite</code> / <code>ddr3</code> / <code>ddr4</code> / <code>hbm</code> / <code>pcie</code> （PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。</p>
+<p>生成的 TB 自带 Verilator 运行脚本，跑起来是这样的：</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>$ bash /tmp/tb_apb/run_apb_slave_apb.sh
+== sim: apb (top=tb_apb_slave_apb) ==
+[CHECK] id=APB_001 | proto=APB | cat=reset_read | tx=RD addr=0x0000 | exp=0x12345678 | got=0x12345678 | status=PASS
+[CHECK] id=APB_002 | proto=APB | cat=pstrb_write | tx=WR addr=0x0000 wdata=0xaa00bb00 strb=0xa | status=PASS
+...
+PASS: apb all 8 checks passed</code></pre></div>
+<p><strong>生成前的三道闸门</strong>（每个都是实测缺陷的产物）：</p>
+<ol><li><strong>端口存在性</strong> — DUT 缺模板要连的端口时 fail-fast（否则生成 <code>.pstrb(pstrb)</code></li></ol>
+<p>连到不存在的端口，Verilator 报 <code>PINNOTFOUND</code>）；</p>
+<ol><li><strong>端口方向</strong> — DUT 把 <code>pready</code> 写成 <code>input</code> 时 fail-fast。这个比编译失败更危险：</li></ol>
+<p>方向错<strong>不会</strong>编译失败，但 TB 的 <code>while (!pready)</code> 会<strong>永久挂起</strong>，CI 表现为超时；</p>
+<ol><li><strong>端口位宽</strong> — 窄总线上测试向量按 <code>dw</code> 缩放，避免 <code>8'h12345678</code> 被静默截断。</li></ol>
+<hr>
+<h3 id="33-结果归一化与可视化78">3.3 结果归一化与可视化（7–8）</h3>
+<h4 id="normalize_sim_result-三源合一"><code>normalize_sim_result</code> — 三源合一</h4>
+<p>把 cocotb XML/JSON、SVA 日志、Verilator 多套件日志归一化成统一报告。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox normalize_sim_result \
+  --module-name apb_slave --verilator-log-path /tmp/sim.log --expected-suites apb dual</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "overall_status": "PASS",
+    "checks": [{"rule_id": "APB_001", "category": "reset_read", "status": "PASS", "detail": "..."}],
+    "summary": {"total": 8, "passed": 8, "failed": 0, "skipped": 0, "pass_rate": 1.0}
+  }
+}</code></pre></div>
+<p><strong>三个输入源都有完整性信号</strong>——这是本工具最重要的设计：</p>
+<div class="table-wrap"><table><thead><tr><th>输入源</th><th>完整性信号</th><th>缺信号时的行为</th></tr></thead><tbody><tr><td>cocotb JSON</td><td><code>completed: true</code></td><td><code>completed=false</code> → <code>COCOTB_INCOMPLETE</code> FAIL</td></tr><tr><td>SVA 日志</td><td><code>[SVA:HBEAT]</code> 心跳</td><td>有心跳无违例 → PASS；无心跳无违例 → NO_RESULTS</td></tr><tr><td>Verilator 日志</td><td><code>PASS:</code>/<code>FAIL:</code> 汇总行计数</td><td>启动 N 套件需 ≥N 条汇总，不足 → <code>VERILATOR_NO_SUMMARY</code> FAIL</td></tr></tbody></table></div>
+<blockquote><p>为什么必须有这层：仿真日志天然容易被截断（被杀、超时、崩溃）。只统计 "我看到了什么"而不判断"我是否看完"，就会把残缺产物当成完整结论。</p><p>SVA 的特殊之处：断言通过时<strong>零输出</strong>，所以加了周期性心跳 <code>[SVA:HBEAT] rule=P_000 monitored_cycles=100 status=ACTIVE</code>， 让"全通过"与"引擎根本没跑"可区分。</p></blockquote>
+<h4 id="render_visual_report-svg-html-看板"><code>render_visual_report</code> — SVG + HTML 看板</h4>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox render_visual_report \
+  --report-json /tmp/report.json --dep-graph-json /tmp/graph.json \
+  --ifaces-json /tmp/ifaces.json --out-html-path /tmp/report.html</code></pre></div>
+<p>产出 SVG 依赖拓扑 + HTML 规则审计看板，内置 HTML 标签平衡与行数一致性自检 （<code>consistency_ok</code>）。看板包含 SV 语法高亮、方向/位宽徽章、mutation 矩阵。</p>
+<hr>
+<h3 id="34-反踩坑与执行911">3.4 反踩坑与执行（9–11）</h3>
+<h4 id="lint_tb-静态反踩坑"><code>lint_tb</code> — 静态反踩坑</h4>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox lint_tb --target-path /tmp/bad_tb.sv</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": false,
+  "data": {"error_count": 2, "warning_count": 0,
+    "findings": [
+      {"severity": "ERROR", "code": "C1",
+       "message": "Blocking interface drive immediately after @(posedge) ..."}
+    ]}
+}</code></pre></div>
+<p>三组规则（S 组对 <code>.sh</code>/<code>.py</code> 与 <code>.sv</code> 都生效）：</p>
+<div class="table-wrap"><table><thead><tr><th>组</th><th>码</th><th>抓什么</th></tr></thead><tbody><tr><td>时钟竞争</td><td><code>C1</code> <code>C2</code></td><td><code>@(posedge)</code> 后立即用阻塞赋值驱动 interface 信号</td></tr><tr><td>握手死锁</td><td><code>R1</code>–<code>R4</code></td><td>valid 撤回过早、ready 无限等待、响应超时</td></tr><tr><td>静默通过</td><td><code>S1</code> <code>S2</code> <code>S3</code> <code>S4</code></td><td>常量返回的 stub 函数、SKIP 后 exit 0、只数 PASS 行数、<strong>SV 测试台只 <code>$display</code> 无任何判定</strong></td></tr></tbody></table></div>
+<p><code>S4</code> 是 SV 测试台的静默通过检测：文件里有 <code>$display</code> 却没有任何 <code>assert</code> / <code>$error</code> / <code>$fatal</code> / 自研 <code>check_*</code> 任务，说明它只在汇报、 从不表达失败——这样的仿真必然"通过"。判定前会剥掉注释，并对带真实判定的 TB 保持零误报（<code>examples/multi_bus_ref</code> 的 18 个 TB 全部干净）。</p>
+<p><code>C1</code>/<code>C2</code> 覆盖常见接口实例命名（<code>*_if</code> / <code>*_bus</code> / <code>axi</code> / <code>apb</code> / <code>s_axi</code> / <code>m_axi</code> / <code>u_axi</code>），且只在 <code>@(posedge)</code> 上下文触发以控制误报。</p>
+<h4 id="run_sim-仿真封装"><code>run_sim</code> — 仿真封装</h4>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox run_sim --sim-script examples/multi_bus_ref/sim.sh --suite apb</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "returncode": 0,
+    "eda_env": {
+      "verilator": {"version": "5.054", "meets_min_version": true},
+      "slang": {"available": true},
+      "stdbuf": {"available": true}
+    },
+    "stdout_tail": "== sim: apb (top=tb_apb) ==\n[CHECK] id=APB_001 ...\nPASS: apb all 8 checks passed"
+  }
+}</code></pre></div>
+<p>三个护栏：</p>
+<ul><li><code>E020</code> Verilator 版本 &lt; 5.040 时拒绝（跨文件 virtual interface 在旧版本有缺陷）</li><li><code>E021</code> <code>require_slang=true</code> 但 slang 缺失</li><li>逐套件身份核对：<code>expected_suites</code> 里声明的套件必须在日志中出现且 PASS</li></ul>
+<h4 id="run_mutation-变异测试"><code>run_mutation</code> — 变异测试</h4>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox run_mutation \
+  --workdir /tmp/mut --mutation-spec /tmp/muts.json --test-cmd "python3 -m pytest -q"</code></pre></div>
+<p>在 <code>try/finally</code> 里保证原文件还原，并拦截残留变异（<code>E030</code>）。</p>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{"ok": true, "data": {"mutation_score": 100.0, "killed": 4, "survived": 0}}</code></pre></div>
+<hr>
+<h3 id="35-工程辅助1213">3.5 工程辅助（12–13）</h3>
+<h4 id="clean_pt_netlist-primetime-网表清理"><code>clean_pt_netlist</code> — PrimeTime 网表清理</h4>
+<p>DC 导出的网表里常有未解析的参数化黑盒（<code>RDBUS</code>/<code>CLKCROSSBUS</code>/<code>CLKCROSSDFF</code>）， 导致 PrimeTime <code>link_design</code> 失败。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox clean_pt_netlist --in-verilog nl.v --out-verilog nl_clean.v</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{"ok": true, "data": {"removed_instances": 2, "tied_off_nets": ["dout[15:0]", "dout[16]"]}}</code></pre></div>
+<p>输出示例：</p>
+<div class="code-block"><div class="code-lang">systemverilog</div><pre><code>module soc(clk, dout);
+  input clk;
+  output [31:0] dout;
+// [fpga_toolbox:pt_clean] removed unresolved parameterized blackbox instance
+// [fpga_toolbox:pt_clean] removed unresolved parameterized blackbox instance
+  assign dout[15:0] = 1'b0;
+  assign dout[16] = 1'b0;
+endmodule</code></pre></div>
+<p><strong>产物自检</strong>：清理后若输出里仍有黑盒实例（实例语法没被匹配到，如缺分号）， 返回 <code>E051</code> 而不是静默报成功。</p>
+<h4 id="audit_harness-故障注入自审计"><code>audit_harness</code> — 故障注入自审计</h4>
+<p>给护栏本身做故障注入，证明它们出错时不会静默通过。</p>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox audit_harness</code></pre></div>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "ok": true,
+  "data": {
+    "total": 10, "passed": 10, "failed": 0,
+    "checks": [
+      {"id": "A1_LINT_FAULT_CATCH", "passed": true, "detail": "ok=False codes=['C1', 'R2']"},
+      {"id": "A2_MUTATION_RESIDUAL_GUARD", "passed": true, "detail": "ok=False codes=['E030']"},
+      ...
+      {"id": "A10_PT_NETLIST_RESIDUAL_GUARD", "passed": true, "detail": "ok=False codes=['E051']"}
+    ]
+  }
+}</code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>项</th><th>验证什么</th></tr></thead><tbody><tr><td>A1</td><td><code>lint_tb</code> 能抓到时钟竞争与握手缺陷</td></tr><tr><td>A2</td><td><code>run_mutation</code> 拒绝残留变异（E030）</td></tr><tr><td>A3</td><td><code>normalize_sim_result</code> 拒绝垃圾 JSON，不静默 PASS</td></tr><tr><td>A4</td><td><code>copy_sandbox</code> 拒绝以项目根为沙箱</td></tr><tr><td>A5/A6</td><td>套件身份核对能解析真实日志、套件齐时不假报警</td></tr><tr><td>A7</td><td>Verilator 版本守卫（E020）生效</td></tr><tr><td>A8</td><td><code>emit_testbench</code> 缺 boundary 时 fail-fast</td></tr><tr><td>A9</td><td>slang 回退对调用方可见（W013）</td></tr><tr><td>A10</td><td><code>clean_pt_netlist</code> 清理残留时报 E051</td></tr></tbody></table></div>
+<hr>
+<h2 id="4-诊断码总表">4. 诊断码总表</h2>
+<h3 id="校验类validate_contract">校验类（<code>validate_contract</code>）</h3>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>含义</th></tr></thead><tbody><tr><td><code>E000</code></td><td>缺必需段</td></tr><tr><td><code>E001</code></td><td>必需端口未映射</td></tr><tr><td><code>E002</code></td><td>数据宽度非法（非 32/64）</td></tr><tr><td><code>E010</code></td><td><code>out_of_scope_ports</code> 的输入端口缺 <code>tie_off</code></td></tr><tr><td><code>E011</code></td><td>契约端口在 RTL 中不存在</td></tr><tr><td><code>E012</code></td><td>端口方向不符</td></tr><tr><td><code>E013</code></td><td>位域重叠</td></tr><tr><td><code>E014</code></td><td>位域超宽</td></tr><tr><td><code>E015</code></td><td>位域 <code>bits</code> 顺序写反（<code>hi&lt;lo</code>）</td></tr></tbody></table></div>
+<h3 id="运行时类">运行时类</h3>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>工具</th><th>含义</th></tr></thead><tbody><tr><td><code>E020</code></td><td><code>run_sim</code></td><td>Verilator 版本 &lt; 5.040</td></tr><tr><td><code>E021</code></td><td><code>run_sim</code></td><td>要求 slang 但缺失</td></tr><tr><td><code>E022</code></td><td><code>run_sim</code></td><td>仿真退出码非 0</td></tr><tr><td><code>E023</code></td><td><code>run_sim</code></td><td>套件静默跳过</td></tr><tr><td><code>E030</code></td><td><code>run_mutation</code></td><td>残留变异未还原</td></tr><tr><td><code>E031</code></td><td><code>run_mutation</code></td><td>变异得分低于门槛</td></tr><tr><td><code>E040</code></td><td><code>audit_harness</code></td><td>自审计护栏失效</td></tr><tr><td><code>E051</code></td><td><code>clean_pt_netlist</code></td><td>清理后仍残留黑盒实例</td></tr></tbody></table></div>
+<h3 id="警告类">警告类</h3>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>工具</th><th>含义</th></tr></thead><tbody><tr><td><code>W001</code></td><td><code>validate_contract</code></td><td>可选 axi4_lite 信号未映射</td></tr><tr><td><code>W010</code></td><td><code>extract_interfaces</code></td><td>未检测到时钟，用默认值</td></tr><tr><td><code>W011</code></td><td><code>extract_interfaces</code></td><td>未检测到复位，用默认值</td></tr><tr><td><code>W012</code></td><td><code>extract_interfaces</code></td><td>builtin 解析到 SV interface 端口，建议装 slang</td></tr><tr><td><code>W013</code></td><td><code>extract_interfaces</code></td><td>slang 回退对调用方可见</td></tr><tr><td><code>W050</code></td><td><code>render_visual_report</code></td><td>HTML 标签不平衡</td></tr><tr><td><code>W051</code></td><td><code>render_visual_report</code></td><td>规则行数不一致</td></tr><tr><td><code>W101</code></td><td><code>copy_sandbox</code></td><td>被 include 的文件未进沙箱</td></tr><tr><td><code>W102</code></td><td><code>index_repo</code></td><td>例化了仓库内无定义的模块</td></tr></tbody></table></div>
+<h3 id="eda_campaign-专用synopsys-论文复跑"><code>eda_campaign</code> 专用（Synopsys 论文复跑）</h3>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>含义</th></tr></thead><tbody><tr><td><code>E046</code></td><td>DC <code>UID-423</code> / 假成功报告（<code>&lt;700B</code> 且仅 <code>No paths.</code>）</td></tr><tr><td><code>E047</code></td><td><code>set_max_fanout</code> 施加在 net 对象报 <code>UID-119</code></td></tr><tr><td><code>E048</code></td><td>K-2015.06 调用 <code>write_db</code> 报 <code>UID-530</code></td></tr><tr><td><code>E049</code></td><td><code>Received Signal 15</code> 或磁盘满</td></tr><tr><td><code>E050</code></td><td>旧 <code>simv</code> / 截断日志</td></tr></tbody></table></div>
+<hr>
+<h2 id="5-三种调用方式">5. 三种调用方式</h2>
+<h3 id="python">Python</h3>
+<div class="code-block"><div class="code-lang">python</div><pre><code>from fpga_toolbox import call_tool, list_tool_schemas
+
+r = call_tool("extract_interfaces", {"rtl_file": "dut.sv"})
+if r["ok"]:
+    print(r["data"]["modules"][0]["interfaces"])</code></pre></div>
+<h3 id="cli">CLI</h3>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox list                          # 列出所有工具
+python3 -m fpga_toolbox schemas                       # 导出 MCP JSON Schema
+python3 -m fpga_toolbox extract_interfaces --rtl-file dut.sv
+python3 -m fpga_toolbox @params.json                  # 从 JSON 文件传参</code></pre></div>
+<h3 id="mcp">MCP</h3>
+<div class="code-block"><div class="code-lang">python</div><pre><code>from fpga_toolbox import list_tool_schemas
+mcp_tools = list_tool_schemas()    # 直接喂给 MCP server 注册</code></pre></div>
+<hr>
+<h2 id="6-边界与已知限制">6. 边界与已知限制</h2>
+<p>诚实记录，避免误用：</p>
+<ul><li><strong><code>emit_testbench</code> 契约路径</strong>只生成 AXI4-Lite wrapper。纯 APB 设备会明确拒绝</li></ul>
+<p>（<code>Spec has no AXI4-Lite boundary</code>），不会生成坏产物。</p>
+<ul><li><strong>多协议 TB 是定宽模型</strong>：<code>ddr4</code> 模板固定 64 位数据总线（地址高 3 位编码命令，</li></ul>
+<p>与位宽强耦合）；<code>ddr3</code> 的地址/数据位宽可随接口推断。DUT 位宽严重不符时会 被端口校验拦下，但不会自动适配全部协议变体。</p>
+<ul><li><strong><code>eda_campaign</code></strong> 是库模块（不注册为工具），面向 Synopsys VCS/DC/PT 的论文</li></ul>
+<p>复跑流程，需要远端环境，本地只做日志解析与网表处理。</p>
+<ul><li><strong><code>copy_sandbox</code> 不解析 include 依赖</strong>，只复制调用方显式列出的文件；</li></ul>
+<p>缺依赖时通过 <code>include_warnings</code>（<code>W101</code>）提醒，不自动补全。</p>
+<ul><li><strong>Verilator &lt; 5.040</strong> 的跨文件 virtual interface 有缺陷，<code>run_sim</code> 会拒绝。</li></ul>
+<hr>
+<h2 id="7-相关文档">7. 相关文档</h2>
+<ul><li><a href="EXAMPLES.html"><code>docs/EXAMPLES.md</code></a> — 端到端可运行示例（含真实输出）</li><li><a href="EXAMPLES.html"><code>docs/EXAMPLES.html</code></a> — 示例集 HTML 版（侧栏目录 + 页内搜索，可离线打开）</li><li><a href="TEST_REPORT_AND_PLAN.md"><code>docs/TEST_REPORT_AND_PLAN.md</code></a> — 全工具实测结果</li><li><a href="eda-tutorials/"><code>docs/eda-tutorials/</code></a> — Synopsys 工具手册与论文复跑指南</li><li><a href="../changelog/INDEX.md"><code>changelog/INDEX.md</code></a> — 缺陷修复记录（每篇含现象 / 根因 / 修复 / 验证）</li><li><a href="../README.md"><code>README.md</code></a> — 项目概览与快速开始</li></ul>
+<blockquote><p>本手册的 HTML 版：<a href="FEATURES.html"><code>FEATURES.html</code></a>（由本文件生成，勿直接编辑）</p></blockquote>
+</main>
+</div>
+<script>
+// 目录过滤：按标题文本隐藏不匹配项（纯前端，无外部依赖）
+(function () {
+  var input = document.getElementById('filter');
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+  input.addEventListener('input', function () {
+    var q = input.value.trim().toLowerCase();
+    links.forEach(function (a) {
+      a.classList.toggle('hidden', q !== '' && a.textContent.toLowerCase().indexOf(q) === -1);
+    });
+  });
+})();
+</script>
+</body>
+</html>

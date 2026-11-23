@@ -792,6 +792,57 @@ def test_sv_silent_pass_detected(tmp: Path) -> None:
               f"{name}: {sorted({d['code'] for d in rj['diagnostics']})}")
 
 
+def test_docs_html_markdown_sync(tmp: Path) -> None:
+    """HTML 文档必须与 markdown 同步，且产物结构/链接/锚点自检通过。
+
+    回归 69：`docs/*.html` 由 `docs/build_docs_html.py` 从 markdown 派生。
+    markdown 是唯一事实源——两边同时维护必然漂移。这里直接调用生成器的
+    `--check` 逻辑（重新渲染并与已提交文件逐字节比对），并复用其质量自检。
+
+    另锁死三个写这个生成器时真实踩到的坑：
+      * `<strong>` 被 html.escape 转义成可见文本（先转义后打标签才对）
+      * 把 `.md` 无脑改成 `.html` 造成死链（只有目标存在才改写）
+      * 页面里出现两个 `<h1>`（hero 与正文标题重复）
+    """
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    gen_path = root / "docs" / "build_docs_html.py"
+    if not gen_path.is_file():
+        check("docs HTML generator exists", False, str(gen_path))
+        return
+
+    spec = importlib.util.spec_from_file_location("build_docs_html", gen_path)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    for src_name, meta in mod.DOCS.items():
+        out_path = mod.HERE / meta["out"]
+        check(f"{meta['out']} exists", out_path.is_file(), str(out_path))
+        if not out_path.is_file():
+            continue
+
+        rendered = mod.build(src_name, meta)
+        current = out_path.read_text(encoding="utf-8")
+        check(f"{meta['out']} in sync with {src_name}", current == rendered,
+              "重新运行 python3 docs/build_docs_html.py")
+
+        problems = mod.lint_output(out_path)
+        check(f"{meta['out']} passes structural lint", not problems, str(problems[:3]))
+
+        # 转义标签泄漏（真实 bug：页面直接显示 <strong>...</strong>）
+        check(f"{meta['out']} has no escaped tags",
+              "&lt;strong&gt;" not in current and "&lt;code&gt;" not in current)
+
+        # 只允许一个 h1（hero），正文 h1 应被跳过
+        check(f"{meta['out']} has exactly one h1", current.count("<h1") == 1,
+              str(current.count("<h1")))
+
+        # 相对 .md 链接只在目标 .html 存在时才被改写
+        for href in ("TEST_REPORT_AND_PLAN.html", "../README.html", "../changelog/INDEX.html"):
+            check(f"{meta['out']} has no dead link {href}", f'href="{href}"' not in current)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -813,6 +864,7 @@ def main() -> int:
         test_generated_cocotb_tb_writes_completion(tmp)
         test_verilator_missing_summary_is_failure(tmp)
         test_sv_silent_pass_detected(tmp)
+        test_docs_html_markdown_sync(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))
