@@ -38,7 +38,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "project_root": {"type": "string"},
-                "relative_files": {"type": "array"},
+                "relative_files": {"type": "array", "items": {"type": "string"}},
                 "sandbox_dir": {"type": "string"},
                 "clean": {"type": "boolean"},
                 "force": {"type": "boolean"},
@@ -55,7 +55,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "rtl_file": {"type": "string"},
                 "module_name": {"type": "string"},
                 "emit_draft_yaml": {"type": "string"},
-                "staged_rtl_files": {"type": "array"},
+                "staged_rtl_files": {"type": "array", "items": {"type": "string"}},
                 "parser_backend": {"type": "string"},
             },
             "required": ["rtl_file"],
@@ -85,7 +85,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "cocotb_results_json": {"type": "string"},
                 "sva_log_path": {"type": "string"},
                 "verilator_log_path": {"type": "string"},
-                "expected_suites": {"type": "array"},
+                "expected_suites": {"type": "array", "items": {"type": "string"}},
                 "coverage_summary": {"type": "object"},
                 "mutation_summary": {"type": "object"},
                 "out_report_json": {"type": "string"},
@@ -101,7 +101,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "report": {"type": "object"},
                 "dep_graph": {"type": "object"},
-                "extracted_interfaces": {"type": "array"},
+                "extracted_interfaces": {"type": "array", "items": {"type": "object"}},
                 "out_html_path": {"type": "string"},
             },
             "required": ["report", "dep_graph", "extracted_interfaces", "out_html_path"],
@@ -112,7 +112,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "description": "Static anti-pitfall linter for SV testbenches & scripts: clocking races (C1-C2), AXI handshake deadlocks (R1-R4), and silent-pass patterns (S1-S3).",
         "inputSchema": {
             "type": "object",
-            "properties": {"target_path": {"type": "string"}, "rules": {"type": "array"}, "strict": {"type": "boolean"}},
+            "properties": {"target_path": {"type": "string"}, "rules": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"}},
             "required": ["target_path"],
         },
     },
@@ -124,7 +124,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "sim_script": {"type": "string"},
                 "suite": {"type": "string"},
-                "expected_suites": {"type": "array"},
+                "expected_suites": {"type": "array", "items": {"type": "string"}},
                 "timeout_sec": {"type": "integer"},
                 "seed": {"type": "integer"},
                 "wait_cycles": {"type": "integer"},
@@ -141,7 +141,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "workdir": {"type": "string"},
                 "mutation_spec": {"type": "string"},
-                "test_cmd": {"type": "array"},
+                "test_cmd": {"type": "array", "items": {"type": "string"}},
                 "min_score": {"type": "number"},
                 "timeout_sec": {"type": "integer"},
                 "only_id": {"type": "string"},
