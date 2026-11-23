@@ -792,6 +792,172 @@ def test_sv_silent_pass_detected(tmp: Path) -> None:
               f"{name}: {sorted({d['code'] for d in rj['diagnostics']})}")
 
 
+def test_waveform_and_log_capture(tmp: Path) -> None:
+    """波形与日志抓取必须「有产物才算数」。
+
+    回归 73：工具箱原先完全没有波形/日志持久化 —— run_sim 只在返回值里放
+    4000/2000 字符的 tail，完整日志被丢弃，波形更没有。
+
+    这里锁死写功能时踩到的 4 个真实缺陷：
+      A. 生成的 TB 里 $value$plusargs 目标变量未声明 → Verilator 直接
+         "Can't find definition of variable: 'wave_path'" 编译失败。
+      B. require_waveform=true + waveform=false：要求「必须有波形」却不开
+         --trace，旧实现直接放行返回 ok=True。
+      C. 旧波形污染：上一次运行留下的 .vcd 被当成本次证据，于是「这次其实
+         没抓到波形」也能通过 require_waveform。
+      D. FST 缺 lz4 开发头文件时静默产出「后缀 .fst、内容是 VCD」的假文件；
+         现在必须显式报 E025。
+
+    环境依赖说明：`run_sim` 在**做任何事之前**就会检查 Verilator 版本，
+    没有 verilator 的环境（如裸 python:3.10 容器）会先返回 E020。
+    因此：
+      * 缺陷 B（矛盾组合）不依赖 Verilator —— 校验发生在版本检查之前；
+      * 需要真正跑一次脚本的断言（C / 正向 / 长日志）必须先探测 verilator，
+        不可用时**显式跳过并打印原因**，而不是伪装成通过或直接失败。
+    """
+    import os
+    import stat as _stat
+
+    base = tmp / "wlog"
+    base.mkdir(parents=True, exist_ok=True)
+
+    def mk_script(name: str, body: str) -> Path:
+        p = base / name
+        p.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body, encoding="utf-8")
+        os.chmod(p, os.stat(p).st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
+        return p
+
+    def verilator_usable() -> bool:
+        """run_sim 要求 Verilator >= 5.040。没有就跳过需要真跑仿真的断言。"""
+        try:
+            from fpga_toolbox.eda_env import probe_eda_env
+            return bool(probe_eda_env()["verilator"]["meets_min_version"])
+        except Exception:  # noqa: BLE001 - 探测失败按不可用处理
+            return False
+
+    _HAVE_VLT = verilator_usable()
+    _skip_reason = "" if _HAVE_VLT else "no Verilator >= 5.040 in this environment"
+
+    def skip(name: str) -> None:
+        print(f"  skip {name}  ({_skip_reason})")
+
+    # —— B: 矛盾组合必须报错（不依赖 Verilator：校验位于版本检查之前）——
+    plain = mk_script("run_plain.sh", 'echo "PASS: fake"; exit 0\n')
+    r_b = call_tool("run_sim", {
+        "sim_script": str(plain), "suite": "apb",
+        "waveform": False, "require_waveform": True,
+    })
+    check("require_waveform without waveform rejected", not r_b["ok"], str(r_b["ok"]))
+    check("E024 for contradictory waveform flags",
+          "E024" in {d["code"] for d in r_b.get("diagnostics", [])},
+          str([d["code"] for d in r_b.get("diagnostics", [])]))
+
+    # —— C: 旧波形不算数（需要真跑脚本 → 依赖 Verilator）——
+    if not _HAVE_VLT:
+        skip("stale waveform does not satisfy require_waveform")
+        skip("E024 when no fresh waveform produced")
+    else:
+        # 先放一个"上次留下的"波形文件，再跑一个不产生波形的脚本
+        stale = base / "wave_stale.vcd"
+        stale.write_text("$version stale $end\n", encoding="utf-8")
+        r_c = call_tool("run_sim", {
+            "sim_script": str(plain), "suite": "apb",
+            "waveform": True, "require_waveform": True,
+        })
+        check("stale waveform does not satisfy require_waveform", not r_c["ok"], str(r_c["ok"]))
+        check("E024 when no fresh waveform produced",
+              "E024" in {d["code"] for d in r_c.get("diagnostics", [])},
+              str([d["code"] for d in r_c.get("diagnostics", [])]))
+
+    # —— 正向：脚本产生波形 + 完整日志（依赖 Verilator）——
+    if not _HAVE_VLT:
+        skip("fresh waveform satisfies require_waveform")
+        skip("full log persisted to disk")
+    maker = mk_script("run_wave.sh", (
+        'echo "== sim: apb (top=t) =="\n'
+        f'printf \'$version fake $end\\n\' > "{base}/wave_ok.vcd"\n'
+        'echo "PASS: apb all 8 checks passed"\n'
+    ))
+    logd = base / "logs"
+    r_ok = call_tool("run_sim", {
+        "sim_script": str(maker), "suite": "apb", "log_dir": str(logd),
+        "waveform": True, "require_waveform": True,
+    }) if _HAVE_VLT else {"ok": False, "error": _skip_reason, "data": {}}
+    if _HAVE_VLT:
+        check("fresh waveform satisfies require_waveform", r_ok["ok"], str(r_ok.get("error")))
+    if r_ok["ok"]:
+        kinds = [w["kind"] for w in r_ok["data"]["waveform"]["files"]]
+        check("VCD detected", "VCD" in kinds, str(kinds))
+        log_info = r_ok["data"]["log"]
+        check("full log persisted to disk", bool(log_info and Path(log_info["path"]).is_file()),
+              str(log_info))
+        if log_info:
+            content = Path(log_info["path"]).read_text(encoding="utf-8")
+            check("log file keeps first line (not just tail)",
+                  "== sim: apb" in content, content[:60])
+            check("log file keeps last line", "PASS: apb" in content, content[-60:])
+
+    # —— 长日志：返回值里是 tail，但磁盘上必须是全文 ——
+    long_script = mk_script("run_long.sh",
+                            'for i in $(seq 1 400); do echo "[CHECK] id=L$i padding"; done\n'
+                            'echo "PASS: apb all 8 checks passed"\n')
+    logd2 = base / "logs2"
+    r_long = call_tool("run_sim", {"sim_script": str(long_script), "suite": "apb",
+                                   "log_dir": str(logd2)}) if _HAVE_VLT else {
+        "ok": False, "error": _skip_reason, "data": {}}
+    if _HAVE_VLT:
+        check("long run ok", r_long["ok"], str(r_long.get("error")))
+    else:
+        skip("long run ok")
+    if r_long["ok"]:
+        li = r_long["data"]["log"]
+        full = Path(li["path"]).read_text(encoding="utf-8")
+        check("log file holds the FULL output (beyond 4000-char tail)",
+              len(full) > len(r_long["data"]["stdout_tail"]),
+              f"full={len(full)} tail={len(r_long['data']['stdout_tail'])}")
+        check("log marks truncation in response", li["truncated_in_response"] is True, str(li))
+
+    # —— 非法格式：enum 校验（E025 在真 verilator 环境下才触发，这里只测枚举）——
+    r_bad = call_tool("run_sim", {"sim_script": str(plain), "suite": "apb",
+                                  "waveform": True, "waveform_format": "bogus"})
+    check("invalid waveform_format rejected", not r_bad["ok"], str(r_bad["ok"]))
+
+
+def test_waveform_dump_injected_into_tb(tmp: Path) -> None:
+    """生成的 TB 必须带 $dumpfile/$dumpvars，且声明 plusargs 目标变量。
+
+    回归 73-A：第一版只注入了 $value$plusargs("WAVE_FILE=%s", wave_path)，
+    却没有声明 `string wave_path;`，Verilator 直接报
+    "Can't find definition of variable: 'wave_path'" 拒绝编译。
+    这个问题只在**真正编译一次**时才暴露，静态看代码看不出来。
+    """
+    out = tmp / "wvdump"
+    r = call_tool("emit_testbench", {
+        "rtl_file": str(Path(__file__).resolve().parents[1]
+                        / "examples" / "multi_bus_ref" / "apb_slave.sv"),
+        "out_dir": str(out), "protocol": "apb",
+    })
+    check("emit tb for waveform test", r["ok"], str(r.get("error")))
+    if not r["ok"]:
+        return
+    tb = Path(r["data"]["artifacts"]["sv_testbench"])
+    src = tb.read_text(encoding="utf-8")
+    check("TB has $dumpfile", "$dumpfile" in src)
+    check("TB has $dumpvars", "$dumpvars" in src)
+    check("TB declares wave_path variable", "string wave_path" in src)
+    check("TB gates dump behind +WAVE plusarg", '$test$plusargs("WAVE")' in src)
+    # 运行脚本必须能响应 WAVE=1 注入 --trace
+    sim = Path(r["data"]["artifacts"]["sim_script"]).read_text(encoding="utf-8")
+    check("sim script honours WAVE=1", 'WAVE="${WAVE:-0}"' in sim)
+    check("sim script adds --trace", "--trace" in sim)
+    check("sim script honours WAVE_FORMAT", "WAVE_FORMAT" in sim)
+    check("sim script passes +WAVE plusarg", "+WAVE" in sim)
+    # 缺陷 D：构建缓存必须记录**格式**，不能只记"开没开波形"。
+    # 否则从 vcd 切到 fst 时会复用 VCD 二进制，产出后缀 .fst、内容是 VCD 的假文件。
+    check("sim script records wave mode (format, not just on/off)",
+          ".wave_mode" in sim and "want_tag" in sim, sim[:200])
+
+
 def test_docs_html_markdown_sync(tmp: Path) -> None:
     """HTML 文档必须与 markdown 同步，且产物结构/链接/锚点自检通过。
 
@@ -930,6 +1096,8 @@ def main() -> int:
         test_sv_silent_pass_detected(tmp)
         test_docs_html_markdown_sync(tmp)
         test_all_scripts_parse_under_py310()
+        test_waveform_and_log_capture(tmp)
+        test_waveform_dump_injected_into_tb(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

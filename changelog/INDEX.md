@@ -42,6 +42,10 @@
 
 - [30-lint-tb-sv-silent-pass.md](30-lint-tb-sv-silent-pass.md) — `scan_silent_pass` 只被喂 `.sh`/`.py`，SV 测试台从不进入该扫描器，于是 README 头号宣传场景（TB 只 `$display("DONE")` 就结束、无任何判定）返回 `ok=True`；新增 `S4` 规则 + 自审计 `A11`
 
+## 观测能力（波形 / 日志）
+
+- [32-waveform-and-log-capture.md](32-waveform-and-log-capture.md) — 工具箱原先没有波形与日志持久化（只返回 4000 字符 tail）；新增 `run_sim --log-dir/--waveform/--require-waveform` 与 TB 内 `$dumpfile/$dumpvars`。修 4 个「说抓到了其实没有」的缺陷：`wave_path` 未声明编译失败、矛盾组合静默通过、**旧波形冒充本次证据**、**FST 缺 lz4 头时产出后缀 .fst 内容是 VCD 的假文件**；新增诊断码 `E024`/`E025` 与自审计 `A12`
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

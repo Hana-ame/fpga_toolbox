@@ -361,10 +361,12 @@ TB 保持零误报（`examples/multi_bus_ref` 的 18 个 TB 全部干净）。
 `C1`/`C2` 覆盖常见接口实例命名（`*_if` / `*_bus` / `axi` / `apb` / `s_axi` /
 `m_axi` / `u_axi`），且只在 `@(posedge)` 上下文触发以控制误报。
 
-#### `run_sim` — 仿真封装
+#### `run_sim` — 仿真封装（含波形与完整日志）
 
 ```bash
-python3 -m fpga_toolbox run_sim --sim-script examples/multi_bus_ref/sim.sh --suite apb
+python3 -m fpga_toolbox run_sim \
+  --sim-script examples/multi_bus_ref/sim.sh --suite apb \
+  --log-dir /tmp/out --waveform --require-waveform
 ```
 
 ```json
@@ -372,21 +374,45 @@ python3 -m fpga_toolbox run_sim --sim-script examples/multi_bus_ref/sim.sh --sui
   "ok": true,
   "data": {
     "returncode": 0,
-    "eda_env": {
-      "verilator": {"version": "5.054", "meets_min_version": true},
-      "slang": {"available": true},
-      "stdbuf": {"available": true}
+    "elapsed_sec": 7.871,
+    "log": {
+      "path": "/tmp/out/sim_apb.log",
+      "size_bytes": 1619,
+      "lines": 16,
+      "truncated_in_response": false
     },
-    "stdout_tail": "== sim: apb (top=tb_apb) ==\n[CHECK] id=APB_001 ...\nPASS: apb all 8 checks passed"
+    "waveform": {
+      "requested": true,
+      "format": "vcd",
+      "total_bytes": 2581,
+      "files": [{"kind": "VCD", "size_bytes": 2581, "empty": false, "path": ".../wave_apb.vcd"}]
+    }
   }
 }
 ```
 
-三个护栏：
+**抓 log**：`log_dir` 把**完整** stdout+stderr 落盘为 `sim_<suite>.log`。
+不传时返回值只有 4000/2000 字符的尾部——长日志的开头会被丢弃，事后无法
+回溯第一条断言失败附近的上下文（实测 27923 字符的日志，返回值里只有 4000）。
 
-- `E020` Verilator 版本 < 5.040 时拒绝（跨文件 virtual interface 在旧版本有缺陷）
-- `E021` `require_slang=true` 但 slang 缺失
-- 逐套件身份核对：`expected_suites` 里声明的套件必须在日志中出现且 PASS
+**抓波形**：`waveform=true` 会置 `WAVE=1`，让生成的 sim 脚本给 verilator 加
+`--trace`（`waveform_format=fst` 时用 `--trace-fst`）。TB 里的
+`$dumpfile`/`$dumpvars` 由 `+WAVE` plusarg 控制，产物落在脚本目录或 `log_dir`。
+
+波形与日志的护栏：
+
+| 码 | 触发条件 | 为什么需要 |
+|---|---|---|
+| `E020` | Verilator 版本 < 5.040 | 旧版本跨文件 virtual interface 有缺陷 |
+| `E021` | `require_slang=true` 但 slang 缺失 | 显式要求就要显式失败 |
+| `E022` | 仿真退出码非 0 | — |
+| `E023` | 套件静默跳过 | 逐套件身份核对 |
+| `E024` | 要求波形但没产出非空波形 / `require_waveform` 与 `waveform` 矛盾 | **Verilator 缺 `--trace` 时静默忽略 `$dumpvars`**，仿真 PASS 但波形不存在 |
+| `E025` | `waveform_format=fst` 但环境缺 lz4 开发头文件 | 否则会产出「后缀 `.fst`、内容是 VCD」的假文件 |
+
+> `require_waveform` 的判定不只看文件是否存在：它会与**运行前的波形快照**
+> 比对 `(size, mtime)`，只认本次新增或变化的文件。否则上一次运行遗留的
+> `.vcd` 会被当成本次证据，让「其实没抓到」也能通过。
 
 #### `run_mutation` — 变异测试
 
@@ -495,6 +521,8 @@ python3 -m fpga_toolbox audit_harness
 | `E021` | `run_sim` | 要求 slang 但缺失 |
 | `E022` | `run_sim` | 仿真退出码非 0 |
 | `E023` | `run_sim` | 套件静默跳过 |
+| `E024` | `run_sim` | 要求波形却无有效产物（缺 `--trace` 时 verilator 静默忽略 `$dumpvars`）；或 `require_waveform` 与 `waveform` 矛盾 |
+| `E025` | `run_sim` | `waveform_format=fst` 但环境缺 lz4 开发头文件，无法构建 `--trace-fst` |
 | `E030` | `run_mutation` | 残留变异未还原 |
 | `E031` | `run_mutation` | 变异得分低于门槛 |
 | `E040` | `audit_harness` | 自审计护栏失效 |

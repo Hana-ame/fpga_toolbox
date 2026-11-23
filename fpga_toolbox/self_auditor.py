@@ -19,6 +19,7 @@ if __package__ in (None, ""):
     __package__ = "fpga_toolbox"
 
 from .core.types import err_result, ok_result
+from .eda_env import probe_eda_env
 from .mutation_runner import tool_run_mutation
 from .result_normalizer import tool_normalize_sim_result
 from .sandbox_copier import tool_copy_sandbox
@@ -234,6 +235,74 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "passed": a11_ok,
             "detail": (f"silent ok={_r_s4['ok']} codes={sorted(_s4_codes)} "
                        f"judged_ok={_r_good['ok']}"),
+        })
+
+        # A12: 波形/日志抓取必须有产物断言，不能凭空报成功。
+        # 背景：run_sim 原先完全不落盘完整日志、也没有波形支持；加了功能后
+        # 最危险的失败模式是「说抓到了，其实没有」：
+        #   * Verilator 缺 --trace 时静默忽略 $dumpvars，仿真 PASS 但无波形
+        #   * 上一次运行遗留的旧 .vcd 被当成这次的证据
+        # 因此这里要求：矛盾组合报 E024、旧波形不算数、以及完整日志真的落盘。
+        import os as _os
+        import stat as _stat
+
+        _wl = root / "wave_log"
+        _wl.mkdir(exist_ok=True)
+        _fake = _wl / "run_plain.sh"
+        _fake.write_text('#!/usr/bin/env bash\nset -euo pipefail\necho "PASS: fake"\n',
+                         encoding="utf-8")
+        _os.chmod(_fake, _os.stat(_fake).st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
+
+        # (a) require_waveform 但不启用 waveform → 必须失败
+        _r_w1 = tool_run_sim(str(_fake), "apb", waveform=False, require_waveform=True)
+        _w1_codes = {d.get("code") for d in (_r_w1.get("diagnostics") or [])}
+
+        # (b) 磁盘上有旧波形，但本次没产生 → 不得算数
+        (_wl / "wave_stale.vcd").write_text("$version stale $end\n", encoding="utf-8")
+        _r_w2 = tool_run_sim(str(_fake), "apb", waveform=True, require_waveform=True)
+        _w2_codes = {d.get("code") for d in (_r_w2.get("diagnostics") or [])}
+        _w2_files = (_r_w2.get("data") or {}).get("waveform", {}).get("files", [])
+
+        # (c) 正常路径：完整日志必须落盘且含首行
+        _logd = _wl / "logs"
+        _r_w3 = tool_run_sim(str(_fake), "apb", log_dir=str(_logd))
+        _log_ok = bool(_r_w3.get("ok")) and bool((_r_w3.get("data") or {}).get("log"))
+        _log_path = (_r_w3.get("data") or {}).get("log", {}).get("path") if _log_ok else None
+        _log_full = bool(_log_path) and Path(_log_path).is_file()
+
+        # 环境依赖：(b)/(c) 要真正跑一次脚本，而 run_sim 在跑之前会检查
+        # Verilator >= 5.040（E020）。裸容器 / 精简 CI job 里没有 verilator 时，
+        # 这两项无法验证 —— 不能让整个自审计因此失败（那会把「环境缺失」
+        # 误报成「护栏失效」），也不能假装通过。策略：
+        #   * (a) 矛盾组合的校验位于版本检查之前 → 永远可验证，必须通过；
+        #   * (b)/(c) 在无 verilator 时跳过，并在 detail 里明示 skipped，
+        #     strict 模式下仍要求 (a) 成立。
+        _has_vlt = False
+        try:
+            _has_vlt = bool(probe_eda_env()["verilator"]["meets_min_version"])
+        except Exception:  # noqa: BLE001
+            _has_vlt = False
+
+        _a12_a = (not _r_w1.get("ok")) and "E024" in _w1_codes
+        if _has_vlt:
+            _a12_rest = (
+                (not _r_w2.get("ok")) and "E024" in _w2_codes and _w2_files == []
+                and _log_ok and _log_full
+            )
+            _a12_detail = (f"contradictory ok={_r_w1.get('ok')} codes={sorted(_w1_codes)}; "
+                           f"stale ok={_r_w2.get('ok')} files={len(_w2_files)} codes={sorted(_w2_codes)}; "
+                           f"log_saved={_log_full}")
+        else:
+            _a12_rest = True
+            _a12_detail = (f"contradictory ok={_r_w1.get('ok')} codes={sorted(_w1_codes)}; "
+                           f"stale/log SKIPPED (no Verilator >= 5.040; got "
+                           f"{sorted(_w2_codes)})")
+
+        a12_ok = _a12_a and _a12_rest
+        checks.append({
+            "id": "A12_WAVEFORM_LOG_ARTIFACT_GUARD",
+            "passed": a12_ok,
+            "detail": _a12_detail,
         })
 
     failed = [c for c in checks if not c["passed"]]

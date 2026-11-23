@@ -131,7 +131,7 @@ blockquote ul { margin:8px 0; }
     <a class="lv4" href="#render_visual_report-svg-html-看板">render_visual_report — SVG + HTML 看板</a>
     <a class="lv3" href="#34-反踩坑与执行911">3.4 反踩坑与执行（9–11）</a>
     <a class="lv4" href="#lint_tb-静态反踩坑">lint_tb — 静态反踩坑</a>
-    <a class="lv4" href="#run_sim-仿真封装">run_sim — 仿真封装</a>
+    <a class="lv4" href="#run_sim-仿真封装含波形与完整日志">run_sim — 仿真封装（含波形与完整日志）</a>
     <a class="lv4" href="#run_mutation-变异测试">run_mutation — 变异测试</a>
     <a class="lv3" href="#35-工程辅助1213">3.5 工程辅助（12–13）</a>
     <a class="lv4" href="#clean_pt_netlist-primetime-网表清理">clean_pt_netlist — PrimeTime 网表清理</a>
@@ -340,22 +340,34 @@ PASS: apb all 8 checks passed</code></pre></div>
 <div class="table-wrap"><table><thead><tr><th>组</th><th>码</th><th>抓什么</th></tr></thead><tbody><tr><td>时钟竞争</td><td><code>C1</code> <code>C2</code></td><td><code>@(posedge)</code> 后立即用阻塞赋值驱动 interface 信号</td></tr><tr><td>握手死锁</td><td><code>R1</code>–<code>R4</code></td><td>valid 撤回过早、ready 无限等待、响应超时</td></tr><tr><td>静默通过</td><td><code>S1</code> <code>S2</code> <code>S3</code> <code>S4</code></td><td>常量返回的 stub 函数、SKIP 后 exit 0、只数 PASS 行数、<strong>SV 测试台只 <code>$display</code> 无任何判定</strong></td></tr></tbody></table></div>
 <p><code>S4</code> 是 SV 测试台的静默通过检测：文件里有 <code>$display</code> 却没有任何 <code>assert</code> / <code>$error</code> / <code>$fatal</code> / 自研 <code>check_*</code> 任务，说明它只在汇报、 从不表达失败——这样的仿真必然"通过"。判定前会剥掉注释，并对带真实判定的 TB 保持零误报（<code>examples/multi_bus_ref</code> 的 18 个 TB 全部干净）。</p>
 <p><code>C1</code>/<code>C2</code> 覆盖常见接口实例命名（<code>*_if</code> / <code>*_bus</code> / <code>axi</code> / <code>apb</code> / <code>s_axi</code> / <code>m_axi</code> / <code>u_axi</code>），且只在 <code>@(posedge)</code> 上下文触发以控制误报。</p>
-<h4 id="run_sim-仿真封装"><code>run_sim</code> — 仿真封装</h4>
-<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox run_sim --sim-script examples/multi_bus_ref/sim.sh --suite apb</code></pre></div>
+<h4 id="run_sim-仿真封装含波形与完整日志"><code>run_sim</code> — 仿真封装（含波形与完整日志）</h4>
+<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox run_sim \
+  --sim-script examples/multi_bus_ref/sim.sh --suite apb \
+  --log-dir /tmp/out --waveform --require-waveform</code></pre></div>
 <div class="code-block"><div class="code-lang">json</div><pre><code>{
   "ok": true,
   "data": {
     "returncode": 0,
-    "eda_env": {
-      "verilator": {"version": "5.054", "meets_min_version": true},
-      "slang": {"available": true},
-      "stdbuf": {"available": true}
+    "elapsed_sec": 7.871,
+    "log": {
+      "path": "/tmp/out/sim_apb.log",
+      "size_bytes": 1619,
+      "lines": 16,
+      "truncated_in_response": false
     },
-    "stdout_tail": "== sim: apb (top=tb_apb) ==\n[CHECK] id=APB_001 ...\nPASS: apb all 8 checks passed"
+    "waveform": {
+      "requested": true,
+      "format": "vcd",
+      "total_bytes": 2581,
+      "files": [{"kind": "VCD", "size_bytes": 2581, "empty": false, "path": ".../wave_apb.vcd"}]
+    }
   }
 }</code></pre></div>
-<p>三个护栏：</p>
-<ul><li><code>E020</code> Verilator 版本 &lt; 5.040 时拒绝（跨文件 virtual interface 在旧版本有缺陷）</li><li><code>E021</code> <code>require_slang=true</code> 但 slang 缺失</li><li>逐套件身份核对：<code>expected_suites</code> 里声明的套件必须在日志中出现且 PASS</li></ul>
+<p><strong>抓 log</strong>：<code>log_dir</code> 把<strong>完整</strong> stdout+stderr 落盘为 <code>sim_&lt;suite&gt;.log</code>。 不传时返回值只有 4000/2000 字符的尾部——长日志的开头会被丢弃，事后无法 回溯第一条断言失败附近的上下文（实测 27923 字符的日志，返回值里只有 4000）。</p>
+<p><strong>抓波形</strong>：<code>waveform=true</code> 会置 <code>WAVE=1</code>，让生成的 sim 脚本给 verilator 加 <code>--trace</code>（<code>waveform_format=fst</code> 时用 <code>--trace-fst</code>）。TB 里的 <code>$dumpfile</code>/<code>$dumpvars</code> 由 <code>+WAVE</code> plusarg 控制，产物落在脚本目录或 <code>log_dir</code>。</p>
+<p>波形与日志的护栏：</p>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>触发条件</th><th>为什么需要</th></tr></thead><tbody><tr><td><code>E020</code></td><td>Verilator 版本 &lt; 5.040</td><td>旧版本跨文件 virtual interface 有缺陷</td></tr><tr><td><code>E021</code></td><td><code>require_slang=true</code> 但 slang 缺失</td><td>显式要求就要显式失败</td></tr><tr><td><code>E022</code></td><td>仿真退出码非 0</td><td>—</td></tr><tr><td><code>E023</code></td><td>套件静默跳过</td><td>逐套件身份核对</td></tr><tr><td><code>E024</code></td><td>要求波形但没产出非空波形 / <code>require_waveform</code> 与 <code>waveform</code> 矛盾</td><td><strong>Verilator 缺 <code>--trace</code> 时静默忽略 <code>$dumpvars</code></strong>，仿真 PASS 但波形不存在</td></tr><tr><td><code>E025</code></td><td><code>waveform_format=fst</code> 但环境缺 lz4 开发头文件</td><td>否则会产出「后缀 <code>.fst</code>、内容是 VCD」的假文件</td></tr></tbody></table></div>
+<blockquote><p><code>require_waveform</code> 的判定不只看文件是否存在：它会与<strong>运行前的波形快照</strong> 比对 <code>(size, mtime)</code>，只认本次新增或变化的文件。否则上一次运行遗留的 <code>.vcd</code> 会被当成本次证据，让「其实没抓到」也能通过。</p></blockquote>
 <h4 id="run_mutation-变异测试"><code>run_mutation</code> — 变异测试</h4>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox run_mutation \
   --workdir /tmp/mut --mutation-spec /tmp/muts.json --test-cmd "python3 -m pytest -q"</code></pre></div>
@@ -398,7 +410,7 @@ endmodule</code></pre></div>
 <h3 id="校验类validate_contract">校验类（<code>validate_contract</code>）</h3>
 <div class="table-wrap"><table><thead><tr><th>码</th><th>含义</th></tr></thead><tbody><tr><td><code>E000</code></td><td>缺必需段</td></tr><tr><td><code>E001</code></td><td>必需端口未映射</td></tr><tr><td><code>E002</code></td><td>数据宽度非法（非 32/64）</td></tr><tr><td><code>E010</code></td><td><code>out_of_scope_ports</code> 的输入端口缺 <code>tie_off</code></td></tr><tr><td><code>E011</code></td><td>契约端口在 RTL 中不存在</td></tr><tr><td><code>E012</code></td><td>端口方向不符</td></tr><tr><td><code>E013</code></td><td>位域重叠</td></tr><tr><td><code>E014</code></td><td>位域超宽</td></tr><tr><td><code>E015</code></td><td>位域 <code>bits</code> 顺序写反（<code>hi&lt;lo</code>）</td></tr></tbody></table></div>
 <h3 id="运行时类">运行时类</h3>
-<div class="table-wrap"><table><thead><tr><th>码</th><th>工具</th><th>含义</th></tr></thead><tbody><tr><td><code>E020</code></td><td><code>run_sim</code></td><td>Verilator 版本 &lt; 5.040</td></tr><tr><td><code>E021</code></td><td><code>run_sim</code></td><td>要求 slang 但缺失</td></tr><tr><td><code>E022</code></td><td><code>run_sim</code></td><td>仿真退出码非 0</td></tr><tr><td><code>E023</code></td><td><code>run_sim</code></td><td>套件静默跳过</td></tr><tr><td><code>E030</code></td><td><code>run_mutation</code></td><td>残留变异未还原</td></tr><tr><td><code>E031</code></td><td><code>run_mutation</code></td><td>变异得分低于门槛</td></tr><tr><td><code>E040</code></td><td><code>audit_harness</code></td><td>自审计护栏失效</td></tr><tr><td><code>E051</code></td><td><code>clean_pt_netlist</code></td><td>清理后仍残留黑盒实例</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>码</th><th>工具</th><th>含义</th></tr></thead><tbody><tr><td><code>E020</code></td><td><code>run_sim</code></td><td>Verilator 版本 &lt; 5.040</td></tr><tr><td><code>E021</code></td><td><code>run_sim</code></td><td>要求 slang 但缺失</td></tr><tr><td><code>E022</code></td><td><code>run_sim</code></td><td>仿真退出码非 0</td></tr><tr><td><code>E023</code></td><td><code>run_sim</code></td><td>套件静默跳过</td></tr><tr><td><code>E024</code></td><td><code>run_sim</code></td><td>要求波形却无有效产物（缺 <code>--trace</code> 时 verilator 静默忽略 <code>$dumpvars</code>）；或 <code>require_waveform</code> 与 <code>waveform</code> 矛盾</td></tr><tr><td><code>E025</code></td><td><code>run_sim</code></td><td><code>waveform_format=fst</code> 但环境缺 lz4 开发头文件，无法构建 <code>--trace-fst</code></td></tr><tr><td><code>E030</code></td><td><code>run_mutation</code></td><td>残留变异未还原</td></tr><tr><td><code>E031</code></td><td><code>run_mutation</code></td><td>变异得分低于门槛</td></tr><tr><td><code>E040</code></td><td><code>audit_harness</code></td><td>自审计护栏失效</td></tr><tr><td><code>E051</code></td><td><code>clean_pt_netlist</code></td><td>清理后仍残留黑盒实例</td></tr></tbody></table></div>
 <h3 id="警告类">警告类</h3>
 <div class="table-wrap"><table><thead><tr><th>码</th><th>工具</th><th>含义</th></tr></thead><tbody><tr><td><code>W001</code></td><td><code>validate_contract</code></td><td>可选 axi4_lite 信号未映射</td></tr><tr><td><code>W010</code></td><td><code>extract_interfaces</code></td><td>未检测到时钟，用默认值</td></tr><tr><td><code>W011</code></td><td><code>extract_interfaces</code></td><td>未检测到复位，用默认值</td></tr><tr><td><code>W012</code></td><td><code>extract_interfaces</code></td><td>builtin 解析到 SV interface 端口，建议装 slang</td></tr><tr><td><code>W013</code></td><td><code>extract_interfaces</code></td><td>slang 回退对调用方可见</td></tr><tr><td><code>W050</code></td><td><code>render_visual_report</code></td><td>HTML 标签不平衡</td></tr><tr><td><code>W051</code></td><td><code>render_visual_report</code></td><td>规则行数不一致</td></tr><tr><td><code>W101</code></td><td><code>copy_sandbox</code></td><td>被 include 的文件未进沙箱</td></tr><tr><td><code>W102</code></td><td><code>index_repo</code></td><td>例化了仓库内无定义的模块</td></tr></tbody></table></div>
 <h3 id="eda_campaign-专用synopsys-论文复跑"><code>eda_campaign</code> 专用（Synopsys 论文复跑）</h3>

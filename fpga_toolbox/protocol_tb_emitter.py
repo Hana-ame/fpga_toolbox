@@ -686,6 +686,51 @@ def add_lint_off(tb_src: str) -> str:
     return "".join(out)
 
 
+def add_waveform_dump(tb_src: str, top_module: str) -> str:
+    """给生成的 TB 在 initial 块最前面注入 $dumpfile / $dumpvars。
+
+    为什么要用环境变量控制：波形是可选的（会让仿真慢、文件大），不该默认开启。
+    但 TB 一旦编译成二进制，dump 目标就在运行期固定了——所以这里用
+    `$value$plusargs` 从仿真命令行读 +WAVE / +WAVE_FILE，无需重新生成 TB。
+
+    关键事实（实测）：Verilator 在**没有** `--trace` 时只打一条
+    `-Info: $dumpvar ignored, as Verilated without --trace`，仿真照常
+    PASS、exit 0，波形文件根本不存在。$dumpvars 写在 TB 里只是必要条件，
+    run 脚本必须同时加 --trace（由 WAVE=1 控制），二者缺一不可。
+
+    注入位置：第一个 `initial begin` 之后的第一行。此时 timescale/clk 已定义，
+    且在任何激励之前开始记录，不会漏掉开头几个周期的信号。
+    """
+    snippet = (
+        "    // ---- waveform dump (optional; enable with +WAVE on the sim command line) ----\n"
+        '    if ($test$plusargs("WAVE")) begin\n'
+        '      if ($value$plusargs("WAVE_FILE=%s", wave_path)) begin\n'
+        '        $dumpfile(wave_path);\n'
+        "      end else begin\n"
+        '        $dumpfile("wave.vcd");\n'
+        "      end\n"
+        f"      $dumpvars(0, {top_module});\n"
+        "    end\n"
+    )
+    # 在第一个 initial begin 之后插入
+    marker = "  initial begin\n"
+    idx = tb_src.find(marker)
+    if idx < 0:
+        return tb_src  # 模板形态变了：不静默破坏，保持原样
+    insert_at = idx + len(marker)
+    out = tb_src[:insert_at] + snippet + tb_src[insert_at:]
+
+    # $value$plusargs 的目标必须是一个已声明的变量（Verilator 会报
+    # "Can't find definition of variable: 'wave_path'" 直接拒绝编译——
+    # 这是实际跑一遍才发现的）。声明放在 module 顶部、endmodule 之前。
+    decl = '  string wave_path;\n'
+    if decl not in out:
+        close = out.rfind("endmodule")
+        if close > 0:
+            out = out[:close] + decl + out[close:]
+    return out
+
+
 def _emit_run_script(proto: str, mod: str, rtl_abs: Path, tb_abs: Path) -> str:
     top = f"tb_{mod}_{proto}"
     if proto == "pcie":
@@ -710,6 +755,21 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 VLT="${{VERILATOR:-verilator}}"
 
+# 波形开关：WAVE=1 时给 verilator 加 --trace / --trace-fst，并让 TB 的
+# $dumpfile 落到 WAVE_DIR（默认脚本目录）。
+# 注意：Verilator 在没有 --trace 时**静默忽略** $dumpvars（只打一条 -Info），
+# 仿真仍 PASS、exit 0，但波形文件不存在。所以 --trace 必须与 TB 里的
+# $dumpfile/$dumpvars 配对，run_sim 再用 require_waveform 对产物做断言。
+WAVE="${{WAVE:-0}}"
+WAVE_FORMAT="${{WAVE_FORMAT:-vcd}}"
+TRACE_FLAG=""
+if [ "$WAVE" = "1" ]; then
+  case "$WAVE_FORMAT" in
+    fst) TRACE_FLAG="--trace-fst" ;;
+    *)   TRACE_FLAG="--trace" ;;
+  esac
+fi
+
 run_one() {{
   local name="$1"; shift
   local top="$1"; shift
@@ -724,13 +784,33 @@ run_one() {{
         need_build=1
       fi
     done
+    # 波形开关变化必须重建：带 --trace / --trace-fst 与不带是三套二进制。
+    # 复用旧 binary 会造成两种假成功：
+    #   * 加了 WAVE=1 却没有波形（旧 binary 无 trace）
+    #   * WAVE_FORMAT=fst 却产出 VCD 内容（旧 binary 是 --trace 编的）
+    # 所以标记文件里记下**格式**，不只是"开没开"。
+    local want_tag="off"
+    if [ "$WAVE" = "1" ]; then want_tag="$WAVE_FORMAT"; fi
+    local have_tag=""
+    if [ -f "$out/.wave_mode" ]; then have_tag="$(cat "$out/.wave_mode" 2>/dev/null || true)"; fi
+    if [ "$want_tag" != "$have_tag" ]; then
+      need_build=1
+    fi
   fi
   echo "== sim: $name (top=$top) =="
   if [ "$need_build" -eq 1 ]; then
     rm -rf "$out"
-    "$VLT" --binary --build-jobs 4 -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME -Wno-PINMISSING --top-module "$top" -Mdir "$out" "$@" >/dev/null
+    "$VLT" --binary --build-jobs 4 $TRACE_FLAG -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME -Wno-PINMISSING --top-module "$top" -Mdir "$out" "$@" >/dev/null
+    printf '%s' "$want_tag" > "$out/.wave_mode"
   fi
-  "$bin"
+  if [ "$WAVE" = "1" ]; then
+    # +WAVE 让 TB 里的 $dumpvars 真正执行；+WAVE_FILE 指定落盘路径。
+    # 只用环境变量不生效：TB 读的是 plusargs，不是 env。
+    local wave_file="${{WAVE_DIR:-$HERE}}/wave_${{name}}.${{WAVE_FORMAT:-vcd}}"
+    "$bin" +WAVE "+WAVE_FILE=$wave_file"
+  else
+    "$bin"
+  fi
 }}
 
 case "${{1:-all}}" in
@@ -879,8 +959,12 @@ def emit_protocol_testbench(
     # 给生成的 TB 插入 PINMISSING lint_off：DUT 常有 TB 不关心的额外端口
     # （调试/测试/scan 模式），`.*` 通配覆盖不到，Verilator 会报 PINMISSING
     # 并以 "Exiting due to N warning(s)" 阻断构建，而工具已报 ok=True。
-    tb_path = od / f"tb_{mod_name}_{proto}.sv"
-    tb_path.write_text(add_lint_off(tb_src), encoding="utf-8")
+    top_module = f"tb_{mod_name}_{proto}"
+    tb_path = od / f"{top_module}.sv"
+    # 先注入波形 dump，再套 lint_off：dump 要落在 initial 块内，
+    # 而 lint_off 改的是 module 头部之后的 pragma 区，两者互不干扰。
+    tb_with_dump = add_waveform_dump(tb_src, top_module)
+    tb_path.write_text(add_lint_off(tb_with_dump), encoding="utf-8")
 
     sim_path = od / f"run_{mod_name}_{proto}.sh"
     sim_path.write_text(_emit_run_script(proto, mod_name, rp, tb_path), encoding="utf-8")

@@ -146,6 +146,10 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "seed": {"type": "integer", "description": "Optional SEED environment value passed to the sim script."},
                 "wait_cycles": {"type": "integer", "description": "Optional WAIT environment value passed to the sim script."},
                 "require_slang": {"type": "boolean", "description": "Require slang on PATH (E021 if missing, default false)."},
+                "log_dir": {"type": "string", "description": "Directory to persist the FULL simulation log (stdout+stderr) as sim_<suite>.log. Without it only 4000/2000-char tails are returned."},
+                "waveform": {"type": "boolean", "description": "Enable waveform capture: sets WAVE=1 for the sim script so verilator is built with --trace/--trace-fst (default false)."},
+                "waveform_format": {"type": "string", "enum": ["vcd", "fst"], "description": "Waveform format when waveform=true (default vcd)."},
+                "require_waveform": {"type": "boolean", "description": "Fail with E024 unless a non-empty waveform file was produced. Guards against verilator silently ignoring $dumpvars without --trace."},
             },
             "required": ["sim_script"],
             "additionalProperties": False
