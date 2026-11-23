@@ -28,6 +28,25 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
     b, ax = u.boundary, u.boundary.axil
     pm = ax.port_map
     clk_p, rst_p = b.clock.port, b.reset.port
+
+    # APB 端口处理：`include 拼接的 AXI↔APB 桥，其 APB 侧端口若不连接会
+    # PINMISSING 导致 wrapper 无法编译。这里从 DUT RTL 解析 APB 端口方向：
+    #   output → 连 obs_ 探针（APB 事务可观测，但不被 cocotb 驱动）
+    #   input  → tie_off 0（未连接的 APB 从设备侧）
+    # 这是最小修复，让 wrapper 能编译；APB 侧完整驱动是更大场景（见 docs §3）。
+    apb_dirs: Dict[str, str] = {}
+    if b.apb is not None and b.rtl_files:
+        try:
+            from pathlib import Path as _P
+            from .core.sv_parser import parse_sv_file as _psf
+            _rtl = _P(b.rtl_files[0])
+            if _rtl.is_file():
+                for _m in _psf(_rtl):
+                    if _m.name == b.module_name:
+                        for _p in _m.ports:
+                            apb_dirs[_p.name] = _p.direction
+        except Exception:
+            apb_dirs = {}
     params = " #(\n" + ",\n".join(f"    .{k}({v})" for k, v in b.parameters.items()) + "\n  )" if b.parameters else ""
     conns = [
         f"    .{clk_p}({clk_p})",
@@ -47,6 +66,20 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
             w = f"[{o.width-1}:0] " if o.width > 1 else ""
             obs_decls.append(f"  logic {w}obs_{o.port};")
             conns.append(f"    .{o.port}(obs_{o.port})")
+    # APB 端口（boundary.apb）：桥的 APB 侧，AXI4-Lite wrapper 不驱动它，
+    # 但必须连接否则 PINMISSING。output → obs_ 探针，input → tie_off 0。
+    apb_pm = b.apb.port_map if b.apb is not None else {}
+    for _asig, _aport in apb_pm.items():
+        if _aport in connected:
+            continue
+        connected.add(_aport)
+        _adir = apb_dirs.get(_aport, "output")
+        if _adir == "input":
+            conns.append(f"    .{_aport}(1'b0)")
+        else:
+            w = "[DATA_W-1:0] " if _aport in ("paddr", "pwdata") else ""
+            obs_decls.append(f"  logic {w}obs_{_aport};")
+            conns.append(f"    .{_aport}(obs_{_aport})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
     # Pre-join: a backslash inside an f-string expression needs Python 3.12+.
     conn_s = ",\n".join(conns)
