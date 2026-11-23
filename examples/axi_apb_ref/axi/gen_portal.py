@@ -264,7 +264,15 @@ def build_html():
   <div class="kd">{detail}</div>
 </div>""" for label, value, detail, color in kpis)
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 支持 SOURCE_DATE_EPOCH（可复现构建标准）：验证脚本（docs_check 的 D8）
+    # 会用固定值调用本脚本，避免每次跑检查都改写被跟踪的 INDEX.html，
+    # 让工作树永远脏、每次提交都混入纯时间戳噪声。
+    import os as _os
+    _sde = _os.environ.get("SOURCE_DATE_EPOCH")
+    if _sde:
+        now = datetime.fromtimestamp(int(_sde)).strftime("%Y-%m-%d %H:%M")
+    else:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">

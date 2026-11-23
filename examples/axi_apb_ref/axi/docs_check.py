@@ -243,9 +243,15 @@ def check_coverage_consistency():
     """
     import subprocess
     def run(script):
+        # D8 会真实执行这两个生成脚本，其中 gen_portal.py 会把生成时间写进被
+        # 跟踪的 INDEX.html。这里固定 SOURCE_DATE_EPOCH，让输出可复现，
+        # 否则每跑一次文档一致性检查就把工作树弄脏（纯时间戳噪声）。
+        env = dict(os.environ)
+        env.setdefault("SOURCE_DATE_EPOCH", "1735689600")  # 2025-01-01 00:00 UTC
         try:
             r = subprocess.run([sys.executable, str(HERE / script)],
-                               capture_output=True, text=True, cwd=str(HERE), timeout=300)
+                               capture_output=True, text=True, cwd=str(HERE),
+                               timeout=300, env=env)
             return r.stdout + r.stderr
         except Exception as e:
             return f"__ERROR__ {e}"
