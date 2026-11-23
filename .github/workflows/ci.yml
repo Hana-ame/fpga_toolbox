@@ -88,6 +88,9 @@ jobs:
       - name: Self-audit gate (anti-silent-pass)
         run: python -m fpga_toolbox audit_harness
 
+      - name: Docs consistency gate (D1-D13 incl. diag code coverage)
+        run: python examples/axi_apb_ref/axi/docs_check.py
+
       - name: CLI & MCP schema contract
         run: |
           python -m fpga_toolbox list
