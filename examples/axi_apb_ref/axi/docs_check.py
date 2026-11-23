@@ -158,7 +158,7 @@ def check_deprecated():
 
 
 def check_diag_code_coverage():
-    """D13: 工具箱代码的诊断码（E/W）应有文档提及
+    r"""D13: 工具箱代码的诊断码（E/W）应有文档提及
 
     背景（真实踩坑）：新增 E015 / W013 等诊断码后未同步文档，agent 调用方看到
     这些码时不知道含义。这里扫 fpga_toolbox 代码里所有 "E\d{3}" / "W\d{3}"，

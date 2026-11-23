@@ -335,7 +335,7 @@ def test_emit_testbench_error_paths() -> None:
 
 
 def test_suite_identity_real_format() -> None:
-    """锁死 verify_suite_identities 对 sim.sh 真实日志格式的解析。
+    r"""锁死 verify_suite_identities 对 sim.sh 真实日志格式的解析。
 
     sim.sh 打印 `== sim: <name> (top=<top>) ==`，套件名后带 (top=...) /
     (WAIT=...) 参数。旧正则 `==\s*sim:\s*(\w+)\s*==` 对此永远匹配不到，
