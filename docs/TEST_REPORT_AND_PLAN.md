@@ -8,12 +8,12 @@
 |---|---|---|---|
 | `index_repo` | 实测（`examples/axi_apb_ref`） | **PASS** | 完整索引 40 个 SV/V 模块 |
 | `resolve_deps` | 实测 | **PASS** | 正确计算 `axi_apb_bridge` 依赖闭包 |
-| `copy_sandbox` | 实测 | **PASS** | 隔离复制 + 拒绝工程根误删保护生效 |
-| `extract_interfaces` | 实测（内置解析器） | **PASS** | `axi_apb_bridge.sv` 同时抽出 `axi4_lite(16)` + `apb(8)`；`axi_apb_bridge_sv.sv` 识别 SV `interface/modport` 并输出 `W012` |
-| `validate_contract` | 实测 | **PASS** | 直接通过 `examples/axi_apb_ref/axi/regfile_spec.json`（12 个寄存器 + APB），拦截 `E013` 位域重叠、`E014` 超宽与 `E015` 位域 bits 顺序反了（hi<lo） |
+| `copy_sandbox` | 实测 | **PASS** | 隔离复制 + 拒绝工程根误删保护生效；`W101` 被 `include 的文件存在但未进沙箱时告警（防静默缺依赖） |
+| `extract_interfaces` | 实测（内置解析器） | **PASS** | `axi_apb_bridge.sv` 同时抽出 `axi4_lite(16)` + `apb(8)`；`axi_apb_bridge_sv.sv` 识别 SV `interface/modport` 并输出 `W012`（builtin 解析到 SV 端口时提示装 slang）；`W013` slang 回退对调用方可见；`W010/W011` 无 clock/reset 时默认值提示 |
+| `validate_contract` | 实测 | **PASS** | 直接通过 `examples/axi_apb_ref/axi/regfile_spec.json`（12 个寄存器 + APB），拦截 `E013` 位域重叠、`E014` 超宽与 `E015` 位域 bits 顺序反了（hi<lo）；W 码：`W001` 可选 axi4_lite 信号未映射、`W012` builtin 解析到 SV interface 端口 |
 | `emit_testbench` | 实测 | **PASS** | 生成 4 份产物（wrapper/SVA/bind/cocotb），生成的 cocotb Python 编译通过 |
 | `normalize_sim_result` | 实测 | **PASS** | 校验 JUnit XML、Verilator 多套件日志身份核对，漏跑套件必报 FAIL、非法 JSON 必拒 |
-| `render_visual_report` | 实测 | **PASS** | 输出 SVG + HTML 看板，`consistency_ok=True`，渲染覆盖率与变异摘要 |
+| `render_visual_report` | 实测 | **PASS** | 输出 SVG + HTML 看板，`consistency_ok=True`，渲染覆盖率与变异摘要；`W050/W051` HTML 标签平衡与规则行数自检 |
 | `lint_tb` | 实测 | **PASS** | 检出故障注入脚本中的 `C1`、`R2`、`S1`、`S3` 违规 |
 | `run_mutation` | 实测 | **PASS** | 100% 变异杀死、`try/finally` 原文件完好还原、残留变异触发 `E030` 拦截 |
 | `audit_harness` | 实测 | **PASS** | 4/4 故障注入自审计全绿（`A1–A4`） |
