@@ -32,6 +32,9 @@
 ## 集成层修复
 
 - [24-pt-netlist-residual-guard.md](24-pt-netlist-residual-guard.md) — `clean_pt_netlist` 只检查「有没有清理动作」不检查「清理是否生效」，缺分号网表静默产出仍含黑盒的坏网表；新增产物自检 + `E051` + A10 自审计项
+## 跨工具一致性
+
+- [25-call-tool-required-and-outdir-cwd.md](25-call-tool-required-and-outdir-cwd.md) — 跨工具 schema↔签名扫描发现：`out_dir` 为空时 4 个产物静默写进调用方 cwd；根因是 `call_tool` 从不校验 schema 的 `required`
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

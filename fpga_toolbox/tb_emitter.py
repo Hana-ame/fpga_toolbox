@@ -486,6 +486,17 @@ def tool_emit_testbench(
             diagnostics=dd,
         )
 
+    # out_dir 为空时 Path("") 解析成当前工作目录，会把 4 个产物直接写进调用方的
+    # cwd（实测：不传 out_dir 时在 /tmp/dircwd 里凭空出现 dev_axil_wrap.sv 等），
+    # 且返回 ok=True。schema 虽把 out_dir 标为 required，但 call_tool 不校验
+    # required，所以必须在函数内 fail-fast。
+    if not str(out_dir).strip():
+        return err_result(
+            "emit_testbench",
+            "out_dir is required: refusing to write generated artifacts into the "
+            "current working directory. Pass an explicit output directory.",
+            diagnostics=dd,
+        )
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)
     mod = unit.boundary.module_name

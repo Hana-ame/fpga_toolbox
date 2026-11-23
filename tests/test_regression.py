@@ -498,6 +498,32 @@ def test_cli(tmp: Path) -> None:
     check("failure exits 1", res.returncode == 1, str(res.returncode))
 
 
+def test_call_tool_enforces_required(tmp: Path) -> None:
+    """call_tool 必须执行 schema 的 required 校验。
+
+    回归 61/62：旧实现只校验「未知参数名」，不校验 required。于是
+    `emit_testbench` 的 `required: ["out_dir"]` 形同虚设——不传 out_dir 时
+    Path("") 解析成当前工作目录，4 个产物直接写进调用方 cwd 并返回 ok=True
+    （实测在 /tmp 的空目录里凭空出现 dev_axil_wrap.sv 等）。
+    """
+    # 缺失 required 必须被入口拒绝（不再落到函数体里写 cwd）
+    r = call_tool("index_repo", {})
+    check("missing required rejected", r["ok"] is False, str(r.get("error"))[:80])
+    check("error names the missing param", "project_root" in str(r.get("error")), str(r.get("error"))[:80])
+
+    r2 = call_tool("emit_testbench", {"rtl_file": "x.sv", "protocol": "apb"})
+    check("emit_testbench without out_dir rejected", r2["ok"] is False, str(r2.get("error"))[:80])
+    check("out_dir named in error", "out_dir" in str(r2.get("error")), str(r2.get("error"))[:80])
+
+    # required 为空列表的工具不受影响
+    r3 = call_tool("audit_harness", {})
+    check("empty-required tool still callable", r3["ok"] is True, str(r3.get("error"))[:80])
+
+    # 未知参数名仍然单独报错（不与 required 混淆）
+    r4 = call_tool("index_repo", {"project_root": ".", "bogus_param": 1})
+    check("unknown param still rejected", r4["ok"] is False, str(r4.get("error"))[:80])
+    check("unknown param message distinct", "Unknown parameter" in str(r4.get("error")),
+          str(r4.get("error"))[:80])
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -511,6 +537,7 @@ def main() -> int:
         test_normalizer(tmp)
         test_full_chain(tmp)
         test_cli(tmp)
+        test_call_tool_enforces_required(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

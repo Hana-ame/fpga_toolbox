@@ -211,6 +211,18 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
             f"Unknown parameter(s) {unknown} for tool '{tool_name}'. "
             f"Valid parameters: {sorted(schema_props.keys())}",
         )
+    # required 校验：schema 声明的必填项若缺失，必须在入口拒绝。
+    # 旧实现只查未知参数名，不查 required——于是 `required: ["out_dir"]`
+    # 形同虚设：emit_testbench 不传 out_dir 会把产物直接写进调用方 cwd
+    # （实测在 /tmp/dircwd 凭空出现 4 个 .sv/.py）并返回 ok=True。
+    # 注意：只校验「缺失」，不校验空字符串——空值语义由各工具自己决定。
+    schema_required = TOOL_REGISTRY[tool_name].get("inputSchema", {}).get("required") or []
+    missing_required = [k for k in schema_required if k not in params]
+    if missing_required:
+        return err_result(
+            tool_name,
+            f"Missing required parameter(s) {missing_required} for tool '{tool_name}'.",
+        )
     try:
         return fn(**params)
     except Exception as exc:

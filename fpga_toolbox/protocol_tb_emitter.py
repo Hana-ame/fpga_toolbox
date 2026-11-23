@@ -849,6 +849,13 @@ def emit_protocol_testbench(
             "(the testbench waits forever for a response).",
         )
 
+    # 同 tb_emitter：空 out_dir 会写进 cwd 并报成功，必须显式拒绝。
+    if not str(out_dir).strip():
+        return err_result(
+            "emit_testbench",
+            "out_dir is required: refusing to write the generated testbench into "
+            "the current working directory. Pass an explicit output directory.",
+        )
     od = Path(out_dir).resolve()
     od.mkdir(parents=True, exist_ok=True)
 
