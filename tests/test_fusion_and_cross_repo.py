@@ -588,6 +588,27 @@ def test_multi_bus_emitter_port_guard() -> None:
         check("ddr3_dq_out" in str(r3.get("error")), "error names ddr3_dq_out")
         check(not (out3 / "tb_ddr3_inout_ddr3.sv").exists(), "no bogus ddr3 TB written")
 
+        # 方向不匹配不会编译失败，但会在运行期永久挂起（TB 等不到响应），
+        # 比编译失败更隐蔽。回归 42：pready 被写成 input 时，TB 的
+        # `do ... end while (!pready)` 永远等不到响应。
+        wrong_dir = tdp / "apb_wrong_dir.sv"
+        wrong_dir.write_text(
+            "`timescale 1ns/1ps\n"
+            "module apb_wrong_dir(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+            "   input logic pready, output logic [31:0] prdata, output logic pslverr); endmodule\n",
+            encoding="utf-8",
+        )
+        out4 = tdp / "tb_wrong_dir"
+        r4 = call_tool("emit_testbench", {
+            "rtl_file": str(wrong_dir), "out_dir": str(out4), "protocol": "apb",
+        })
+        check(r4["ok"] is False, f"APB pready-as-input rejected (got ok={r4['ok']})")
+        check("pready" in str(r4.get("error")) and "direction" in str(r4.get("error")).lower(),
+              f"error explains direction mismatch (got {str(r4.get('error'))[:120]})")
+        check(not (out4 / "tb_apb_wrong_dir_apb.sv").exists(), "no hanging TB written")
+
         # 端口齐全的官方靶场必须仍能生成
         ref = Path(__file__).resolve().parents[1] / "examples" / "multi_bus_ref"
         for fname, proto in (

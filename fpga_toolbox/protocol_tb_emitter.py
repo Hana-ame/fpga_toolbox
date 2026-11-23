@@ -67,6 +67,50 @@ REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+# TB 模板对各端口的**期望方向**：TB 主动驱动的是 DUT 的输入，TB 读取作响应
+# 的是 DUT 的输出。方向不匹配时不会编译失败（Verilator 只报 UNDRIVEN 之类），
+# 但会在运行期永久挂起——例如 DUT 的 pready 若被写成 input，TB 的
+# `do begin ... end while (!pready)` 永远等不到响应，仿真卡死。工具却报
+# ok=True。这比编译失败更隐蔽：CI 表现为超时而不是失败。
+EXPECTED_TB_DIR: Dict[str, Dict[str, str]] = {
+    "apb": {
+        "psel": "input", "penable": "input", "pwrite": "input", "paddr": "input",
+        "pwdata": "input", "pstrb": "input",
+        "pready": "output", "prdata": "output", "pslverr": "output",
+    },
+    "ahb_lite": {
+        "hsel": "input", "haddr": "input", "htrans": "input", "hwrite": "input",
+        "hsize": "input", "hwdata": "input",
+        "hready": "output", "hrdata": "output", "hresp": "output",
+    },
+    "axi4": {
+        "awaddr": "input", "awvalid": "input", "wdata": "input", "wstrb": "input",
+        "wvalid": "input", "bready": "input", "araddr": "input", "arvalid": "input", "rready": "input",
+        "awready": "output", "wready": "output", "bresp": "output", "bvalid": "output",
+        "arready": "output", "rdata": "output", "rresp": "output", "rvalid": "output",
+    },
+}
+
+
+def _wrong_dir_ports(
+    proto: str, iface: Dict[str, Any], rtl_dir: Dict[str, str],
+) -> List[str]:
+    """返回期望方向与实际方向不符的端口（仅对有方向表的协议生效）。"""
+    expected = EXPECTED_TB_DIR.get(proto)
+    if not expected:
+        return []
+    bad: List[str] = []
+    for canon, want in expected.items():
+        mapped = _pm(iface, canon, canon)
+        actual = rtl_dir.get(mapped)
+        if actual is None or actual == "inout":
+            continue  # inout 由 DUT 侧三态驱动，TB 端按 input/output 皆可接受
+        # logic 输出在 SV 解析里可能记为 output，input 记 input
+        if actual != want:
+            bad.append(f"{canon}->{mapped} (expected DUT {want}, got {actual})")
+    return bad
+
+
 def _missing_tb_ports(proto: str, iface: Dict[str, Any], rtl_ports: List[str]) -> List[str]:
     """返回该协议 TB 模板需要、但 DUT 实际没有的端口名。
 
@@ -637,15 +681,18 @@ def emit_protocol_testbench(
 
     # 生成前校验 TB 模板硬连的端口在 DUT 上确实存在，避免产出无法编译的 TB
     # 却仍报 ok=True（Verilator PINNOTFOUND 才是最终判据，但那已经太晚）。
-    rtl_ports = [str(p.get("name")) for p in (m.get("ports") or []) if isinstance(p, dict)]
-    if not rtl_ports:
-        # 兜底：extract_interfaces 的模块级端口清单不可用时，直接解析 RTL 补齐
-        from .core.sv_parser import parse_sv_file as _psf
+    # extract_interfaces 的模块数据不含 ports 字段（只有 total_ports），所以
+    # 端口名与方向都要从 RTL 直接解析一次拿到（缺端口校验与方向校验都需要）。
+    from .core.sv_parser import parse_sv_file as _psf
 
-        for _m in _psf(rp):
-            if _m.name == mod_name:
-                rtl_ports = [p.name for p in _m.ports]
-                break
+    rtl_ports: List[str] = []
+    rtl_dir: Dict[str, str] = {}
+    for _m in _psf(rp):
+        if _m.name == mod_name:
+            rtl_ports = [p.name for p in _m.ports]
+            rtl_dir = {p.name: str(p.direction) for p in _m.ports}
+            break
+
     missing_ports = _missing_tb_ports(proto, chosen, rtl_ports)
     if missing_ports:
         return err_result(
@@ -653,6 +700,18 @@ def emit_protocol_testbench(
             f"Cannot emit a '{proto}' testbench for {mod_name}: DUT is missing port(s) "
             f"{', '.join(missing_ports)} that the generated template drives. "
             f"Detected RTL ports: {sorted(rtl_ports)}",
+        )
+
+    # 方向校验：方向不匹配不会编译失败，但会在运行期永久挂起（TB 等不到响应），
+    # 比编译失败更隐蔽——所以必须在生成前拦住。
+    wrong_dir = _wrong_dir_ports(proto, chosen, rtl_dir)
+    if wrong_dir:
+        return err_result(
+            "emit_testbench",
+            f"Cannot emit a '{proto}' testbench for {mod_name}: DUT port direction(s) "
+            f"disagree with the template: {'; '.join(wrong_dir)}. "
+            "A direction mismatch does not fail to compile but hangs the simulation "
+            "(the testbench waits forever for a response).",
         )
 
     od = Path(out_dir).resolve()

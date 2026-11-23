@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — 端口方向校验（防仿真永久挂起）
+
+### Fixed
+- **`emit_testbench --protocol` 不校验端口方向，方向反向时 TB 永久挂起却报 `ok=True`**（`protocol_tb_emitter.py`）。前两轮补的是"端口存不存在"，但方向错了照样出坏产物：APB 模板的握手是 `do begin @(posedge clk); waits++; end while (!pready);`，若 DUT 把 `pready` 误写成 `input`，TB 侧没有东西驱动它，循环永远等不到响应——实测 `timeout 30` 无任何输出、被 SIGTERM 杀死。
+
+  比编译失败更危险：方向错**不会**编译失败（只有 `UNDRIVEN` 等通用 warning，容易被 `-Wno-fatal` 吞掉），到 CI 里症状是 **job 超时**而非失败，排查方向完全被误导。
+
+  修复：新增 `EXPECTED_TB_DIR`（按协议列出 DUT 侧应有方向）与 `_wrong_dir_ports()`，写文件前与端口存在校验一起执行；`inout` 跳过；顺带把端口名/方向解析合并成一次。`test_multi_bus_emitter_port_guard` 扩到 15 项。详见 [`changelog/16-port-direction-guard.md`](changelog/16-port-direction-guard.md)。
+
 ## [Unreleased] — DDR/HBM/PCIe 模板端口校验缺口
 
 ### Fixed
