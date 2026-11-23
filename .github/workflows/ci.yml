@@ -79,6 +79,29 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "pyyaml>=6.0"
 
+      # slang 用于 W102 未知例化检测（token 启发式无法区分 `vendor_ip u(` 与
+      # `function int foo(`，会海量误报）。装上是让该特性在 CI 真正被验证；
+      # 装不上不失败——工具按设计降级为不报未知，测试会显式跳过相关断言。
+      - name: Install slang (optional, enables W102 CST backend)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/bin"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            url="https://github.com/MikePopoloski/slang/releases/download/v12.2/slang-windows-x86_64.zip"
+            curl -sSL -o slang.zip "$url"
+            unzip -q -o slang.zip -d slang-dist
+            find slang-dist -name "slang.exe" -exec cp {} "$RUNNER_TEMP/bin/" \; 2>/dev/null || true
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          else
+            url="https://github.com/MikePopoloski/slang/releases/download/v12.2/slang-linux-x86_64.tar.gz"
+            curl -sSL "$url" | tar -xz -C "$RUNNER_TEMP"
+            slang_bin="$(find "$RUNNER_TEMP" -name slang -type f -perm -u+x | head -1)"
+            cp "$slang_bin" "$RUNNER_TEMP/bin/"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: Core regression suite
         run: python tests/test_regression.py
 

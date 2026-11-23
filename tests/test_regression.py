@@ -269,6 +269,16 @@ def test_unknown_instantiations_reported(tmp: Path) -> None:
     top = res["data"]["modules"]["top"]
     check("known instantiation still recorded", top["instantiated_modules"] == ["leaf"],
           str(top["instantiated_modules"]))
+
+    # 未知例化检测依赖 slang CST（token 启发式无法区分 `vendor_ip u(` 与
+    # `function int foo(`，只会产生海量误报）。CI 不装 slang，此时该特性按
+    # 设计静默降级为「不报未知」，不能把环境缺失当成代码缺陷——显式跳过。
+    import shutil as _shutil
+    if not _shutil.which("slang"):
+        print("  skip unknown-instantiation assertions (slang not installed; "
+              "W102 requires the slang CST backend)")
+        return
+
     check("unknown instantiation reported", top.get("unresolved_instantiations") == ["vendor_ip"],
           str(top.get("unresolved_instantiations")))
     w102 = [d for d in (res.get("diagnostics") or []) if d.get("code") == "W102"]
