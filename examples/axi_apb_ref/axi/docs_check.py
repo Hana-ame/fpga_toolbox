@@ -151,6 +151,51 @@ def check_deprecated():
     return ok("D4 无废弃工具残留（iverilog/irun/xrun/vcs 仅作历史说明）")
 
 
+def check_diag_code_coverage():
+    """D13: 工具箱代码的诊断码（E/W）应有文档提及
+
+    背景（真实踩坑）：新增 E015 / W013 等诊断码后未同步文档，agent 调用方看到
+    这些码时不知道含义。这里扫 fpga_toolbox 代码里所有 "E\d{3}" / "W\d{3}"，
+    与 README + docs 提及的码做差集，报告未覆盖的码。
+
+    注意：README 用范围概括（如 "E000–E015"）时视为已覆盖；工具特定运行码
+    （E02x/E03x/E04x）允许只在 docs 详述、README 不逐个列。
+    """
+    # 工具箱根 = HERE 上溯到含 fpga_toolbox/ 包的目录
+    root = HERE
+    for _ in range(4):
+        if (root / "fpga_toolbox" / "core").is_dir():
+            break
+        root = root.parent
+    pkg = root / "fpga_toolbox"
+    if not pkg.is_dir():
+        return warn("D13 找不到 fpga_toolbox 包（跳过）")
+
+    # 1) 代码里所有诊断码
+    code_codes = set()
+    for py in pkg.rglob("*.py"):
+        code_codes |= set(re.findall(r'"([EW]\d{3})"', py.read_text(encoding="utf-8", errors="ignore")))
+
+    # 2) 文档里提及的码（README + docs/*.md）
+    doc_files = [root / "README.md"] + list((root / "docs").glob("*.md"))
+    doc_text = "\n".join(f.read_text(encoding="utf-8", errors="ignore") for f in doc_files if f.is_file())
+    doc_codes = set(re.findall(r"([EW]\d{3})", doc_text))
+
+    # 3) 范围概括（如 E000-E015 / E000–E014）覆盖的低段码视为已提及
+    covered_by_range = set()
+    for m in re.finditer(r"(E\d{3})\s*[-–—]\s*(E\d{3})", doc_text):
+        lo, hi = m.group(1), m.group(2)
+        if lo[0] == hi[0] == "E":
+            for n in range(int(lo[1:]), int(hi[1:]) + 1):
+                covered_by_range.add(f"E{n:03d}")
+    doc_codes |= covered_by_range
+
+    undocumented = sorted(code_codes - doc_codes)
+    if undocumented:
+        return fail(f"D13 {len(undocumented)} 个诊断码文档未提及：{', '.join(undocumented)}")
+    return ok(f"D13 全部 {len(code_codes)} 个诊断码文档均有覆盖")
+
+
 def check_tool_capability_claims():
     """D7: 工具能力声明必须与工具实际能力一致。
 
@@ -470,6 +515,7 @@ def main():
     rc += check_deprecated()
     rc += check_html_balance()
     rc += check_readme_stats()
+    rc += check_diag_code_coverage()
     rc += check_tool_capability_claims()
     rc += check_coverage_consistency()
     rc += check_lint_warnings()

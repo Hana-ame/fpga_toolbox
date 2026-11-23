@@ -14,6 +14,8 @@
 | `emit_testbench` | 实测 | **PASS** | 生成 4 份产物（wrapper/SVA/bind/cocotb），生成的 cocotb Python 编译通过 |
 | `normalize_sim_result` | 实测 | **PASS** | 校验 JUnit XML、Verilator 多套件日志身份核对，漏跑套件必报 FAIL、非法 JSON 必拒 |
 | `render_visual_report` | 实测 | **PASS** | 输出 SVG + HTML 看板，`consistency_ok=True`，渲染覆盖率与变异摘要；`W050/W051` HTML 标签平衡与规则行数自检 |
+
+> **运行时工具特定码**（供 agent 排查）：`run_sim` — `E020/E021`（Verilator/slang 缺失或不达标）、`E022/E023`（仿真退出非 0 / 套件静默跳过）；`run_mutation` — `E030`（残留变异未还原）、`E031`（变异得分低于门槛）；`audit_harness` — `E040`（自审计护栏失效）。
 | `lint_tb` | 实测 | **PASS** | 检出故障注入脚本中的 `C1`、`R2`、`S1`、`S3` 违规 |
 | `run_mutation` | 实测 | **PASS** | 100% 变异杀死、`try/finally` 原文件完好还原、残留变异触发 `E030` 拦截 |
 | `audit_harness` | 实测 | **PASS** | 4/4 故障注入自审计全绿（`A1–A4`） |
