@@ -20,7 +20,9 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index_repo": {
         "fn": tool_index_repo,
         "description": "Syntax-parse an RTL repo into a module, instantiation, and header index.",
-        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string", "description": "Absolute or relative path to the RTL project root to index."}}, "required": ["project_root"]},
+        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string", "description": "Absolute or relative path to the RTL project root to index."}}, "required": ["project_root"],
+            "additionalProperties": False
+            },
     },
     "resolve_deps": {
         "fn": tool_resolve_deps,
@@ -29,7 +31,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"target_module": {"type": "string", "description": "Name of the module whose transitive dependency closure should be computed."}, "repo_index": {"type": "object", "description": "Optional repo index output from index_repo (recomputed if omitted)."}, "project_root": {"type": "string", "description": "Path to the RTL project root."}},
             "required": ["target_module"],
-        },
+            "additionalProperties": False
+            },
     },
     "copy_sandbox": {
         "fn": tool_copy_sandbox,
@@ -44,7 +47,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "force": {"type": "boolean", "description": "Allow cleaning a directory that carries the sandbox marker."},
             },
             "required": ["project_root", "relative_files", "sandbox_dir"],
-        },
+            "additionalProperties": False
+            },
     },
     "extract_interfaces": {
         "fn": tool_extract_interfaces,
@@ -59,12 +63,15 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "parser_backend": {"type": "string", "description": "Port parser backend: auto (default), builtin, or slang (requires slang on PATH)."},
             },
             "required": ["rtl_file"],
-        },
+            "additionalProperties": False
+            },
     },
     "validate_contract": {
         "fn": tool_validate_contract,
         "description": "Validate YAML/JSON boundary contract (including APB, bitfields, and apb-regfile-spec/v2) and optionally cross-check against live RTL.",
-        "inputSchema": {"type": "object", "properties": {"spec_path": {"type": "string", "description": "Path to the boundary contract YAML/JSON (or apb-regfile-spec/v2) to validate."}, "rtl_file": {"type": "string", "description": "Optional RTL file to cross-check the contract against."}}, "required": ["spec_path"]},
+        "inputSchema": {"type": "object", "properties": {"spec_path": {"type": "string", "description": "Path to the boundary contract YAML/JSON (or apb-regfile-spec/v2) to validate."}, "rtl_file": {"type": "string", "description": "Optional RTL file to cross-check the contract against."}}, "required": ["spec_path"],
+            "additionalProperties": False
+            },
     },
     "emit_testbench": {
         "fn": tool_emit_testbench,
@@ -73,7 +80,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"spec_path": {"type": "string", "description": "Path to the validated contract (with AXI4-Lite boundary) to generate a testbench for."}, "out_dir": {"type": "string", "description": "Output directory for the generated wrapper/SVA/bind/cocotb artifacts."}, "rtl_file": {"type": "string", "description": "Optional RTL file of the DUT to compile against."}},
             "required": ["spec_path", "out_dir"],
-        },
+            "additionalProperties": False
+            },
     },
     "normalize_sim_result": {
         "fn": tool_normalize_sim_result,
@@ -91,7 +99,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "out_report_json": {"type": "string", "description": "Optional path to write the normalized VerificationReport JSON."},
             },
             "required": ["module_name"],
-        },
+            "additionalProperties": False
+            },
     },
     "render_visual_report": {
         "fn": tool_render_visual_report,
@@ -105,7 +114,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "out_html_path": {"type": "string", "description": "Output path for the standalone HTML dashboard (SVG is written alongside it)."},
             },
             "required": ["report", "dep_graph", "extracted_interfaces", "out_html_path"],
-        },
+            "additionalProperties": False
+            },
     },
     "lint_tb": {
         "fn": tool_lint_tb,
@@ -114,7 +124,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"target_path": {"type": "string", "description": "SV/script file or directory to lint for clocking races, handshake deadlocks, and silent-pass patterns."}, "rules": {"type": "array", "items": {"type": "string"}, "description": "Optional subset of rule groups to run: clocking, handshake, silent_pass."}, "strict": {"type": "boolean", "description": "Treat warnings as failures (default false: only errors fail)."}},
             "required": ["target_path"],
-        },
+            "additionalProperties": False
+            },
     },
     "run_sim": {
         "fn": tool_run_sim,
@@ -131,7 +142,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "require_slang": {"type": "boolean", "description": "Require slang on PATH (E021 if missing, default false)."},
             },
             "required": ["sim_script"],
-        },
+            "additionalProperties": False
+            },
     },
     "run_mutation": {
         "fn": tool_run_mutation,
@@ -147,12 +159,15 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "only_id": {"type": "string", "description": "Optional single mutation id to run (for targeted verification)."},
             },
             "required": ["workdir", "mutation_spec", "test_cmd"],
-        },
+            "additionalProperties": False
+            },
     },
     "audit_harness": {
         "fn": tool_audit_harness,
         "description": "Run fault-injection self-audit verifying that lint, mutation residual guard, normalizer, and sandbox fail loudly.",
-        "inputSchema": {"type": "object", "properties": {"strict": {"type": "boolean", "description": "Fail (instead of reporting) when any fault-injection check fails (default true)."}}, "required": []},
+        "inputSchema": {"type": "object", "properties": {"strict": {"type": "boolean", "description": "Fail (instead of reporting) when any fault-injection check fails (default true)."}}, "required": [],
+            "additionalProperties": False
+            },
     },
 }
 
@@ -165,6 +180,17 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if tool_name not in TOOL_REGISTRY:
         return err_result(tool_name, f"Unknown tool '{tool_name}'.")
     fn: Callable[..., Dict[str, Any]] = TOOL_REGISTRY[tool_name]["fn"]
+    # 参数名校验：schema 声明 additionalProperties: false，未知参数名应给出
+    # 明确错误，而非让 fn(**params) 抛模糊的 TypeError（agent 传错参数名时
+    # 能立即定位，而不是看到 "got an unexpected keyword argument"）。
+    schema_props = TOOL_REGISTRY[tool_name].get("inputSchema", {}).get("properties", {})
+    unknown = [k for k in params if k not in schema_props]
+    if unknown:
+        return err_result(
+            tool_name,
+            f"Unknown parameter(s) {unknown} for tool '{tool_name}'. "
+            f"Valid parameters: {sorted(schema_props.keys())}",
+        )
     try:
         return fn(**params)
     except Exception as exc:
