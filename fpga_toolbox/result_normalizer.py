@@ -179,6 +179,10 @@ def tool_normalize_sim_result(
         "failed_rules": [c for c in checks if c["status"] == "FAIL"],
         "checks": checks,
     }
+    # 套件身份核对结构化输出：调用方（run_sim 套件核对 / MCP 客户端）需要读到
+    # all_verified/missing/failed/observed，而非只能从 SUITE_* 规则反推。
+    if verilator_log_path:
+        report["verilator_suite_identity"] = ident
     if coverage_summary is not None:
         report["coverage_summary"] = coverage_summary
     if mutation_summary is not None:
