@@ -136,6 +136,22 @@ def tool_copy_sandbox(
         if not src.is_file():
             return err_result("copy_sandbox", f"Source file missing: {src}")
 
+        # 符号链接逃逸防护：上面只校验了相对路径字符串不含 ".."，但 ``src`` 可能
+        # 是项目内的符号链接（文件或目录），``is_file()`` / ``shutil.copy2`` 都会
+        # 跟随它读到项目根之外的内容，把任意文件「搬」进沙箱并算进 sha256。
+        # 这里解析真实路径，确认它仍落在 root 之内；项目内部的相对符号链接
+        # （如 x/alias.sv -> ../y/real.sv）解析后仍在 root 内，照常放行。
+        try:
+            real_src = src.resolve(strict=True)
+        except OSError:
+            return err_result("copy_sandbox", f"Source file missing: {src}")
+        if not _is_within(real_src, root):
+            return err_result(
+                "copy_sandbox",
+                f"Refusing to stage '{rel}': it resolves outside the project root "
+                f"('{real_src}' is not within '{root}').",
+            )
+
         key = str(rel_path).replace("\\", "/")
         if key in seen:
             continue

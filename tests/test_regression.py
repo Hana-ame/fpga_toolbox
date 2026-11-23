@@ -206,6 +206,46 @@ def test_pure_apb_draft(tmp: Path) -> None:
           f"ok={val['ok']} errors={[d.get('code') for d in errs]}")
 
 
+def test_sandbox_symlink_escape(tmp: Path) -> None:
+    """copy_sandbox 不得跟随符号链接把项目根之外的文件拷进沙箱。
+
+    回归 34：旧实现只校验相对路径字符串不含 ".."，但项目内的符号链接
+    （文件或目录）会让 is_file()/shutil.copy2 跟随到项目外，把任意文件
+    内容「搬」进沙箱并算进 sha256——声称隔离却泄漏。
+    """
+    proj = tmp / "symproj"
+    outside = tmp / "symoutside"
+    (proj / "rtl").mkdir(parents=True, exist_ok=True)
+    outside.mkdir(parents=True, exist_ok=True)
+    (proj / "rtl" / "ok.sv").write_text("module ok; endmodule\n", encoding="utf-8")
+    (outside / "secret.txt").write_text("TOPSECRET_XYZ\n", encoding="utf-8")
+    (proj / "rtl" / "leak_file.sv").symlink_to(outside / "secret.txt")
+    (proj / "rtl" / "leakdir").symlink_to(outside, target_is_directory=True)
+
+    for label, rel in (("file", "rtl/leak_file.sv"), ("dir", "rtl/leakdir/secret.txt")):
+        sb = tmp / f"sb_{label}"
+        r = call_tool("copy_sandbox", {
+            "project_root": str(proj), "relative_files": [rel], "sandbox_dir": str(sb),
+        })
+        check(f"symlink {label} escape rejected", r["ok"] is False, str(r.get("error"))[:120])
+        leaked = any(
+            p.is_file() and "TOPSECRET_XYZ" in p.read_text(encoding="utf-8", errors="ignore")
+            for p in sb.rglob("*")
+        ) if sb.exists() else False
+        check(f"symlink {label} no leak", not leaked, "secret content landed in sandbox")
+
+    # 项目内部的相对符号链接解析后仍在 root 内，必须继续可用。
+    inner = tmp / "syminner"
+    (inner / "x").mkdir(parents=True, exist_ok=True)
+    (inner / "y").mkdir(parents=True, exist_ok=True)
+    (inner / "y" / "real.sv").write_text("module inner_real; endmodule\n", encoding="utf-8")
+    (inner / "x" / "alias.sv").symlink_to(inner / "y" / "real.sv")
+    r = call_tool("copy_sandbox", {
+        "project_root": str(inner), "relative_files": ["x/alias.sv"], "sandbox_dir": str(tmp / "sb_inner"),
+    })
+    check("internal symlink still allowed", r["ok"] is True, str(r.get("error"))[:120])
+
+
 def test_normalizer(tmp: Path) -> None:
     print("normalize_sim_result: unrecognized input is an error, not an empty report")
     junk = tmp / "junk.json"
@@ -359,6 +399,7 @@ def main() -> int:
         test_sandbox_layout(tmp)
         test_reset_detection(tmp)
         test_pure_apb_draft(tmp)
+        test_sandbox_symlink_escape(tmp)
         test_normalizer(tmp)
         test_full_chain(tmp)
         test_cli(tmp)

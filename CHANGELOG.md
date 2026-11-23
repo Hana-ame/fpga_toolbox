@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — copy_sandbox 符号链接逃逸修复
+
+### Fixed
+- **`copy_sandbox` 跟随符号链接，把项目根之外的文件拷进沙箱**（`sandbox_copier.py`）。旧实现只做字符串层面的路径校验（拒绝对路径与 `..`），随后 `src.is_file()` 与 `shutil.copy2(src, dst)` 都会跟随符号链接，因此项目内的一个符号链接就能把项目外任意文件读进沙箱、算进 sha256 与 `file_count`。实测两条逃逸路径均成立：文件级（`rtl/link.sv -> /outside/creds.txt`）与目录级（`rtl/extdir -> /outside`，再取 `rtl/extdir/creds.txt`）。
+
+  这是「声称隔离却泄漏」——沙箱的存在意义就是不把项目外内容带进来，而共享头文件目录、monorepo 软链这类写法很常见，契约会被轻易破坏。
+
+  修复：字符串校验之后补一次真实路径校验（`resolve(strict=True)` 跟随所有链接），确认解析结果仍在 `project_root` 内；项目内部的相对符号链接解析后仍在 root 内，照常放行。新增 `tests/test_regression.py::test_sandbox_symlink_escape`（5 项检查）覆盖文件/目录两种逃逸与内部链接放行。详见 [`changelog/sandbox-symlink-escape.md`](changelog/sandbox-symlink-escape.md)。
+
 ## [Unreleased] — 纯 APB draft 契约修复
 
 ### Fixed
