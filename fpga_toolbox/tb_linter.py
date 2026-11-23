@@ -21,7 +21,11 @@ if __package__ in (None, ""):
 
 from .core.types import err_result, ok_result
 
-_IFACE_RE = re.compile(r"\b(axi|apb)\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)")
+# interface 端口的 blocking drive：`instance.signal = value`（点号层次赋值）。
+# 旧实现只认 `axi.|apb.` 前缀，漏报任意其他 interface 实例名（mst_if/slv_if/
+# u_if0/bus 等）——真实 TB 的 interface 实例名千变万化。放宽为「点号连接的
+# 层次赋值」，C1/C2 只在 @(posedge) 上下文触发，误报风险可控。
+_IFACE_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)")
 _WAIT_RE = re.compile(r"@\s*\(\s*posedge|@\s*\(\s*negedge|repeat\s*\(|#\s*\d")
 _READY_OF = {
     "AWVALID": "AWREADY",
