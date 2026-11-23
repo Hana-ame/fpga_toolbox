@@ -327,6 +327,21 @@ module {b.module_name}_axil_sva_checker #(parameter int ADDR_W={ax.addr_width}, 
       else if (rd_pend) begin rd_cnt <= rd_cnt + 1; assert (rd_cnt < MAX_RESP_CYCLES) else $error("[RULE:P_003] RVALID timeout"); end
     end
   end
+
+  // 心跳：证明 SVA checker **确实被 bound 且正在监控**。
+  // 旧实现只有 `else $error(...)`——通过时零输出，于是 normalize_sim_result
+  // 收到「零 SVA 行」时无法区分「全部通过」和「checker 根本没跑 / bind 失败」，
+  // 两者都归一化成 NO_RESULTS + 0 checks。周期性打印一行探针，让下游能确认
+  // 断言引擎在场且无违例（心跳存在但无 [RULE:...] 行 = 通过）。
+  int unsigned sva_hb_cnt;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      sva_hb_cnt <= 0;          // 复位清零（避免 PROCASSINIT：声明初值 + 过程赋值）
+    end else begin
+      sva_hb_cnt <= sva_hb_cnt + 1;
+      if (sva_hb_cnt % 100 == 99) $display("[SVA:HBEAT] rule=P_000 monitored_cycles=%0d status=ACTIVE", sva_hb_cnt + 1);
+    end
+  end
 endmodule
 """
 

@@ -30,6 +30,10 @@ from .core.types import err_result, ok_result
 from .sim_runner import verify_suite_identities
 
 _SVA_ERR_RE = re.compile(r"\[RULE:(P_\d+)\]\s*(.+)")
+# SVA checker 的心跳探针：证明 bound 后的断言引擎确实在跑。
+# 生成器在通过时没有 [RULE:...] 输出，只有这个周期性命中；
+# 心跳存在 = checker 在场且无违例，从而与「checker 根本没跑」区分开。
+_SVA_HBEAT_RE = re.compile(r"\[SVA:HBEAT\]")
 _STATUS_MAP = {
     "PASS": "PASS", "PASSED": "PASS", "OK": "PASS",
     "FAIL": "FAIL", "FAILED": "FAIL", "ERROR": "FAIL",
@@ -160,10 +164,25 @@ def tool_normalize_sim_result(
         p = Path(sva_log_path)
         if not p.is_file():
             return err_result("normalize_sim_result", f"SVA log not found: {sva_log_path}")
+        sva_violations = 0
+        sva_heartbeats = 0
         for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
             m = _SVA_ERR_RE.search(line)
             if m:
                 checks.append({"rule_id": m.group(1), "category": "sva_protocol", "status": "FAIL", "detail": m.group(2).strip()})
+                sva_violations += 1
+                continue
+            if _SVA_HBEAT_RE.search(line):
+                sva_heartbeats += 1
+        # 有心跳、无违例 => 断言引擎在场且全部通过。这是一条**正向**结果，
+        # 不能与「零输出 = NO_RESULTS」混为一谈（后者可能是 bind 失败/没跑）。
+        if sva_heartbeats and sva_violations == 0:
+            checks.append({
+                "rule_id": "SVA_P000",
+                "category": "sva_protocol",
+                "status": "PASS",
+                "detail": f"assertion checker active ({sva_heartbeats} heartbeat(s)), no [RULE:*] violations",
+            })
         sources.append(str(p))
 
     if verilator_log_path:

@@ -568,6 +568,77 @@ def test_call_tool_enum_and_type_validation(tmp: Path) -> None:
     check("non-numeric string rejected downstream",
           r_bad_num["ok"] is False and "integer" in str(r_bad_num.get("error")).lower(),
           str(r_bad_num.get("error"))[:90])
+def test_sva_heartbeat_distinguishes_pass_from_notrun(tmp: Path) -> None:
+    """SVA 日志的「全部通过」与「checker 根本没跑」必须可区分。
+
+    回归 65：生成的 SVA checker 只在失败时 `$error("[RULE:P_xxx] ...")`，
+    通过时零输出。于是 normalize_sim_result 收到「零 SVA 行」时，
+    「全通过」与「bind 失败/没跑」都归一化成 NO_RESULTS + 0 checks——
+    反静默通过护栏在这里失效。
+
+    修复：checker 周期性命中 `[SVA:HBEAT]`，归一化器据此判定
+    「引擎在场且无违例」= PASS；无心跳无违例仍是 NO_RESULTS。
+    """
+    def norm(log_text: str) -> dict:
+        f = tmp / "sva.log"
+        f.write_text(log_text, encoding="utf-8")
+        return call_tool("normalize_sim_result", {"module_name": "m", "sva_log_path": str(f)})
+
+    # 心跳存在、无违例 => PASS（checker 在场）
+    r_pass = norm(
+        "[SVA:HBEAT] rule=P_000 monitored_cycles=100 status=ACTIVE\n"
+        "[SVA:HBEAT] rule=P_000 monitored_cycles=200 status=ACTIVE\n"
+    )
+    check("heartbeat+no-violation => PASS",
+          r_pass["data"]["overall_status"] == "PASS", str(r_pass["data"]["overall_status"]))
+    check("synthetic SVA_P000 check emitted",
+          any(c["rule_id"] == "SVA_P000" and c["status"] == "PASS" for c in r_pass["data"]["checks"]),
+          str(r_pass["data"]["checks"]))
+
+    # 空文件（checker 没跑）=> NO_RESULTS，不能误判为 PASS
+    r_empty = norm("")
+    check("empty log stays NO_RESULTS",
+          r_empty["data"]["overall_status"] == "NO_RESULTS", str(r_empty["data"]["overall_status"]))
+    check("empty log has no SVA_P000",
+          not any(c["rule_id"] == "SVA_P000" for c in r_empty["data"]["checks"]),
+          str(r_empty["data"]["checks"]))
+
+    # 心跳 + 违例 => FAIL，且不应再合成 PASS
+    r_fail = norm("[SVA:HBEAT] rule=P_000 status=ACTIVE\n[RULE:P_001] AWVALID dropped\n")
+    check("heartbeat+violation => FAIL",
+          r_fail["data"]["overall_status"] == "FAIL", str(r_fail["data"]["overall_status"]))
+    check("violation reported",
+          any(c["rule_id"] == "P_001" and c["status"] == "FAIL" for c in r_fail["data"]["checks"]),
+          str(r_fail["data"]["checks"]))
+
+
+def test_generated_sva_checker_has_heartbeat(tmp: Path) -> None:
+    """生成的 SVA checker 必须包含心跳探针，且能被 Verilator 干净编译。"""
+    rtl = tmp / "sva_hb_dut.sv"
+    rtl.write_text(
+        "`timescale 1ns/1ps\n"
+        "module sva_hb_dut(input logic aclk, input logic aresetn,\n"
+        "  input logic [11:0] s_axi_awaddr, input logic [2:0] s_axi_awprot, input logic s_axi_awvalid, output logic s_axi_awready,\n"
+        "  input logic [31:0] s_axi_wdata, input logic [3:0] s_axi_wstrb, input logic s_axi_wvalid, output logic s_axi_wready,\n"
+        "  output logic [1:0] s_axi_bresp, output logic s_axi_bvalid, input logic s_axi_bready,\n"
+        "  input logic [11:0] s_axi_araddr, input logic [2:0] s_axi_arprot, input logic s_axi_arvalid, output logic s_axi_arready,\n"
+        "  output logic [31:0] s_axi_rdata, output logic [1:0] s_axi_rresp, output logic s_axi_rvalid, input logic s_axi_rready);\n"
+        "  assign s_axi_awready=1; assign s_axi_wready=1; assign s_axi_bresp=0; assign s_axi_bvalid=1;\n"
+        "  assign s_axi_arready=1; assign s_axi_rdata=0; assign s_axi_rresp=0; assign s_axi_rvalid=1;\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+    draft = tmp / "sva_hb.yaml"
+    ex = call_tool("extract_interfaces", {"rtl_file": str(rtl), "module_name": "sva_hb_dut", "emit_draft_yaml": str(draft)})
+    check("sva-hb extract ok", ex["ok"], str(ex.get("error"))[:80])
+    em = call_tool("emit_testbench", {"spec_path": str(draft), "out_dir": str(tmp / "sva_hb_tb"), "rtl_file": str(rtl)})
+    check("sva-hb emit ok", em["ok"], str(em.get("error"))[:80])
+    if em["ok"]:
+        sva = Path(em["data"]["artifacts"]["sva_protocol_checker"]).read_text(encoding="utf-8")
+        check("checker emits [SVA:HBEAT]", "[SVA:HBEAT]" in sva, "heartbeat missing")
+        check("heartbeat counter reset (no PROCASSINIT)",
+              "sva_hb_cnt <= 0" in sva and "int unsigned sva_hb_cnt = 0" not in sva,
+              "counter init style")
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -583,6 +654,8 @@ def main() -> int:
         test_cli(tmp)
         test_call_tool_enforces_required(tmp)
         test_call_tool_enum_and_type_validation(tmp)
+        test_sva_heartbeat_distinguishes_pass_from_notrun(tmp)
+        test_generated_sva_checker_has_heartbeat(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))
