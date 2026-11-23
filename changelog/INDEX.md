@@ -35,6 +35,9 @@
 ## 跨工具一致性
 
 - [25-call-tool-required-and-outdir-cwd.md](25-call-tool-required-and-outdir-cwd.md) — 跨工具 schema↔签名扫描发现：`out_dir` 为空时 4 个产物静默写进调用方 cwd；根因是 `call_tool` 从不校验 schema 的 `required`
+## 跨工具一致性
+
+- [26-call-tool-enum-and-type-validation.md](26-call-tool-enum-and-type-validation.md) — `call_tool` 也不校验 enum 与 type：非法协议名报错指向 RTL，「string 传 int」漏出 CPython 内部错误；同时保留数字字符串兼容（MCP 序列化）
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

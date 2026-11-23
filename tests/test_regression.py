@@ -524,6 +524,50 @@ def test_call_tool_enforces_required(tmp: Path) -> None:
     check("unknown param still rejected", r4["ok"] is False, str(r4.get("error"))[:80])
     check("unknown param message distinct", "Unknown parameter" in str(r4.get("error")),
           str(r4.get("error"))[:80])
+def test_call_tool_enum_and_type_validation(tmp: Path) -> None:
+    """call_tool 必须强制 schema 的 enum 与 type，且不破坏数字字符串兼容。
+
+    回归 63：非法 enum 值 `protocol='BOGUS'` 与「合法但 RTL 不匹配」的
+    `protocol='ddr3'` 报错文本完全相同（都是 "Protocol 'X' not found in any
+    module"），调用方无法区分「参数拼错」和「RTL 没有该协议」。
+
+    回归 64：给 string 参数传 int 时漏出 Python 内部错误
+    "argument should be a str or an os.PathLike object where __fspath__ ..."，
+    用户看不出是哪个参数错了。
+
+    兼容性约束：数字类参数必须继续接受字符串（MCP 客户端常把 JSON number
+    序列化成 str，且 sim_runner/mutation_runner 在函数边界故意做了 int()
+    宽容转换）。
+    """
+    # enum：非法值必须在入口被拒，且错误信息与 RTL 层面错误可区分
+    r_enum = call_tool("emit_testbench", {
+        "rtl_file": str(Path(__file__).resolve().parents[1] / "examples/multi_bus_ref/apb_slave.sv"),
+        "out_dir": str(tmp / "tb_enum"),
+        "protocol": "BOGUS",
+    })
+    check("invalid enum rejected", r_enum["ok"] is False, str(r_enum.get("error"))[:80])
+    check("enum error mentions allowed values", "Allowed values" in str(r_enum.get("error")),
+          str(r_enum.get("error"))[:100])
+
+    # type：错类型必须在入口被拒，且错误信息含参数名与期望类型
+    r_type = call_tool("index_repo", {"project_root": 123})
+    check("wrong type rejected", r_type["ok"] is False, str(r_type.get("error"))[:80])
+    check("type error names param and type",
+          "project_root" in str(r_type.get("error")) and "string" in str(r_type.get("error")),
+          str(r_type.get("error"))[:100])
+
+    # 数字字符串兼容：不应被类型校验挡住（下游 int() 转换负责）
+    r_num = call_tool("run_sim", {"sim_script": str(tmp / "nope.sh"), "timeout_sec": "1700"})
+    check("numeric string still accepted",
+          "Invalid type" not in str(r_num.get("error")), str(r_num.get("error"))[:90])
+    check("numeric string reaches script check",
+          "not found" in str(r_num.get("error")).lower(), str(r_num.get("error"))[:90])
+
+    # 非数字字符串仍应被拒
+    r_bad_num = call_tool("run_sim", {"sim_script": str(tmp / "x.sh"), "timeout_sec": "abc"})
+    check("non-numeric string rejected downstream",
+          r_bad_num["ok"] is False and "integer" in str(r_bad_num.get("error")).lower(),
+          str(r_bad_num.get("error"))[:90])
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -538,6 +582,7 @@ def main() -> int:
         test_full_chain(tmp)
         test_cli(tmp)
         test_call_tool_enforces_required(tmp)
+        test_call_tool_enum_and_type_validation(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

@@ -211,6 +211,63 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
             f"Unknown parameter(s) {unknown} for tool '{tool_name}'. "
             f"Valid parameters: {sorted(schema_props.keys())}",
         )
+    # 类型校验：schema 的 type 必须强制。旧实现不做校验，把错类型直接传给
+    # 函数体，最终漏出 Python 内部错误——例如给 string 参数传 int 会得到
+    # "argument should be a str or an os.PathLike object where __fspath__
+    # returns a str, not 'int'"，用户看不出是哪个参数错了。
+    _PY_TYPES: Dict[str, Any] = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": (list, tuple),
+        "object": dict,
+    }
+    for pname, pspec in schema_props.items():
+        ptype = pspec.get("type")
+        if not ptype or pname not in params:
+            continue
+        expected = _PY_TYPES.get(ptype)
+        if expected is None:
+            continue
+        val = params[pname]
+        if val is None:
+            continue  # Optional：显式 None 交给函数处理
+        # bool 是 int 子类：integer 参数不接受 True/False
+        if ptype == "integer" and isinstance(val, bool):
+            return err_result(
+                tool_name,
+                f"Invalid type for parameter '{pname}' of tool '{tool_name}': "
+                f"expected integer, got boolean.",
+            )
+        if not isinstance(val, expected):
+            # 数字类参数允许字符串：MCP 客户端常把 JSON number 序列化成 str，
+            # 且 sim_runner / mutation_runner 在函数边界**故意**做了
+            # `int(timeout_sec)` 宽容转换（见其注释，那里也给出可读错误）。
+            # 入口若一律拒绝会破坏这个已存在的兼容设计——实测
+            # run_sim(timeout_sec="1700") 曾可用，加严后变成 Invalid type。
+            # 因此只对「非数字类型」严格，数字类放行给下游自行解析。
+            if ptype in ("integer", "number") and isinstance(val, str):
+                continue
+            return err_result(
+                tool_name,
+                f"Invalid type for parameter '{pname}' of tool '{tool_name}': "
+                f"expected {ptype}, got {type(val).__name__}.",
+            )
+
+    # enum 校验：schema 声明的可选值必须强制执行，否则调用方拼错协议名时
+    # 会得到「Protocol 'BOGUS' not found in any module」——看起来像 RTL 不支持
+    # 该协议，实际是参数值本身非法。实测 `protocol='BOGUS'` 与合法但 RTL 不匹配的
+    # `protocol='ddr3'` 报错文本完全一致，无法区分。
+    for pname, pspec in schema_props.items():
+        allowed = pspec.get("enum")
+        if allowed and pname in params and params[pname] not in allowed:
+            return err_result(
+                tool_name,
+                f"Invalid value {params[pname]!r} for parameter '{pname}' of tool '{tool_name}'. "
+                f"Allowed values: {allowed}.",
+            )
+
     # required 校验：schema 声明的必填项若缺失，必须在入口拒绝。
     # 旧实现只查未知参数名，不查 required——于是 `required: ["out_dir"]`
     # 形同虚设：emit_testbench 不传 out_dir 会把产物直接写进调用方 cwd
