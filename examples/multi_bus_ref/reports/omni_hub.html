@@ -1,0 +1,599 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<title>soc_omni_bus_hub (六接口全向转译+热插拔+共享内存) 验证审计报告</title>
+<style>
+  :root { --bg:#F8FAFC; --card:#FFFFFF; --ink:#0F172A; --muted:#64748B; --line:#E2E8F0; --accent:#1D4ED8; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:28px 20px 64px; line-height:1.5; }
+  .wrap { max-width:1260px; margin:0 auto; }
+  header { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; gap:12px; margin-bottom:20px; border-bottom:2px solid var(--ink); padding-bottom:14px; }
+  h1 { margin:0; font-size:24px; letter-spacing:-0.01em; }
+  h2 { margin:0 0 8px; font-size:17px; color:var(--ink); }
+  h3 { margin:0 0 10px; font-size:15px; color:var(--ink); }
+  .sub { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  .meta { font-size:13px; color:var(--muted); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .kpi .lbl { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; }
+  .kpi .val { font-size:22px; font-weight:700; margin-top:4px; }
+  .tab-radio { display:none; }
+  .tab-bar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+  .tab-lbl { cursor:pointer; padding:7px 14px; border-radius:999px; border:1px solid #CBD5E1; background:#FFFFFF; color:#334155; font-size:13px; font-weight:600; transition:all .15s; }
+  .tab-lbl:hover { border-color:#0F172A; color:#0F172A; }
+  .tab-panel { display:none; }
+  #tab-overview:checked ~ .tab-bar label[for='tab-overview'] { background:#0F172A; color:#FFFFFF; border-color:#0F172A; }
+  #tab-overview:checked ~ .tab-panels #panel-overview { display:block; }
+  #tab-omni_hub:checked ~ .tab-bar label[for='tab-omni_hub'] { background:#0F172A; color:#FFFFFF; border-color:#0F172A; }
+  #tab-omni_hub:checked ~ .tab-panels #panel-omni_hub { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin-bottom:18px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }
+  .tbl-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { background:#F1F5F9; color:#334155; font-weight:600; white-space:nowrap; }
+  tr:hover td { background:#F8FAFC; }
+  code { background:#F1F5F9; padding:2px 6px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; word-break:break-all; }
+  code.diff { background:#FEF2F2; color:#991B1B; }
+  .muted { font-size:11px; color:var(--muted); margin-top:2px; }
+  .eng { display:inline-block; background:#EFF6FF; color:#1E40AF; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:0.03em; }
+  .b-pass { background:#DCFCE7; color:#166534; }
+  .b-fail { background:#FEE2E2; color:#991B1B; }
+  .b-warn { background:#FEF3C7; color:#92400E; }
+  pre { background:#0F172A; color:#E2E8F0; padding:14px 16px; border-radius:8px; overflow-x:auto; font-size:12px; line-height:1.5; margin:0; }
+  pre.sv-code { background:#0D1117; color:#E6EDF3; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .sv-ln { display:inline-block; width:3.2em; color:#6E7681; user-select:none; border-right:1px solid #21262D; margin-right:10px; padding-right:6px; text-align:right; }
+  .sv-kw { color:#FF7B72; font-weight:600; }
+  .sv-num { color:#79C0FF; }
+  .sv-cmt { color:#8B949E; font-style:italic; }
+  .sv-sys { color:#D2A8FF; font-weight:600; }
+  .dir-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; font-family:ui-monospace,monospace; }
+  .dir-in { background:#DBEAFE; color:#1E40AF; }
+  .dir-out { background:#FEF3C7; color:#92400E; }
+  .dir-io { background:#E2E8F0; color:#334155; }
+</style></head><body><div class="wrap">
+<header>
+  <div>
+    <h1>FPGA 多协议验证审计报告：soc_omni_bus_hub (六接口全向转译+热插拔+共享内存) <span class="badge b-pass">PASS</span></h1>
+    <div class="meta">checks=18 · pass=18 · fail=0 · pass_rate=1.0</div>
+  </div>
+  <div class="meta">Generated: 2026-11-23T03:50:10Z</div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><div class="lbl">总实跑检查项</div><div class="val">18</div></div>
+  <div class="kpi"><div class="lbl">通过 / 失败</div><div class="val" style="color:#166534">18 / <span style="color:#64748B">0</span></div></div>
+  <div class="kpi"><div class="lbl">通过率</div><div class="val">100.0%</div></div>
+  <div class="kpi"><div class="lbl">RTL 变异杀伤</div><div class="val">N/A</div></div>
+  <div class="kpi"><div class="lbl">行覆盖率</div><div class="val">N/A</div></div>
+</div>
+
+<div class='tabs-root'><input type="radio" name="projtab" id="tab-overview" class="tab-radio" checked><input type="radio" name="projtab" id="tab-omni_hub" class="tab-radio"><div class='tab-bar'><label for="tab-overview" class="tab-lbl">总览 Overview</label><label for="tab-omni_hub" class="tab-lbl">★六接口全向核心</label></div><div class='tab-panels'><div class="tab-panel" id="panel-overview">
+
+<section class="card">
+  <h2>2. 逐条真实仿真检查明细（直接解析自 Verilator / cocotb 实时日志）</h2>
+  <p class="sub">每一行均对应仿真器实际执行的一笔事务与断言结果，零伪造标签、零重复凑数。</p>
+  <div class="tbl-wrap"><table><thead><tr><th>Rule ID</th><th>协议 / 类别</th><th>执行引擎</th><th>激励与事务 (Stimulus / TX)</th><th>期望值 (Expected)</th><th>实测值 (Observed)</th><th>状态</th></tr></thead><tbody id="checks-tbody"><tr><td><code>OMNI_B0_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=0)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=2)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=4)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr></tbody></table></div>
+</section>
+
+<section class="card">
+  <h2>架构与接口拓扑视图</h2>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 232" width="100%">
+  <rect x="140" y="16" width="440" height="150" rx="10" fill="#FFFFFF" stroke="#1D4ED8" stroke-dasharray="5 4"/>
+  <rect x="176" y="42" width="368" height="76" rx="8" fill="#0F172A"/>
+  <text x="360" y="72" text-anchor="middle" fill="#FFFFFF" font-family="ui-monospace,monospace" font-size="14" font-weight="bold">soc_omni_bus_hub (六接口全向转译+热插拔+共享内存)</text>
+  <text x="360" y="96" text-anchor="middle" fill="#94A3B8" font-family="ui-monospace,monospace" font-size="10">pcie(11), ddr4(6), axi4(29), apb(9), spi(4), ethernet(7)</text>
+  <text x="360" y="146" text-anchor="middle" fill="#065F46" font-family="sans-serif" font-size="12" font-weight="bold">[PASS]</text>
+  <rect x="220" y="190" width="280" height="22" rx="4" fill="#F8FAFC" stroke="#CBD5E1"/><text x="360" y="205" text-anchor="middle" fill="#334155" font-family="ui-monospace,monospace" font-size="11">soc_omni_bus_hub</text>
+</svg>
+</section>
+<section class='card'><h2>4. 原始仿真器日志摘录（可复现命令：<code>bash examples/multi_bus_ref/sim.sh all</code>）</h2><pre>== sim: omni_b0 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B0_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=0) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B0_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B0_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B0_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B0_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B0_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=0) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 50us; walltime 0.008 s; speed 6.512 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB
+== sim: omni_b2 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B2_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=2) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B2_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B2_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B2_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B2_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B2_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=2) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 54us; walltime 0.008 s; speed 6.982 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB
+== sim: omni_b4 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B4_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=4) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B4_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B4_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B4_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B4_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B4_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=4) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 57us; walltime 0.007 s; speed 7.675 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB</pre></section>
+</div><div class="tab-panel" id="panel-omni_hub"><section class='card'><h2>★ 统一六接口全向转译 + 共享256B内存核心 (SPI/APB/AXI4/ETH/PCIe/DDR4 + 热插拔/休眠/BUF_CYCS=0·2·4) <span class="badge b-pass">PASS</span></h2><p class='sub'>DUT：<code>examples/multi_bus_ref/omni_hub/soc_omni_bus_hub.sv</code> · 协议：<code>pcie(slave) + ddr4(master) + axi4(slave) + apb(slave) + spi(slave) + ethernet(slave)</code> · 时钟/复位：<code>clk / por_n</code> · 自动生成 TB：<code>omni_hub/tb_soc_omni_bus_hub.sv (BUF_CYCS=0/2/4, 256B Golden, Hot-Plug &amp; Tri-Domain Sleep)</code> · 检查项：<strong>18/18 PASS</strong> · 独立页面：<code>reports/omni_hub.html</code></p></section><section class='card'><h3>逐条实跑检查明细（18/18）</h3><div class='tbl-wrap'><table><thead><tr><th>Rule ID</th><th>协议 / 类别</th><th>执行引擎</th><th>激励与事务</th><th>期望值</th><th>实测值</th><th>状态</th></tr></thead><tbody><tr><td><code>OMNI_B0_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=0)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B0_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=2)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B2_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_POR_001</code></td><td><strong>OMNI-HUB</strong><div class='muted'>por_init_guard</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD before DDR4 READY (BUF=4)</code></td><td><code>pslverr=1</code></td><td><code>1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_NEG_002</code></td><td><strong>OMNI-HUB</strong><div class='muted'>an_and_ltssm_fail</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>ETH cap=00 + PCIe deskew=0</code></td><td><code>an_fail=1,SLVERR,st=5,rej=1</code></td><td><code>an=1,SLVERR,st=5,rej=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_XMEM_003</code></td><td><strong>OMNI-HUB</strong><div class='muted'>all_dir_256B_xproto</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>SPI/APB/AXI/ETH/PCIe cross-RD 256B</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_ETH_HP_004</code></td><td><strong>OMNI-HUB</strong><div class='muted'>eth_hotplug_reconnect</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>unplug(drop)-&gt;replug(1000M)-&gt;RX/RD</code></td><td><code>0x778899AA</code></td><td><code>0x778899aa</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_PCIE_HP_005</code></td><td><strong>OMNI-HUB</strong><div class='muted'>pcie_hotplug_retrain</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>remove(rej)-&gt;reinsert(L0)-&gt;MRd</code></td><td><code>0x7d5914a0</code></td><td><code>0x7d5914a0</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>OMNI_B4_PM_006</code></td><td><strong>OMNI-HUB</strong><div class='muted'>tri_domain_sleep_wake</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>L1+EEE+SR-&gt;wake-&gt;256B audit</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr></tbody></table></div></section><section class='card'><h3>slang 12.2 提取接口端口映射（66 信号）</h3><div class='tbl-wrap'><table><thead><tr><th>规范信号 (Canonical)</th><th>RTL 端口名</th><th>方向</th><th>位宽</th></tr></thead><tbody><tr><td><code>IF1:pcie(slave).rx_valid</code></td><td><code>pcie_rx_tvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).rx_ready</code></td><td><code>pcie_rx_tready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).rx_data</code></td><td><code>pcie_rx_tdata</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>64-bit</code></td></tr><tr><td><code>IF1:pcie(slave).rx_last</code></td><td><code>pcie_rx_tlast</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).tx_valid</code></td><td><code>pcie_tx_tvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).tx_ready</code></td><td><code>pcie_tx_tready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).tx_data</code></td><td><code>pcie_tx_tdata</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>64-bit</code></td></tr><tr><td><code>IF1:pcie(slave).tx_last</code></td><td><code>pcie_tx_tlast</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).link_up</code></td><td><code>pcie_link_up</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:pcie(slave).speed</code></td><td><code>pcie_cfg_speed</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:pcie(slave).lanes</code></td><td><code>pcie_cfg_lanes</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>6-bit</code></td></tr><tr><td><code>IF2:ddr4(master).act_n</code></td><td><code>ddr4_act_n</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:ddr4(master).cs_n</code></td><td><code>ddr4_cs_n</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:ddr4(master).bg</code></td><td><code>ddr4_bg</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF2:ddr4(master).ba</code></td><td><code>ddr4_ba</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF2:ddr4(master).adr</code></td><td><code>ddr4_adr</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>17-bit</code></td></tr><tr><td><code>IF2:ddr4(master).dq</code></td><td><code>ddr4_dq</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>64-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awaddr</code></td><td><code>s_axi_awaddr</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awvalid</code></td><td><code>s_axi_awvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awready</code></td><td><code>s_axi_awready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).wdata</code></td><td><code>s_axi_wdata</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF3:axi4(slave).wstrb</code></td><td><code>s_axi_wstrb</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF3:axi4(slave).wvalid</code></td><td><code>s_axi_wvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).wready</code></td><td><code>s_axi_wready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).bresp</code></td><td><code>s_axi_bresp</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF3:axi4(slave).bvalid</code></td><td><code>s_axi_bvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).bready</code></td><td><code>s_axi_bready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).araddr</code></td><td><code>s_axi_araddr</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arvalid</code></td><td><code>s_axi_arvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arready</code></td><td><code>s_axi_arready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rdata</code></td><td><code>s_axi_rdata</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rresp</code></td><td><code>s_axi_rresp</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rvalid</code></td><td><code>s_axi_rvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rready</code></td><td><code>s_axi_rready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awid</code></td><td><code>s_axi_awid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awlen</code></td><td><code>s_axi_awlen</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awsize</code></td><td><code>s_axi_awsize</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>3-bit</code></td></tr><tr><td><code>IF3:axi4(slave).awburst</code></td><td><code>s_axi_awburst</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF3:axi4(slave).wlast</code></td><td><code>s_axi_wlast</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF3:axi4(slave).bid</code></td><td><code>s_axi_bid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arid</code></td><td><code>s_axi_arid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arlen</code></td><td><code>s_axi_arlen</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arsize</code></td><td><code>s_axi_arsize</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>3-bit</code></td></tr><tr><td><code>IF3:axi4(slave).arburst</code></td><td><code>s_axi_arburst</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rid</code></td><td><code>s_axi_rid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF3:axi4(slave).rlast</code></td><td><code>s_axi_rlast</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF4:apb(slave).psel</code></td><td><code>s_apb_psel</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF4:apb(slave).penable</code></td><td><code>s_apb_penable</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF4:apb(slave).pwrite</code></td><td><code>s_apb_pwrite</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF4:apb(slave).paddr</code></td><td><code>s_apb_paddr</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF4:apb(slave).pwdata</code></td><td><code>s_apb_pwdata</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF4:apb(slave).pstrb</code></td><td><code>s_apb_pstrb</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF4:apb(slave).pready</code></td><td><code>s_apb_pready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF4:apb(slave).prdata</code></td><td><code>s_apb_prdata</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF4:apb(slave).pslverr</code></td><td><code>s_apb_pslverr</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF5:spi(slave).sclk</code></td><td><code>s_spi_sclk</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF5:spi(slave).cs_n</code></td><td><code>s_spi_cs_n</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF5:spi(slave).mosi</code></td><td><code>s_spi_mosi</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF5:spi(slave).miso</code></td><td><code>s_spi_miso</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).rx_dv</code></td><td><code>eth_rx_dv</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).rx_data</code></td><td><code>eth_rx_data</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).tx_en</code></td><td><code>eth_tx_en</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).tx_data</code></td><td><code>eth_tx_data</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).an_done</code></td><td><code>eth_an_done</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).an_fail</code></td><td><code>eth_an_fail</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF6:ethernet(slave).link_up</code></td><td><code>eth_link_up</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr></tbody></table></div></section><section class='card'><h3>被测 DUT 源码（<code>examples/multi_bus_ref/omni_hub/soc_omni_bus_hub.sv</code> · 440 行）</h3><details open><summary style='cursor:pointer;font-weight:600;margin-bottom:8px'>展开 / 收起 DUT SystemVerilog 源码</summary><pre class='sv-code'><span class="sv-ln">   1</span> `timescale 1ns/1ps
+<span class="sv-ln">   2</span> <span class="sv-cmt">// ============================================================================</span>
+<span class="sv-ln">   3</span> <span class="sv-cmt">// Unified All-Directional Translation + Shared 256B Memory SoC Hub</span>
+<span class="sv-ln">   4</span> <span class="sv-cmt">//   6 Standard Interfaces around 1 Arbitrated, BUF_CYCS-Buffered 256B Backing MEM:</span>
+<span class="sv-ln">   5</span> <span class="sv-cmt">//     IF1: SPI Slave  (Mode 0/1/2/3 CPOL/CPHA)</span>
+<span class="sv-ln">   6</span> <span class="sv-cmt">//     IF2: APB4 Slave (32-bit + PSTRB + PSLVERR)</span>
+<span class="sv-ln">   7</span> <span class="sv-cmt">//     IF3: AXI4 Slave (32-bit + WSTRB + ID + SLVERR)</span>
+<span class="sv-ln">   8</span> <span class="sv-cmt">//     IF4: Ethernet GMII (Auto-Negotiation + Cable Hot-Plug + CRC + EEE Sleep)</span>
+<span class="sv-ln">   9</span> <span class="sv-cmt">//     IF5: PCIe TLP   (POR-&gt;LTSSM-&gt;L0 + Surprise Hot-Plug + L1 Sleep)</span>
+<span class="sv-ln">  10</span> <span class="sv-cmt">//     IF6: DDR4 PHY   (POR-&gt;CKE-&gt;MRS-&gt;ZQCL-&gt;READY + Self-Refresh Sleep)</span>
+<span class="sv-ln">  11</span> <span class="sv-cmt">// ============================================================================</span>
+<span class="sv-ln">  12</span> <span class="sv-kw">module</span> soc_omni_bus_hub #(
+<span class="sv-ln">  13</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> BUF_CYCS = <span class="sv-num">2</span>,
+<span class="sv-ln">  14</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> GEN      = <span class="sv-num">4</span>,
+<span class="sv-ln">  15</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> LANES    = <span class="sv-num">4</span>
+<span class="sv-ln">  16</span> ) (
+<span class="sv-ln">  17</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        clk,
+<span class="sv-ln">  18</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        por_n,
+<span class="sv-ln">  19</span>   <span class="sv-cmt">// ---- Mode / Hot-Plug / Negotiation / Power-Management Controls ----</span>
+<span class="sv-ln">  20</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  spi_mode,             <span class="sv-cmt">// {CPOL, CPHA} = 00..11</span>
+<span class="sv-ln">  21</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        eth_cable_present,    <span class="sv-cmt">// 1=plugged, 0=unplugged (hot-plug!)</span>
+<span class="sv-ln">  22</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  eth_peer_cap,         <span class="sv-cmt">// 11=1000M, 10=100M, 00=AN_FAIL</span>
+<span class="sv-ln">  23</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        eee_sleep_req,
+<span class="sv-ln">  24</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        eee_sleep_ack,
+<span class="sv-ln">  25</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pcie_hotplug_present, <span class="sv-cmt">// 1=inserted, 0=surprise-removed (hot-plug!)</span>
+<span class="sv-ln">  26</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pcie_deskew_ok,       <span class="sv-cmt">// 1=deskew pass, 0=LTSSM config fail</span>
+<span class="sv-ln">  27</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pm_l1_req,
+<span class="sv-ln">  28</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        pm_l1_ack,
+<span class="sv-ln">  29</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        ddr_sr_req,
+<span class="sv-ln">  30</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        ddr_sr_ack,
+<span class="sv-ln">  31</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        ddr_ready,
+<span class="sv-ln">  32</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>]  ltssm_state,          <span class="sv-cmt">// 0=DETECT,1=POLL,2=CFG,3=L0,4=L1,5=FAIL</span>
+<span class="sv-ln">  33</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        tlp_reject_nol0,
+<span class="sv-ln">  34</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        rx_crc_err,
+<span class="sv-ln">  35</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        rx_drop_nolink,
+<span class="sv-ln">  36</span>   <span class="sv-cmt">// ---- IF1: SPI Slave (16b frame: [15]=WR, [14:8]=addr, [7:0]=data) ----</span>
+<span class="sv-ln">  37</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_spi_sclk,
+<span class="sv-ln">  38</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_spi_cs_n,
+<span class="sv-ln">  39</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_spi_mosi,
+<span class="sv-ln">  40</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_spi_miso,
+<span class="sv-ln">  41</span>   <span class="sv-cmt">// ---- IF2: APB4 Slave ----</span>
+<span class="sv-ln">  42</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_apb_psel,
+<span class="sv-ln">  43</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_apb_penable,
+<span class="sv-ln">  44</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_apb_pwrite,
+<span class="sv-ln">  45</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] s_apb_paddr,
+<span class="sv-ln">  46</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] s_apb_pwdata,
+<span class="sv-ln">  47</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_apb_pstrb,
+<span class="sv-ln">  48</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_apb_pready,
+<span class="sv-ln">  49</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] s_apb_prdata,
+<span class="sv-ln">  50</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_apb_pslverr,
+<span class="sv-ln">  51</span>   <span class="sv-cmt">// ---- IF3: AXI4 Slave ----</span>
+<span class="sv-ln">  52</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_axi_awid,
+<span class="sv-ln">  53</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] s_axi_awaddr,
+<span class="sv-ln">  54</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]  s_axi_awlen,
+<span class="sv-ln">  55</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>]  s_axi_awsize,
+<span class="sv-ln">  56</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_axi_awburst,
+<span class="sv-ln">  57</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_awvalid,
+<span class="sv-ln">  58</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_awready,
+<span class="sv-ln">  59</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] s_axi_wdata,
+<span class="sv-ln">  60</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_axi_wstrb,
+<span class="sv-ln">  61</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_wlast,
+<span class="sv-ln">  62</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_wvalid,
+<span class="sv-ln">  63</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_wready,
+<span class="sv-ln">  64</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_axi_bid,
+<span class="sv-ln">  65</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_axi_bresp,
+<span class="sv-ln">  66</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_bvalid,
+<span class="sv-ln">  67</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_bready,
+<span class="sv-ln">  68</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_axi_arid,
+<span class="sv-ln">  69</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] s_axi_araddr,
+<span class="sv-ln">  70</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]  s_axi_arlen,
+<span class="sv-ln">  71</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>]  s_axi_arsize,
+<span class="sv-ln">  72</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_axi_arburst,
+<span class="sv-ln">  73</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_arvalid,
+<span class="sv-ln">  74</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_arready,
+<span class="sv-ln">  75</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  s_axi_rid,
+<span class="sv-ln">  76</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] s_axi_rdata,
+<span class="sv-ln">  77</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_axi_rresp,
+<span class="sv-ln">  78</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_rlast,
+<span class="sv-ln">  79</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        s_axi_rvalid,
+<span class="sv-ln">  80</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        s_axi_rready,
+<span class="sv-ln">  81</span>   <span class="sv-cmt">// ---- IF4: Ethernet GMII RX/TX ----</span>
+<span class="sv-ln">  82</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        eth_rx_dv,
+<span class="sv-ln">  83</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]  eth_rx_data,
+<span class="sv-ln">  84</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        eth_tx_en,
+<span class="sv-ln">  85</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]  eth_tx_data,
+<span class="sv-ln">  86</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        eth_an_done,
+<span class="sv-ln">  87</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        eth_an_fail,
+<span class="sv-ln">  88</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        eth_link_up,
+<span class="sv-ln">  89</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  eth_speed,
+<span class="sv-ln">  90</span>   <span class="sv-cmt">// ---- IF5: PCIe TLP RX/TX ----</span>
+<span class="sv-ln">  91</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pcie_rx_tvalid,
+<span class="sv-ln">  92</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        pcie_rx_tready,
+<span class="sv-ln">  93</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">63</span>:<span class="sv-num">0</span>] pcie_rx_tdata,
+<span class="sv-ln">  94</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pcie_rx_tlast,
+<span class="sv-ln">  95</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        pcie_tx_tvalid,
+<span class="sv-ln">  96</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>        pcie_tx_tready,
+<span class="sv-ln">  97</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">63</span>:<span class="sv-num">0</span>] pcie_tx_tdata,
+<span class="sv-ln">  98</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        pcie_tx_tlast,
+<span class="sv-ln">  99</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        pcie_link_up,
+<span class="sv-ln"> 100</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  pcie_cfg_speed,
+<span class="sv-ln"> 101</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">5</span>:<span class="sv-num">0</span>]  pcie_cfg_lanes,
+<span class="sv-ln"> 102</span>   <span class="sv-cmt">// ---- IF6: DDR4 PHY Command Bus (backing 256B shared MEM) ----</span>
+<span class="sv-ln"> 103</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        ddr4_cke,
+<span class="sv-ln"> 104</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        ddr4_act_n,
+<span class="sv-ln"> 105</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>        ddr4_cs_n,
+<span class="sv-ln"> 106</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  ddr4_bg,
+<span class="sv-ln"> 107</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]  ddr4_ba,
+<span class="sv-ln"> 108</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">16</span>:<span class="sv-num">0</span>] ddr4_adr,
+<span class="sv-ln"> 109</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">63</span>:<span class="sv-num">0</span>] ddr4_dq
+<span class="sv-ln"> 110</span> );
+<span class="sv-ln"> 111</span>   <span class="sv-cmt">// Unified 256-Byte Shared Memory (64 x 32-bit words, accessible by ALL 6 protocols!)</span>
+<span class="sv-ln"> 112</span>   <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>] mem [<span class="sv-num">0</span>:<span class="sv-num">255</span>];
+<span class="sv-ln"> 113</span> 
+<span class="sv-ln"> 114</span>   <span class="sv-cmt">// ---- DDR4 POR -&gt; CKE -&gt; MRS -&gt; ZQCL -&gt; READY / Self-Refresh FSM ----</span>
+<span class="sv-ln"> 115</span>   <span class="sv-kw">localparam</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] D_POR = <span class="sv-num">0</span>, D_CKE = <span class="sv-num">1</span>, D_MRS = <span class="sv-num">2</span>, D_ZQCL = <span class="sv-num">3</span>, D_READY = <span class="sv-num">4</span>, D_SR = <span class="sv-num">5</span>;
+<span class="sv-ln"> 116</span>   <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] ddr_st, ddr_cnt;
+<span class="sv-ln"> 117</span>   <span class="sv-kw">assign</span> ddr_ready  = (ddr_st == D_READY);
+<span class="sv-ln"> 118</span>   <span class="sv-kw">assign</span> ddr_sr_ack = (ddr_st == D_SR);
+<span class="sv-ln"> 119</span>   <span class="sv-kw">assign</span> ddr4_cke   = (ddr_st != D_POR &amp;&amp; ddr_st != D_SR);
+<span class="sv-ln"> 120</span> 
+<span class="sv-ln"> 121</span>   <span class="sv-cmt">// ---- Ethernet Auto-Negotiation + Cable Hot-Plug + EEE Sleep FSM ----</span>
+<span class="sv-ln"> 122</span>   <span class="sv-kw">localparam</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>] E_DOWN = <span class="sv-num">0</span>, E_TRAIN = <span class="sv-num">1</span>, E_UP = <span class="sv-num">2</span>, E_FAIL = <span class="sv-num">3</span>;
+<span class="sv-ln"> 123</span>   <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>] eth_st;
+<span class="sv-ln"> 124</span>   <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] eth_cnt;
+<span class="sv-ln"> 125</span>   <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>] eth_cap_d;
+<span class="sv-ln"> 126</span>   <span class="sv-kw">assign</span> eth_an_done = (eth_st == E_UP || eth_st == E_FAIL);
+<span class="sv-ln"> 127</span>   <span class="sv-kw">assign</span> eth_an_fail = (eth_st == E_FAIL);
+<span class="sv-ln"> 128</span>   <span class="sv-kw">assign</span> eth_link_up = (eth_st == E_UP) &amp;&amp; eth_cable_present &amp;&amp; !eee_sleep_ack;
+<span class="sv-ln"> 129</span> 
+<span class="sv-ln"> 130</span>   <span class="sv-cmt">// ---- PCIe LTSSM + Surprise Hot-Plug + L1 Sleep FSM ----</span>
+<span class="sv-ln"> 131</span>   <span class="sv-kw">localparam</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] P_DETECT = <span class="sv-num">0</span>, P_POLL = <span class="sv-num">1</span>, P_CFG = <span class="sv-num">2</span>, P_L0 = <span class="sv-num">3</span>, P_L1 = <span class="sv-num">4</span>, P_FAIL = <span class="sv-num">5</span>;
+<span class="sv-ln"> 132</span>   <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] pcie_cnt;
+<span class="sv-ln"> 133</span>   <span class="sv-kw">assign</span> pcie_link_up   = (ltssm_state == P_L0) &amp;&amp; pcie_hotplug_present;
+<span class="sv-ln"> 134</span>   <span class="sv-kw">assign</span> pm_l1_ack      = (ltssm_state == P_L1);
+<span class="sv-ln"> 135</span>   <span class="sv-kw">assign</span> pcie_cfg_speed = pcie_link_up ? <span class="sv-num">4</span>&#x27;(GEN) : <span class="sv-num">4</span>&#x27;d0;
+<span class="sv-ln"> 136</span>   <span class="sv-kw">assign</span> pcie_cfg_lanes = pcie_link_up ? <span class="sv-num">6</span>&#x27;(LANES) : <span class="sv-num">6</span>&#x27;d0;
+<span class="sv-ln"> 137</span> 
+<span class="sv-ln"> 138</span>   <span class="sv-cmt">// ---- SPI Slave 4-Mode Edge Detector ----</span>
+<span class="sv-ln"> 139</span>   <span class="sv-kw">logic</span> sclk_d;
+<span class="sv-ln"> 140</span>   <span class="sv-kw">wire</span> sclk_rise   = s_spi_sclk &amp;&amp; !sclk_d;
+<span class="sv-ln"> 141</span>   <span class="sv-kw">wire</span> sclk_fall   = !s_spi_sclk &amp;&amp; sclk_d;
+<span class="sv-ln"> 142</span>   <span class="sv-kw">wire</span> sample_edge = (spi_mode[<span class="sv-num">1</span>] ^ spi_mode[<span class="sv-num">0</span>]) ? sclk_fall : sclk_rise;
+<span class="sv-ln"> 143</span>   <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] spi_rx;
+<span class="sv-ln"> 144</span>   <span class="sv-kw">logic</span> [<span class="sv-num">4</span>:<span class="sv-num">0</span>]  spi_bcnt;
+<span class="sv-ln"> 145</span>   <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]  spi_tx;
+<span class="sv-ln"> 146</span>   <span class="sv-kw">assign</span> s_spi_miso = spi_tx[<span class="sv-num">7</span>];
+<span class="sv-ln"> 147</span> 
+<span class="sv-ln"> 148</span>   <span class="sv-cmt">// ---- APB Buffered FSM (BUF_CYCS) ----</span>
+<span class="sv-ln"> 149</span>   <span class="sv-kw">logic</span>       apb_buf_act, apb_done;
+<span class="sv-ln"> 150</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>] apb_bcnt;
+<span class="sv-ln"> 151</span>   <span class="sv-kw">logic</span>       apb_wr_r;
+<span class="sv-ln"> 152</span>   <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] apb_addr_r;
+<span class="sv-ln"> 153</span>   <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] apb_wdata_r;
+<span class="sv-ln"> 154</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]  apb_strb_r;
+<span class="sv-ln"> 155</span> 
+<span class="sv-ln"> 156</span>   <span class="sv-cmt">// ---- AXI4 Buffered FSM (BUF_CYCS) ----</span>
+<span class="sv-ln"> 157</span>   <span class="sv-kw">logic</span>       axi_wr_act, axi_wbuf_act, axi_rbuf_act;
+<span class="sv-ln"> 158</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>] axi_wbcnt, axi_rbcnt, axi_wid, axi_rid_r, axi_wstrb_r;
+<span class="sv-ln"> 159</span>   <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] axi_waddr_r, axi_raddr_r;
+<span class="sv-ln"> 160</span>   <span class="sv-kw">logic</span> [<span class="sv-num">31</span>:<span class="sv-num">0</span>] axi_wdata_r;
+<span class="sv-ln"> 161</span> 
+<span class="sv-ln"> 162</span>   <span class="sv-cmt">// ---- Ethernet RX/TX ----</span>
+<span class="sv-ln"> 163</span>   <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] rx_idx, tx_idx;
+<span class="sv-ln"> 164</span>   <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>] rx_addr, rx_xor, tx_addr, tx_xor;
+<span class="sv-ln"> 165</span>   <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>] rx_buf [<span class="sv-num">0</span>:<span class="sv-num">3</span>];
+<span class="sv-ln"> 166</span>   <span class="sv-kw">logic</span>       tx_act;
+<span class="sv-ln"> 167</span> 
+<span class="sv-ln"> 168</span>   <span class="sv-cmt">// ---- PCIe Buffered FSM (BUF_CYCS) ----</span>
+<span class="sv-ln"> 169</span>   <span class="sv-kw">logic</span>       pcie_buf_act;
+<span class="sv-ln"> 170</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>] pcie_bcnt;
+<span class="sv-ln"> 171</span>   <span class="sv-kw">logic</span> [<span class="sv-num">63</span>:<span class="sv-num">0</span>] pcie_lat;
+<span class="sv-ln"> 172</span> 
+<span class="sv-ln"> 173</span>   <span class="sv-kw">logic</span> _u;
+<span class="sv-ln"> 174</span>   <span class="sv-kw">assign</span> _u = (^s_axi_awlen) ^ (^s_axi_awsize) ^ (^s_axi_awburst) ^ (^s_axi_arlen) ^ (^s_axi_arsize) ^ (^s_axi_arburst) ^ s_axi_wlast ^ pcie_rx_tlast;
+<span class="sv-ln"> 175</span> 
+<span class="sv-ln"> 176</span>   <span class="sv-kw">assign</span> s_axi_awready  = !axi_wr_act &amp;&amp; !axi_wbuf_act &amp;&amp; !s_axi_bvalid;
+<span class="sv-ln"> 177</span>   <span class="sv-kw">assign</span> s_axi_wready   = axi_wr_act;
+<span class="sv-ln"> 178</span>   <span class="sv-kw">assign</span> s_axi_arready  = !axi_rbuf_act &amp;&amp; !s_axi_rvalid;
+<span class="sv-ln"> 179</span>   <span class="sv-kw">assign</span> pcie_rx_tready = !pcie_buf_act &amp;&amp; !pcie_tx_tvalid;
+<span class="sv-ln"> 180</span> 
+<span class="sv-ln"> 181</span>   <span class="sv-kw">always_ff</span> @(<span class="sv-kw">posedge</span> clk) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 182</span>     <span class="sv-kw">if</span> (!por_n) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 183</span>       <span class="sv-kw">for</span> (<span class="sv-kw">int</span> i = <span class="sv-num">0</span>; i &lt; <span class="sv-num">256</span>; i++) mem[i] &lt;= <span class="sv-num">8</span>&#x27;h00;
+<span class="sv-ln"> 184</span>       ddr_st &lt;= D_POR; ddr_cnt &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 185</span>       ddr4_act_n &lt;= <span class="sv-num">1</span>; ddr4_cs_n &lt;= <span class="sv-num">1</span>; ddr4_bg &lt;= <span class="sv-num">0</span>; ddr4_ba &lt;= <span class="sv-num">0</span>; ddr4_adr &lt;= <span class="sv-num">0</span>; ddr4_dq &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 186</span>       eth_st &lt;= E_DOWN; eth_cnt &lt;= <span class="sv-num">0</span>; eth_speed &lt;= <span class="sv-num">0</span>; eth_cap_d &lt;= <span class="sv-num">0</span>; eee_sleep_ack &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 187</span>       ltssm_state &lt;= P_DETECT; pcie_cnt &lt;= <span class="sv-num">0</span>; tlp_reject_nol0 &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 188</span>       sclk_d &lt;= <span class="sv-num">0</span>; spi_rx &lt;= <span class="sv-num">0</span>; spi_bcnt &lt;= <span class="sv-num">0</span>; spi_tx &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 189</span>       apb_buf_act &lt;= <span class="sv-num">0</span>; apb_done &lt;= <span class="sv-num">0</span>; apb_bcnt &lt;= <span class="sv-num">0</span>; apb_wr_r &lt;= <span class="sv-num">0</span>; apb_addr_r &lt;= <span class="sv-num">0</span>; apb_wdata_r &lt;= <span class="sv-num">0</span>; apb_strb_r &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 190</span>       s_apb_pready &lt;= <span class="sv-num">0</span>; s_apb_prdata &lt;= <span class="sv-num">0</span>; s_apb_pslverr &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 191</span>       axi_wr_act &lt;= <span class="sv-num">0</span>; axi_wbuf_act &lt;= <span class="sv-num">0</span>; axi_rbuf_act &lt;= <span class="sv-num">0</span>; axi_wbcnt &lt;= <span class="sv-num">0</span>; axi_rbcnt &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 192</span>       axi_wid &lt;= <span class="sv-num">0</span>; axi_rid_r &lt;= <span class="sv-num">0</span>; axi_waddr_r &lt;= <span class="sv-num">0</span>; axi_raddr_r &lt;= <span class="sv-num">0</span>; axi_wdata_r &lt;= <span class="sv-num">0</span>; axi_wstrb_r &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 193</span>       s_axi_bvalid &lt;= <span class="sv-num">0</span>; s_axi_bresp &lt;= <span class="sv-num">0</span>; s_axi_bid &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 194</span>       s_axi_rvalid &lt;= <span class="sv-num">0</span>; s_axi_rresp &lt;= <span class="sv-num">0</span>; s_axi_rid &lt;= <span class="sv-num">0</span>; s_axi_rdata &lt;= <span class="sv-num">0</span>; s_axi_rlast &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 195</span>       rx_idx &lt;= <span class="sv-num">0</span>; rx_addr &lt;= <span class="sv-num">0</span>; rx_xor &lt;= <span class="sv-num">0</span>; rx_crc_err &lt;= <span class="sv-num">0</span>; rx_drop_nolink &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 196</span>       tx_act &lt;= <span class="sv-num">0</span>; tx_idx &lt;= <span class="sv-num">0</span>; tx_addr &lt;= <span class="sv-num">0</span>; tx_xor &lt;= <span class="sv-num">0</span>; eth_tx_en &lt;= <span class="sv-num">0</span>; eth_tx_data &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 197</span>       pcie_buf_act &lt;= <span class="sv-num">0</span>; pcie_bcnt &lt;= <span class="sv-num">0</span>; pcie_lat &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 198</span>       pcie_tx_tvalid &lt;= <span class="sv-num">0</span>; pcie_tx_tdata &lt;= <span class="sv-num">0</span>; pcie_tx_tlast &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 199</span>     <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 200</span>       ddr4_cs_n &lt;= <span class="sv-num">1</span>; ddr4_act_n &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 201</span> 
+<span class="sv-ln"> 202</span>       <span class="sv-cmt">// 1. DDR4 POR -&gt; CKE -&gt; MRS -&gt; ZQCL -&gt; READY / Self-Refresh</span>
+<span class="sv-ln"> 203</span>       <span class="sv-kw">case</span> (ddr_st)
+<span class="sv-ln"> 204</span>         D_POR:   <span class="sv-kw">if</span> (ddr_cnt == <span class="sv-num">2</span>) <span class="sv-kw">begin</span> ddr_st &lt;= D_CKE;  ddr_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span> <span class="sv-kw">else</span> ddr_cnt &lt;= ddr_cnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 205</span>         D_CKE:   <span class="sv-kw">if</span> (ddr_cnt == <span class="sv-num">2</span>) <span class="sv-kw">begin</span> ddr_st &lt;= D_MRS;  ddr_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span> <span class="sv-kw">else</span> ddr_cnt &lt;= ddr_cnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 206</span>         D_MRS:   <span class="sv-kw">begin</span> ddr4_cs_n &lt;= <span class="sv-num">0</span>; ddr4_adr &lt;= <span class="sv-num">17</span>&#x27;h0010; ddr_st &lt;= D_ZQCL; <span class="sv-kw">end</span>
+<span class="sv-ln"> 207</span>         D_ZQCL:  <span class="sv-kw">begin</span> ddr4_cs_n &lt;= <span class="sv-num">0</span>; ddr4_adr &lt;= <span class="sv-num">17</span>&#x27;h0400; ddr_st &lt;= D_READY; <span class="sv-kw">end</span>
+<span class="sv-ln"> 208</span>         D_READY: <span class="sv-kw">if</span> (ddr_sr_req &amp;&amp; !axi_wbuf_act &amp;&amp; !axi_rbuf_act &amp;&amp; !apb_buf_act &amp;&amp; !pcie_buf_act) ddr_st &lt;= D_SR;
+<span class="sv-ln"> 209</span>         D_SR:    <span class="sv-kw">if</span> (!ddr_sr_req) ddr_st &lt;= D_READY;
+<span class="sv-ln"> 210</span>         <span class="sv-kw">default</span>: ddr_st &lt;= D_POR;
+<span class="sv-ln"> 211</span>       <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 212</span> 
+<span class="sv-ln"> 213</span>       <span class="sv-cmt">// 2. Ethernet Cable Hot-Plug + Auto-Negotiation + EEE Sleep</span>
+<span class="sv-ln"> 214</span>       eth_cap_d &lt;= eth_peer_cap;
+<span class="sv-ln"> 215</span>       <span class="sv-kw">if</span> (!eth_cable_present) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 216</span>         <span class="sv-cmt">// Hot-plug cable unplug -&gt; immediate link drop &amp; abort!</span>
+<span class="sv-ln"> 217</span>         eth_st &lt;= E_DOWN; eth_speed &lt;= <span class="sv-num">2</span>&#x27;b00; eth_cnt &lt;= <span class="sv-num">0</span>; eee_sleep_ack &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 218</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 219</span>         <span class="sv-kw">case</span> (eth_st)
+<span class="sv-ln"> 220</span>           E_DOWN: <span class="sv-kw">begin</span> eth_st &lt;= E_TRAIN; eth_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 221</span>           E_TRAIN: <span class="sv-kw">begin</span>
+<span class="sv-ln"> 222</span>             <span class="sv-kw">if</span> (eth_cnt == <span class="sv-num">2</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 223</span>               <span class="sv-kw">if</span> (eth_peer_cap == <span class="sv-num">2</span>&#x27;b11)      <span class="sv-kw">begin</span> eth_st &lt;= E_UP;   eth_speed &lt;= <span class="sv-num">2</span>&#x27;b10; <span class="sv-kw">end</span>
+<span class="sv-ln"> 224</span>               <span class="sv-kw">else</span> <span class="sv-kw">if</span> (eth_peer_cap == <span class="sv-num">2</span>&#x27;b10) <span class="sv-kw">begin</span> eth_st &lt;= E_UP;   eth_speed &lt;= <span class="sv-num">2</span>&#x27;b01; <span class="sv-kw">end</span>
+<span class="sv-ln"> 225</span>               <span class="sv-kw">else</span>                            <span class="sv-kw">begin</span> eth_st &lt;= E_FAIL; eth_speed &lt;= <span class="sv-num">2</span>&#x27;b00; <span class="sv-kw">end</span>
+<span class="sv-ln"> 226</span>             <span class="sv-kw">end</span> <span class="sv-kw">else</span> eth_cnt &lt;= eth_cnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 227</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 228</span>           E_UP, E_FAIL: <span class="sv-kw">begin</span>
+<span class="sv-ln"> 229</span>             <span class="sv-kw">if</span> (eth_peer_cap != eth_cap_d) <span class="sv-kw">begin</span> eth_st &lt;= E_TRAIN; eth_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 230</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 231</span>         <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 232</span>         <span class="sv-kw">if</span> (eee_sleep_req &amp;&amp; eth_st == E_UP &amp;&amp; !tx_act &amp;&amp; !eth_rx_dv) eee_sleep_ack &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 233</span>         <span class="sv-kw">else</span> <span class="sv-kw">if</span> (!eee_sleep_req) eee_sleep_ack &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 234</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 235</span> 
+<span class="sv-ln"> 236</span>       <span class="sv-cmt">// 3. PCIe Surprise Hot-Plug + LTSSM + L1 Sleep</span>
+<span class="sv-ln"> 237</span>       <span class="sv-kw">if</span> (!pcie_hotplug_present) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 238</span>         <span class="sv-cmt">// Surprise removal -&gt; immediate drop to DETECT!</span>
+<span class="sv-ln"> 239</span>         ltssm_state &lt;= P_DETECT; pcie_cnt &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 240</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 241</span>         <span class="sv-kw">case</span> (ltssm_state)
+<span class="sv-ln"> 242</span>           P_DETECT: <span class="sv-kw">begin</span> ltssm_state &lt;= P_POLL; pcie_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 243</span>           P_POLL:   <span class="sv-kw">if</span> (pcie_cnt == <span class="sv-num">1</span>) <span class="sv-kw">begin</span> ltssm_state &lt;= P_CFG; pcie_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span> <span class="sv-kw">else</span> pcie_cnt &lt;= pcie_cnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 244</span>           P_CFG:    <span class="sv-kw">if</span> (pcie_deskew_ok) ltssm_state &lt;= P_L0; <span class="sv-kw">else</span> <span class="sv-kw">if</span> (pcie_cnt == <span class="sv-num">2</span>) ltssm_state &lt;= P_FAIL; <span class="sv-kw">else</span> pcie_cnt &lt;= pcie_cnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 245</span>           P_L0:     <span class="sv-kw">if</span> (pm_l1_req &amp;&amp; !pcie_buf_act &amp;&amp; !pcie_tx_tvalid) ltssm_state &lt;= P_L1;
+<span class="sv-ln"> 246</span>           P_L1:     <span class="sv-kw">if</span> (!pm_l1_req) ltssm_state &lt;= P_L0;
+<span class="sv-ln"> 247</span>           P_FAIL:   <span class="sv-kw">if</span> (pcie_deskew_ok) <span class="sv-kw">begin</span> ltssm_state &lt;= P_DETECT; pcie_cnt &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 248</span>           <span class="sv-kw">default</span>:  ltssm_state &lt;= P_DETECT;
+<span class="sv-ln"> 249</span>         <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 250</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 251</span> 
+<span class="sv-ln"> 252</span>       <span class="sv-cmt">// 4. IF1: SPI Slave -&gt; Shared MEM (Mode 0/1/2/3)</span>
+<span class="sv-ln"> 253</span>       sclk_d &lt;= s_spi_sclk;
+<span class="sv-ln"> 254</span>       <span class="sv-kw">if</span> (!ddr_ready || s_spi_cs_n) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 255</span>         spi_bcnt &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 256</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (sample_edge) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 257</span>         spi_rx &lt;= {spi_rx[<span class="sv-num">14</span>:<span class="sv-num">0</span>], s_spi_mosi};
+<span class="sv-ln"> 258</span>         <span class="sv-kw">if</span> (spi_bcnt == <span class="sv-num">7</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 259</span>           <span class="sv-kw">if</span> (!spi_rx[<span class="sv-num">6</span>]) spi_tx &lt;= mem[{<span class="sv-num">1</span>&#x27;b0, spi_rx[<span class="sv-num">5</span>:<span class="sv-num">0</span>], s_spi_mosi}];
+<span class="sv-ln"> 260</span>           spi_bcnt &lt;= spi_bcnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 261</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (spi_bcnt == <span class="sv-num">15</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 262</span>           <span class="sv-kw">logic</span> [<span class="sv-num">15</span>:<span class="sv-num">0</span>] fr;
+<span class="sv-ln"> 263</span>           fr = {spi_rx[<span class="sv-num">14</span>:<span class="sv-num">0</span>], s_spi_mosi};
+<span class="sv-ln"> 264</span>           <span class="sv-kw">if</span> (fr[<span class="sv-num">15</span>]) mem[{<span class="sv-num">1</span>&#x27;b0, fr[<span class="sv-num">14</span>:<span class="sv-num">8</span>]}] &lt;= fr[<span class="sv-num">7</span>:<span class="sv-num">0</span>];
+<span class="sv-ln"> 265</span>           spi_bcnt &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 266</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 267</span>           <span class="sv-kw">if</span> (spi_bcnt &gt; <span class="sv-num">7</span>) spi_tx &lt;= {spi_tx[<span class="sv-num">6</span>:<span class="sv-num">0</span>], <span class="sv-num">1</span>&#x27;b0};
+<span class="sv-ln"> 268</span>           spi_bcnt &lt;= spi_bcnt + <span class="sv-num">1</span>;
+<span class="sv-ln"> 269</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 270</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 271</span> 
+<span class="sv-ln"> 272</span>       <span class="sv-cmt">// 5. IF2: APB4 Slave (with BUF_CYCS buffer) -&gt; Shared MEM</span>
+<span class="sv-ln"> 273</span>       s_apb_pready &lt;= <span class="sv-num">0</span>; s_apb_pslverr &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 274</span>       <span class="sv-kw">if</span> (apb_done) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 275</span>         apb_done &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 276</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (!apb_buf_act &amp;&amp; s_apb_psel &amp;&amp; s_apb_penable) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 277</span>         apb_wr_r &lt;= s_apb_pwrite; apb_addr_r &lt;= s_apb_paddr; apb_wdata_r &lt;= s_apb_pwdata; apb_strb_r &lt;= s_apb_pstrb;
+<span class="sv-ln"> 278</span>         <span class="sv-kw">if</span> (BUF_CYCS == <span class="sv-num">0</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 279</span>           s_apb_pready &lt;= <span class="sv-num">1</span>; apb_done &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 280</span>           <span class="sv-kw">if</span> (!ddr_ready || s_apb_paddr &gt;= <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span> s_apb_pslverr &lt;= <span class="sv-num">1</span>; s_apb_prdata &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 281</span>           <span class="sv-kw">else</span> <span class="sv-kw">if</span> (s_apb_pwrite) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 282</span>             <span class="sv-kw">for</span> (<span class="sv-kw">int</span> b = <span class="sv-num">0</span>; b &lt; <span class="sv-num">4</span>; b++) <span class="sv-kw">if</span> (s_apb_pstrb[b]) mem[s_apb_paddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>] + <span class="sv-num">8</span>&#x27;(b)] &lt;= s_apb_pwdata[b*<span class="sv-num">8</span> +: <span class="sv-num">8</span>];
+<span class="sv-ln"> 283</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 284</span>             s_apb_prdata &lt;= {mem[s_apb_paddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d3], mem[s_apb_paddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d2], mem[s_apb_paddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d1], mem[s_apb_paddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 285</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 286</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 287</span>           apb_buf_act &lt;= <span class="sv-num">1</span>; apb_bcnt &lt;= <span class="sv-num">4</span>&#x27;(BUF_CYCS);
+<span class="sv-ln"> 288</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 289</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (apb_buf_act) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 290</span>         <span class="sv-kw">if</span> (apb_bcnt &lt;= <span class="sv-num">1</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 291</span>           apb_buf_act &lt;= <span class="sv-num">0</span>; s_apb_pready &lt;= <span class="sv-num">1</span>; apb_done &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 292</span>           <span class="sv-kw">if</span> (!ddr_ready || apb_addr_r &gt;= <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span> s_apb_pslverr &lt;= <span class="sv-num">1</span>; s_apb_prdata &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 293</span>           <span class="sv-kw">else</span> <span class="sv-kw">if</span> (apb_wr_r) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 294</span>             <span class="sv-kw">for</span> (<span class="sv-kw">int</span> b = <span class="sv-num">0</span>; b &lt; <span class="sv-num">4</span>; b++) <span class="sv-kw">if</span> (apb_strb_r[b]) mem[apb_addr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>] + <span class="sv-num">8</span>&#x27;(b)] &lt;= apb_wdata_r[b*<span class="sv-num">8</span> +: <span class="sv-num">8</span>];
+<span class="sv-ln"> 295</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 296</span>             s_apb_prdata &lt;= {mem[apb_addr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d3], mem[apb_addr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d2], mem[apb_addr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d1], mem[apb_addr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 297</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 298</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> apb_bcnt &lt;= apb_bcnt - <span class="sv-num">1</span>;
+<span class="sv-ln"> 299</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 300</span> 
+<span class="sv-ln"> 301</span>       <span class="sv-cmt">// 6. IF3: AXI4 Slave (with BUF_CYCS buffer) -&gt; Shared MEM + ETH TX trigger (0x0100)</span>
+<span class="sv-ln"> 302</span>       <span class="sv-kw">if</span> (s_axi_bvalid &amp;&amp; s_axi_bready) s_axi_bvalid &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 303</span>       <span class="sv-kw">if</span> (s_axi_rvalid &amp;&amp; s_axi_rready) <span class="sv-kw">begin</span> s_axi_rvalid &lt;= <span class="sv-num">0</span>; s_axi_rlast &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 304</span> 
+<span class="sv-ln"> 305</span>       <span class="sv-kw">if</span> (s_axi_awvalid &amp;&amp; s_axi_awready) <span class="sv-kw">begin</span> axi_wr_act &lt;= <span class="sv-num">1</span>; axi_wid &lt;= s_axi_awid; axi_waddr_r &lt;= s_axi_awaddr; <span class="sv-kw">end</span>
+<span class="sv-ln"> 306</span>       <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_wr_act &amp;&amp; s_axi_wvalid &amp;&amp; s_axi_wready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 307</span>         axi_wr_act &lt;= <span class="sv-num">0</span>; axi_wdata_r &lt;= s_axi_wdata; axi_wstrb_r &lt;= s_axi_wstrb;
+<span class="sv-ln"> 308</span>         <span class="sv-kw">if</span> (BUF_CYCS == <span class="sv-num">0</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 309</span>           s_axi_bvalid &lt;= <span class="sv-num">1</span>; s_axi_bid &lt;= axi_wid;
+<span class="sv-ln"> 310</span>           <span class="sv-kw">if</span> (!ddr_ready) s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 311</span>           <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_waddr_r &lt; <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 312</span>             <span class="sv-kw">for</span> (<span class="sv-kw">int</span> b = <span class="sv-num">0</span>; b &lt; <span class="sv-num">4</span>; b++) <span class="sv-kw">if</span> (s_axi_wstrb[b]) mem[axi_waddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>] + <span class="sv-num">8</span>&#x27;(b)] &lt;= s_axi_wdata[b*<span class="sv-num">8</span> +: <span class="sv-num">8</span>];
+<span class="sv-ln"> 313</span>             ddr4_cs_n &lt;= <span class="sv-num">0</span>; ddr4_bg &lt;= axi_waddr_r[<span class="sv-num">7</span>:<span class="sv-num">6</span>]; ddr4_ba &lt;= axi_waddr_r[<span class="sv-num">5</span>:<span class="sv-num">4</span>]; ddr4_dq &lt;= {<span class="sv-num">32</span>&#x27;h0, s_axi_wdata};
+<span class="sv-ln"> 314</span>             s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b00;
+<span class="sv-ln"> 315</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_waddr_r == <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 316</span>             <span class="sv-kw">if</span> (!eth_link_up) s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 317</span>             <span class="sv-kw">else</span> <span class="sv-kw">begin</span> tx_act &lt;= <span class="sv-num">1</span>; tx_idx &lt;= <span class="sv-num">0</span>; tx_addr &lt;= s_axi_wdata[<span class="sv-num">7</span>:<span class="sv-num">0</span>]; tx_xor &lt;= <span class="sv-num">0</span>; s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b00; <span class="sv-kw">end</span>
+<span class="sv-ln"> 318</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 319</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span> axi_wbuf_act &lt;= <span class="sv-num">1</span>; axi_wbcnt &lt;= <span class="sv-num">4</span>&#x27;(BUF_CYCS); <span class="sv-kw">end</span>
+<span class="sv-ln"> 320</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_wbuf_act) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 321</span>         <span class="sv-kw">if</span> (axi_wbcnt &lt;= <span class="sv-num">1</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 322</span>           axi_wbuf_act &lt;= <span class="sv-num">0</span>; s_axi_bvalid &lt;= <span class="sv-num">1</span>; s_axi_bid &lt;= axi_wid;
+<span class="sv-ln"> 323</span>           <span class="sv-kw">if</span> (!ddr_ready) s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 324</span>           <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_waddr_r &lt; <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 325</span>             <span class="sv-kw">for</span> (<span class="sv-kw">int</span> b = <span class="sv-num">0</span>; b &lt; <span class="sv-num">4</span>; b++) <span class="sv-kw">if</span> (axi_wstrb_r[b]) mem[axi_waddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>] + <span class="sv-num">8</span>&#x27;(b)] &lt;= axi_wdata_r[b*<span class="sv-num">8</span> +: <span class="sv-num">8</span>];
+<span class="sv-ln"> 326</span>             ddr4_cs_n &lt;= <span class="sv-num">0</span>; ddr4_bg &lt;= axi_waddr_r[<span class="sv-num">7</span>:<span class="sv-num">6</span>]; ddr4_ba &lt;= axi_waddr_r[<span class="sv-num">5</span>:<span class="sv-num">4</span>]; ddr4_dq &lt;= {<span class="sv-num">32</span>&#x27;h0, axi_wdata_r};
+<span class="sv-ln"> 327</span>             s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b00;
+<span class="sv-ln"> 328</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_waddr_r == <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 329</span>             <span class="sv-kw">if</span> (!eth_link_up) s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 330</span>             <span class="sv-kw">else</span> <span class="sv-kw">begin</span> tx_act &lt;= <span class="sv-num">1</span>; tx_idx &lt;= <span class="sv-num">0</span>; tx_addr &lt;= axi_wdata_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]; tx_xor &lt;= <span class="sv-num">0</span>; s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b00; <span class="sv-kw">end</span>
+<span class="sv-ln"> 331</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> s_axi_bresp &lt;= <span class="sv-num">2</span>&#x27;b10;
+<span class="sv-ln"> 332</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> axi_wbcnt &lt;= axi_wbcnt - <span class="sv-num">1</span>;
+<span class="sv-ln"> 333</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 334</span> 
+<span class="sv-ln"> 335</span>       <span class="sv-kw">if</span> (s_axi_arvalid &amp;&amp; s_axi_arready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 336</span>         axi_rid_r &lt;= s_axi_arid; axi_raddr_r &lt;= s_axi_araddr;
+<span class="sv-ln"> 337</span>         <span class="sv-kw">if</span> (BUF_CYCS == <span class="sv-num">0</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 338</span>           s_axi_rvalid &lt;= <span class="sv-num">1</span>; s_axi_rid &lt;= s_axi_arid; s_axi_rlast &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 339</span>           <span class="sv-kw">if</span> (!ddr_ready || s_axi_araddr &gt;= <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span> s_axi_rdata &lt;= <span class="sv-num">0</span>; s_axi_rresp &lt;= <span class="sv-num">2</span>&#x27;b10; <span class="sv-kw">end</span>
+<span class="sv-ln"> 340</span>           <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 341</span>             s_axi_rdata &lt;= {mem[s_axi_araddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d3], mem[s_axi_araddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d2], mem[s_axi_araddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d1], mem[s_axi_araddr[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 342</span>             s_axi_rresp &lt;= <span class="sv-num">2</span>&#x27;b00;
+<span class="sv-ln"> 343</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 344</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span> axi_rbuf_act &lt;= <span class="sv-num">1</span>; axi_rbcnt &lt;= <span class="sv-num">4</span>&#x27;(BUF_CYCS); <span class="sv-kw">end</span>
+<span class="sv-ln"> 345</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (axi_rbuf_act) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 346</span>         <span class="sv-kw">if</span> (axi_rbcnt &lt;= <span class="sv-num">1</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 347</span>           axi_rbuf_act &lt;= <span class="sv-num">0</span>; s_axi_rvalid &lt;= <span class="sv-num">1</span>; s_axi_rid &lt;= axi_rid_r; s_axi_rlast &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 348</span>           <span class="sv-kw">if</span> (!ddr_ready || axi_raddr_r &gt;= <span class="sv-num">16</span>&#x27;h0100) <span class="sv-kw">begin</span> s_axi_rdata &lt;= <span class="sv-num">0</span>; s_axi_rresp &lt;= <span class="sv-num">2</span>&#x27;b10; <span class="sv-kw">end</span>
+<span class="sv-ln"> 349</span>           <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 350</span>             s_axi_rdata &lt;= {mem[axi_raddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d3], mem[axi_raddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d2], mem[axi_raddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d1], mem[axi_raddr_r[<span class="sv-num">7</span>:<span class="sv-num">0</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 351</span>             s_axi_rresp &lt;= <span class="sv-num">2</span>&#x27;b00;
+<span class="sv-ln"> 352</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 353</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> axi_rbcnt &lt;= axi_rbcnt - <span class="sv-num">1</span>;
+<span class="sv-ln"> 354</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 355</span> 
+<span class="sv-ln"> 356</span>       <span class="sv-cmt">// 7. IF4: Ethernet RX -&gt; CRC -&gt; Shared MEM + TX serializer</span>
+<span class="sv-ln"> 357</span>       rx_crc_err &lt;= <span class="sv-num">0</span>; rx_drop_nolink &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 358</span>       <span class="sv-kw">if</span> (eth_rx_dv) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 359</span>         <span class="sv-kw">if</span> (!eth_link_up || !ddr_ready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 360</span>           rx_drop_nolink &lt;= <span class="sv-num">1</span>; rx_idx &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 361</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 362</span>           <span class="sv-kw">case</span> (rx_idx)
+<span class="sv-ln"> 363</span>             <span class="sv-num">3</span>&#x27;d0: <span class="sv-kw">if</span> (eth_rx_data == <span class="sv-num">8</span>&#x27;hD5) <span class="sv-kw">begin</span> rx_idx &lt;= <span class="sv-num">1</span>; rx_xor &lt;= <span class="sv-num">8</span>&#x27;hD5; <span class="sv-kw">end</span>
+<span class="sv-ln"> 364</span>             <span class="sv-num">3</span>&#x27;d1: <span class="sv-kw">begin</span> rx_addr &lt;= eth_rx_data; rx_xor &lt;= rx_xor ^ eth_rx_data; rx_idx &lt;= <span class="sv-num">2</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 365</span>             <span class="sv-num">3</span>&#x27;d2: <span class="sv-kw">begin</span> rx_buf[<span class="sv-num">0</span>] &lt;= eth_rx_data; rx_xor &lt;= rx_xor ^ eth_rx_data; rx_idx &lt;= <span class="sv-num">3</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 366</span>             <span class="sv-num">3</span>&#x27;d3: <span class="sv-kw">begin</span> rx_buf[<span class="sv-num">1</span>] &lt;= eth_rx_data; rx_xor &lt;= rx_xor ^ eth_rx_data; rx_idx &lt;= <span class="sv-num">4</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 367</span>             <span class="sv-num">3</span>&#x27;d4: <span class="sv-kw">begin</span> rx_buf[<span class="sv-num">2</span>] &lt;= eth_rx_data; rx_xor &lt;= rx_xor ^ eth_rx_data; rx_idx &lt;= <span class="sv-num">5</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 368</span>             <span class="sv-num">3</span>&#x27;d5: <span class="sv-kw">begin</span> rx_buf[<span class="sv-num">3</span>] &lt;= eth_rx_data; rx_xor &lt;= rx_xor ^ eth_rx_data; rx_idx &lt;= <span class="sv-num">6</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 369</span>             <span class="sv-num">3</span>&#x27;d6: <span class="sv-kw">begin</span>
+<span class="sv-ln"> 370</span>               <span class="sv-kw">if</span> (eth_rx_data == rx_xor) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 371</span>                 mem[rx_addr + <span class="sv-num">8</span>&#x27;d0] &lt;= rx_buf[<span class="sv-num">0</span>]; mem[rx_addr + <span class="sv-num">8</span>&#x27;d1] &lt;= rx_buf[<span class="sv-num">1</span>];
+<span class="sv-ln"> 372</span>                 mem[rx_addr + <span class="sv-num">8</span>&#x27;d2] &lt;= rx_buf[<span class="sv-num">2</span>]; mem[rx_addr + <span class="sv-num">8</span>&#x27;d3] &lt;= rx_buf[<span class="sv-num">3</span>];
+<span class="sv-ln"> 373</span>               <span class="sv-kw">end</span> <span class="sv-kw">else</span> rx_crc_err &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 374</span>               rx_idx &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 375</span>             <span class="sv-kw">end</span>
+<span class="sv-ln"> 376</span>             <span class="sv-kw">default</span>: rx_idx &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 377</span>           <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 378</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 379</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> rx_idx &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 380</span> 
+<span class="sv-ln"> 381</span>       eth_tx_en &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 382</span>       <span class="sv-kw">if</span> (tx_act) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 383</span>         <span class="sv-kw">if</span> (!eth_link_up) <span class="sv-kw">begin</span> tx_act &lt;= <span class="sv-num">0</span>; tx_idx &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 384</span>         <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 385</span>           eth_tx_en &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 386</span>           <span class="sv-kw">case</span> (tx_idx)
+<span class="sv-ln"> 387</span>             <span class="sv-num">3</span>&#x27;d0: <span class="sv-kw">begin</span> eth_tx_data &lt;= <span class="sv-num">8</span>&#x27;hD5; tx_xor &lt;= <span class="sv-num">8</span>&#x27;hD5; tx_idx &lt;= <span class="sv-num">1</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 388</span>             <span class="sv-num">3</span>&#x27;d1: <span class="sv-kw">begin</span> eth_tx_data &lt;= tx_addr; tx_xor &lt;= tx_xor ^ tx_addr; tx_idx &lt;= <span class="sv-num">2</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 389</span>             <span class="sv-num">3</span>&#x27;d2: <span class="sv-kw">begin</span> eth_tx_data &lt;= mem[tx_addr+<span class="sv-num">8</span>&#x27;d0]; tx_xor &lt;= tx_xor ^ mem[tx_addr+<span class="sv-num">8</span>&#x27;d0]; tx_idx &lt;= <span class="sv-num">3</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 390</span>             <span class="sv-num">3</span>&#x27;d3: <span class="sv-kw">begin</span> eth_tx_data &lt;= mem[tx_addr+<span class="sv-num">8</span>&#x27;d1]; tx_xor &lt;= tx_xor ^ mem[tx_addr+<span class="sv-num">8</span>&#x27;d1]; tx_idx &lt;= <span class="sv-num">4</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 391</span>             <span class="sv-num">3</span>&#x27;d4: <span class="sv-kw">begin</span> eth_tx_data &lt;= mem[tx_addr+<span class="sv-num">8</span>&#x27;d2]; tx_xor &lt;= tx_xor ^ mem[tx_addr+<span class="sv-num">8</span>&#x27;d2]; tx_idx &lt;= <span class="sv-num">5</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 392</span>             <span class="sv-num">3</span>&#x27;d5: <span class="sv-kw">begin</span> eth_tx_data &lt;= mem[tx_addr+<span class="sv-num">8</span>&#x27;d3]; tx_xor &lt;= tx_xor ^ mem[tx_addr+<span class="sv-num">8</span>&#x27;d3]; tx_idx &lt;= <span class="sv-num">6</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 393</span>             <span class="sv-num">3</span>&#x27;d6: <span class="sv-kw">begin</span> eth_tx_data &lt;= tx_xor; tx_act &lt;= <span class="sv-num">0</span>; tx_idx &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 394</span>             <span class="sv-kw">default</span>: tx_act &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 395</span>           <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 396</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 397</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 398</span> 
+<span class="sv-ln"> 399</span>       <span class="sv-cmt">// 8. IF5: PCIe TLP (with BUF_CYCS buffer) -&gt; Shared MEM</span>
+<span class="sv-ln"> 400</span>       tlp_reject_nol0 &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 401</span>       <span class="sv-kw">if</span> (pcie_tx_tvalid &amp;&amp; pcie_tx_tready) <span class="sv-kw">begin</span> pcie_tx_tvalid &lt;= <span class="sv-num">0</span>; pcie_tx_tlast &lt;= <span class="sv-num">0</span>; <span class="sv-kw">end</span>
+<span class="sv-ln"> 402</span>       <span class="sv-kw">if</span> (!pcie_buf_act &amp;&amp; pcie_rx_tvalid &amp;&amp; pcie_rx_tready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 403</span>         <span class="sv-kw">if</span> (!pcie_link_up || !ddr_ready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 404</span>           tlp_reject_nol0 &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 405</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (BUF_CYCS == <span class="sv-num">0</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 406</span>           <span class="sv-kw">if</span> (pcie_rx_tdata[<span class="sv-num">63</span>:<span class="sv-num">56</span>] == <span class="sv-num">8</span>&#x27;h40) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 407</span>             mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d0] &lt;= pcie_rx_tdata[<span class="sv-num">7</span>:<span class="sv-num">0</span>];
+<span class="sv-ln"> 408</span>             mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d1] &lt;= pcie_rx_tdata[<span class="sv-num">15</span>:<span class="sv-num">8</span>];
+<span class="sv-ln"> 409</span>             mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d2] &lt;= pcie_rx_tdata[<span class="sv-num">23</span>:<span class="sv-num">16</span>];
+<span class="sv-ln"> 410</span>             mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d3] &lt;= pcie_rx_tdata[<span class="sv-num">31</span>:<span class="sv-num">24</span>];
+<span class="sv-ln"> 411</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (pcie_rx_tdata[<span class="sv-num">63</span>:<span class="sv-num">56</span>] == <span class="sv-num">8</span>&#x27;h00) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 412</span>             pcie_tx_tvalid &lt;= <span class="sv-num">1</span>; pcie_tx_tlast &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 413</span>             pcie_tx_tdata  &lt;= {<span class="sv-num">8</span>&#x27;h4A, pcie_rx_tdata[<span class="sv-num">55</span>:<span class="sv-num">48</span>], pcie_rx_tdata[<span class="sv-num">47</span>:<span class="sv-num">32</span>],
+<span class="sv-ln"> 414</span>               mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d3], mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d2],
+<span class="sv-ln"> 415</span>               mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d1], mem[pcie_rx_tdata[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 416</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 417</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln"> 418</span>           pcie_buf_act &lt;= <span class="sv-num">1</span>; pcie_bcnt &lt;= <span class="sv-num">4</span>&#x27;(BUF_CYCS); pcie_lat &lt;= pcie_rx_tdata;
+<span class="sv-ln"> 419</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 420</span>       <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (pcie_buf_act) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 421</span>         <span class="sv-kw">if</span> (pcie_bcnt &lt;= <span class="sv-num">1</span>) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 422</span>           pcie_buf_act &lt;= <span class="sv-num">0</span>;
+<span class="sv-ln"> 423</span>           <span class="sv-kw">if</span> (!pcie_link_up || !ddr_ready) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 424</span>             tlp_reject_nol0 &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 425</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (pcie_lat[<span class="sv-num">63</span>:<span class="sv-num">56</span>] == <span class="sv-num">8</span>&#x27;h40) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 426</span>             mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d0] &lt;= pcie_lat[<span class="sv-num">7</span>:<span class="sv-num">0</span>];
+<span class="sv-ln"> 427</span>             mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d1] &lt;= pcie_lat[<span class="sv-num">15</span>:<span class="sv-num">8</span>];
+<span class="sv-ln"> 428</span>             mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d2] &lt;= pcie_lat[<span class="sv-num">23</span>:<span class="sv-num">16</span>];
+<span class="sv-ln"> 429</span>             mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d3] &lt;= pcie_lat[<span class="sv-num">31</span>:<span class="sv-num">24</span>];
+<span class="sv-ln"> 430</span>           <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">if</span> (pcie_lat[<span class="sv-num">63</span>:<span class="sv-num">56</span>] == <span class="sv-num">8</span>&#x27;h00) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 431</span>             pcie_tx_tvalid &lt;= <span class="sv-num">1</span>; pcie_tx_tlast &lt;= <span class="sv-num">1</span>;
+<span class="sv-ln"> 432</span>             pcie_tx_tdata  &lt;= {<span class="sv-num">8</span>&#x27;h4A, pcie_lat[<span class="sv-num">55</span>:<span class="sv-num">48</span>], pcie_lat[<span class="sv-num">47</span>:<span class="sv-num">32</span>],
+<span class="sv-ln"> 433</span>               mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d3], mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d2],
+<span class="sv-ln"> 434</span>               mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d1], mem[pcie_lat[<span class="sv-num">39</span>:<span class="sv-num">32</span>]+<span class="sv-num">8</span>&#x27;d0]};
+<span class="sv-ln"> 435</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 436</span>         <span class="sv-kw">end</span> <span class="sv-kw">else</span> pcie_bcnt &lt;= pcie_bcnt - <span class="sv-num">1</span>;
+<span class="sv-ln"> 437</span>       <span class="sv-kw">end</span>
+<span class="sv-ln"> 438</span>     <span class="sv-kw">end</span>
+<span class="sv-ln"> 439</span>   <span class="sv-kw">end</span>
+<span class="sv-ln"> 440</span> <span class="sv-kw">endmodule</span></pre></details></section><section class='card'><h3>本项目原始仿真日志</h3><pre>== sim: omni_b0 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B0_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=0) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B0_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B0_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B0_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B0_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B0_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=0) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 50us; walltime 0.008 s; speed 6.512 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB
+== sim: omni_b2 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B2_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=2) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B2_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B2_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B2_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B2_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B2_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=2) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 54us; walltime 0.008 s; speed 6.982 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB
+== sim: omni_b4 (top=tb_soc_omni_bus_hub) ==
+[CHECK] id=OMNI_B4_POR_001 | proto=OMNI-HUB | cat=por_init_guard | tx=APB RD before DDR4 READY (BUF=4) | exp=pslverr=1 | got=1 | status=PASS
+[CHECK] id=OMNI_B4_NEG_002 | proto=OMNI-HUB | cat=an_and_ltssm_fail | tx=ETH cap=00 + PCIe deskew=0 | exp=an_fail=1,SLVERR,st=5,rej=1 | got=an=1,SLVERR,st=5,rej=1 | status=PASS
+[CHECK] id=OMNI_B4_XMEM_003 | proto=OMNI-HUB | cat=all_dir_256B_xproto | tx=SPI/APB/AXI/ETH/PCIe cross-RD 256B | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=OMNI_B4_ETH_HP_004 | proto=OMNI-HUB | cat=eth_hotplug_reconnect | tx=unplug(drop)-&gt;replug(1000M)-&gt;RX/RD | exp=0x778899AA | got=0x778899aa | status=PASS
+[CHECK] id=OMNI_B4_PCIE_HP_005 | proto=OMNI-HUB | cat=pcie_hotplug_retrain | tx=remove(rej)-&gt;reinsert(L0)-&gt;MRd | exp=0x7d5914a0 | got=0x7d5914a0 | status=PASS
+[CHECK] id=OMNI_B4_PM_006 | proto=OMNI-HUB | cat=tri_domain_sleep_wake | tx=L1+EEE+SR-&gt;wake-&gt;256B audit | exp=256/256B_match | got=256/256B_match | status=PASS
+PASS: soc_omni_bus_hub(BUF=4) all 6 full-lifecycle/hotplug/256B checks passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/omni_hub/tb_soc_omni_bus_hub.sv:247: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 57us; walltime 0.007 s; speed 7.675 ms/s
+- Verilator: cpu 0.003 s on 1 threads; allocated 4 MB</pre></section></div></div></div>
+</div></body></html>

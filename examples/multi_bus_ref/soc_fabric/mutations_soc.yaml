@@ -1,0 +1,21 @@
+mutations:
+  - id: SM01_SPI_CPHA_BROKEN
+    file: spi_apb_bidir.sv
+    old: "wire sample_edge = (cpol ^ cpha) ? sclk_fall : sclk_rise;"
+    new: "wire sample_edge = sclk_rise;"
+    desc: "Break SPI Mode 1/2 (CPOL^CPHA) sampling edge selection"
+  - id: SM02_ETH_AN_GUARD_BROKEN
+    file: eth_axi4_bidir.sv
+    old: "if (!eth_link_up) begin"
+    new: "if (1'b0) begin"
+    desc: "Bypass Ethernet link-up / Auto-Negotiation failure TX/RX guard"
+  - id: SM03_PCIE_LTSSM_GATE_BROKEN
+    file: apb_pcie_axi4_ltssm_fabric.sv
+    old: "if (ltssm_state != ST_L0) begin"
+    new: "if (1'b0) begin"
+    desc: "Bypass PCIe LTSSM L0 gate (allows TLP during FAIL / L1 sleep)"
+  - id: SM04_DDR_SR_GUARD_BROKEN
+    file: axi4_ddr_init_sr_ctrl.sv
+    old: "if (!ddr_ready || wr_addr >= 16'h0100) begin"
+    new: "if (wr_addr >= 16'h0100) begin"
+    desc: "Bypass DDR POR/Self-Refresh readiness guard on AXI4 write"

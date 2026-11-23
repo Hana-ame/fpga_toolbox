@@ -439,6 +439,88 @@ def test_index_repo_include_boundary() -> None:
               f"top correctly attributes its own instantiations (got {mods.get('top', {}).get('instantiated_modules')})")
 
 
+def test_dual_side_apb_slave_emitter() -> None:
+    print("fusion: dual-side AXI4-Lite + APB master bridge emitter (zero WIDTHEXPAND)")
+    import shutil
+
+    import yaml
+
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        dut_sv = tdp / "dual_bridge_dut.sv"
+        dut_sv.write_text(
+            "`timescale 1ns/1ps\n"
+            "module dual_bridge_dut #(parameter int AW=8, DW=32) (\n"
+            "  input logic ACLK, input logic ARESETn,\n"
+            "  output logic AWREADY, input logic AWVALID, input logic [AW-1:0] AWADDR,\n"
+            "  output logic WREADY, input logic WVALID, input logic [DW-1:0] WDATA, input logic [DW/8-1:0] WSTRB,\n"
+            "  output logic BVALID, input logic BREADY, output logic [1:0] BRESP,\n"
+            "  output logic ARREADY, input logic ARVALID, input logic [AW-1:0] ARADDR,\n"
+            "  output logic RVALID, input logic RREADY, output logic [DW-1:0] RDATA, output logic [1:0] RRESP,\n"
+            "  output logic PSEL, output logic PENABLE, output logic PWRITE,\n"
+            "  output logic [AW-1:0] PADDR, output logic [DW-1:0] PWDATA,\n"
+            "  input logic PREADY, input logic [DW-1:0] PRDATA, input logic PSLVERR\n"
+            ");\n"
+            "  assign AWREADY=1'b0; assign WREADY=1'b0; assign BVALID=1'b0; assign BRESP=2'b0;\n"
+            "  assign ARREADY=1'b0; assign RVALID=1'b0; assign RDATA='0; assign RRESP=2'b0;\n"
+            "  assign PSEL=1'b0; assign PENABLE=1'b0; assign PWRITE=1'b0; assign PADDR='0; assign PWDATA='0;\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        draft_y = tdp / "draft.yaml"
+        r_ext = call_tool("extract_interfaces", {"rtl_file": str(dut_sv), "emit_draft_yaml": str(draft_y)})
+        check(r_ext["ok"], "dual-side bridge interfaces extracted")
+        spec = yaml.safe_load(draft_y.read_text(encoding="utf-8"))
+        spec["boundary"]["apb"]["wait_cycles"] = 1
+        spec["test_plan"]["illegal_addr_rules"] = [{"rule_id": "ILL_001", "offset": 0x3C, "expected_resp": "SLVERR"}]
+        draft_y.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+
+        tb_dir = tdp / "tb"
+        r_emit = call_tool("emit_testbench", {"spec_path": str(draft_y), "out_dir": str(tb_dir), "rtl_file": str(dut_sv)})
+        check(r_emit["ok"] and r_emit["data"].get("dual_side") is True, "emit_testbench reports dual_side=True")
+        arts = r_emit["data"].get("artifacts", {})
+        check("apb_slave_model" in arts and Path(arts["apb_slave_model"]).is_file(), "apb_slave_model.sv generated")
+        wrap_txt = Path(arts["unit_isolation_wrapper"]).read_text(encoding="utf-8")
+        check("u_apb_slv" in wrap_txt and ".PRDATA(apb_prdata)" in wrap_txt, "wrapper wires APB master to u_apb_slv (no 1'b0 tie-off)")
+
+        if shutil.which("verilator"):
+            proc = subprocess.run(
+                [
+                    "verilator", "--lint-only", "-Wall",
+                    "-Wno-DECLFILENAME", "-Wno-UNUSED", "-Wno-UNUSEDSIGNAL",
+                    "--top-module", "dual_bridge_dut_axil_wrap",
+                    str(dut_sv), arts["apb_slave_model"], arts["sva_protocol_checker"], arts["unit_isolation_wrapper"],
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            check(proc.returncode == 0 and "WIDTHEXPAND" not in proc.stderr and "WIDTHTRUNC" not in proc.stderr, "verilator --lint-only -Wall zero WIDTHEXPAND/WIDTHTRUNC")
+
+
+def test_multi_bus_classifiers():
+    """Verify slang/regex native classification for AHB-Lite, DDR3, DDR4, HBM, and PCIe Gen3/4/5."""
+    from fpga_toolbox.iface_extractor import tool_extract_interfaces
+    ref = Path(__file__).resolve().parents[1] / "examples" / "multi_bus_ref"
+    expected = {
+        "ahb_lite_slave.sv": ("ahb_lite", "HCLK", "HRESETn"),
+        "ddr3_mem_ctrl.sv": ("ddr3", "clk", "rst_n"),
+        "ddr4_mem_ctrl.sv": ("ddr4", "clk", "rst_n"),
+        "hbm_pc_ctrl.sv": ("hbm", "clk", "rst_n"),
+        "pcie_tlp_ep.sv": ("pcie", "clk", "rst_n"),
+    }
+    for fname, (proto, clk_name, rst_name) in expected.items():
+        res = tool_extract_interfaces(str(ref / fname))
+        assert res["ok"], f"{fname} extract failed: {res}"
+        mod = res["data"]["modules"][0]
+        assert mod["clock"]["port"] == clk_name, f"{fname} clk mismatch: {mod['clock']}"
+        assert mod["reset"]["port"] == rst_name, f"{fname} rst mismatch: {mod['reset']}"
+        protos = [i["protocol"] for i in mod["interfaces"]]
+        assert proto in protos, f"{fname} expected {proto}, got {protos}"
+        if proto == "pcie":
+            pcie_if = [i for i in mod["interfaces"] if i["protocol"] == "pcie"][0]
+            assert pcie_if.get("pcie_gen") == 4
+            assert pcie_if.get("pcie_lanes") == 4
+
+
 def main() -> int:
     test_cross_repo_extraction()
     test_index_repo_include_boundary()
@@ -450,7 +532,9 @@ def main() -> int:
     test_suite_identity_real_format()
     test_audit_and_registry()
     test_slang_backend_real_rtl()
+    test_dual_side_apb_slave_emitter()
     test_emit_testbench_error_paths()
+    test_multi_bus_classifiers()
     print("\n" + ("ALL FUSION CHECKS PASSED" if FAILS == 0 else f"{FAILS} CHECK(S) FAILED"))
     return 0 if FAILS == 0 else 1
 

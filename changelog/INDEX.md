@@ -1,0 +1,20 @@
+# Changelog 索引
+
+按迭代阶段拆分为独立变更记录，避免单文件臃肿：
+
+- `01-v0.5.0-fusion.md`：双仓融合基线（12 原子工具、参考靶场、协议编辑器与对比报告）
+- `02-independent-audit-and-third-party.md`：外部独立审计、第二轮实机验证与第三方仓库实测修复
+- `03-dual-side-bridge-support.md`：`emit_testbench` 双侧桥 APB 从机模型重构、零 `WIDTHEXPAND` 与 `cocotb + Verilator` 端到端通过
+- [04-multi-bus-hbm-pcie-ddr-ahb.md](04-multi-bus-hbm-pcie-ddr-ahb.md) — Native AHB-Lite / DDR3 / DDR4 / HBM / PCIe Gen3·4·5 (×1/×4/×16) classifiers, simulatable SV benchmark, and 7-stage live Verilator + mutation verification
+- [05-multi-protocol-emitter-and-pcie-3x3.md](05-multi-protocol-emitter-and-pcie-3x3.md) — Multi-protocol `emit_testbench` (APB/AXI4/AHB/DDR3/DDR4/HBM/PCIe 3×3), native `[CHECK]` parsing, and per-project tabbed interface report pages
+- [06-complex-dual-if-repack-ooo-loopback.md](06-complex-dual-if-repack-ooo-loopback.md) — Dual-interface translation (AXI4-64↔APB32), AXI4 OoO/same-ID fabric, PCIe 3DW/4DW/Split-CplD loopback, 256B golden scoreboards, and 3/3 middle-logic mutation kills
+- [07-soc-fabric-spi-eth-pm-an-ltssm-mem.md](07-soc-fabric-spi-eth-pm-an-ltssm-mem.md) — SPI/Ethernet classifiers, bidirectional conversions (SPI↔APB, ETH↔AXI4, APB+PCIe, AXI4→DDR), POR/negotiation-fail/sleep handshakes, built-in shared MEM, and 12/12 (100%) RTL mutation kills
+- [08-full-conversion-matrix-buf-cycs-syntax-color.md](08-full-conversion-matrix-buf-cycs-syntax-color.md) — Real direction/width pills (zero `-`), SV syntax color highlighting, configurable `BUF_CYCS=0/2/4` bridges (`APB→AXI4`, `PCIe→AXI4`, `AXI4→DDR3`), and full 256B sweeps (97 Verilator + 7 cocotb checks)
+- [09-unified-omni-bus-hub-hotplug-buf.md](09-unified-omni-bus-hub-hotplug-buf.md) — Unified 6-IF all-directional hub (`soc_omni_bus_hub.sv`), Ethernet/PCIe hot-plug disconnect/reconnect, tri-domain sleep/wake, `BUF_CYCS=0/2/4`, 115 Verilator + 7 cocotb checks, and 15/15 (100%) RTL mutations
+
+## 合并期缺陷修复（multi-bus-pass 合并审查）
+
+- [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
+- [11-sandbox-symlink-escape.md](11-sandbox-symlink-escape.md) — `copy_sandbox` 曾跟随项目内符号链接把项目外文件拷进沙箱（隔离泄漏）；补 `resolve(strict=True)` 真实路径校验
+- [12-unknown-instantiation-w102.md](12-unknown-instantiation-w102.md) — `index_repo` 曾静默丢弃仓库外模块的例化；改用 slang CST 的 `HierarchyInstantiation` 精确检出并报 `W102`，`resolve_deps` 透传 `closure_is_complete`
+- [13-windows-decoding-and-process-lessons.md](13-windows-decoding-and-process-lessons.md) — Windows cp1252 解码崩溃（`subprocess text=True` → `UnicodeDecodeError` → `AttributeError`），以及三个开发过程错误（stash 致代码漏提交、脆断言、测试依赖 CI 缺失环境）

@@ -2,12 +2,36 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — multi-bus-pass 合并（多总线能力 + 缺陷修复并集）
+
+把外部演进版 `fpga_toolbox-multi-bus-pass`（216 文件，9 个迭代阶段）与本仓 36 个缺陷修复做真正的三方合并，而非覆盖。该版本从同一 v0.5.0 基线分出，**不含**本轮的 W102/CST/符号链接/编码等修复，直接覆盖会全部丢失。
+
+### Added（来自 multi-bus-pass）
+- **多总线原生协议分类**（`iface_extractor.py`）：新增 AHB-Lite / DDR3 / DDR4 / HBM / PCIe Gen3·4·5 / SPI / Ethernet 的分类器，`[aps]` 时钟复位正则扩到 `[ahps]`（支持 HCLK）；AXI4-Full 由 `awlen/arlen/wlast/rlast/awburst/arburst` 判定并与 axi4_lite 区分。
+- **多协议 `emit_testbench`**（新增 `protocol_tb_emitter.py`，622 行）：`protocol=apb|axi4|ahb_lite|ddr3|ddr4|hbm|pcie|auto` 时不再走契约路径，直接从 RTL AST 生成自检 SystemVerilog testbench + Verilator 运行脚本，PCIe 自动展开 Gen3/4/5 × x1/x4/x16 共 9 个套件。
+- **`[CHECK]` 结构化日志解析**（`result_normalizer.py`）：Verilator TB 的逐笔事务 `[CHECK]` 行被解析成 rule 级 check；有明细时不再重复输出套件级 PASS 行，无明细时退回原行为。
+- **报告渲染大改**（`visual_renderer.py` 132→504 行）：SV 语法高亮、方向/位宽徽章、多项目分页面板、mutation 矩阵。
+- **多总线靶场** `examples/multi_bus_ref/`（82 文件）：7 类协议 RTL、complex_datapath（AXI4-64↔APB32、OoO 重排、PCIe repack loopback）、full_conversion_suite（带 BUF_CYCS）、soc_fabric（SPI/ETH/PM/LTSSM）、omni_hub（6 接口全向 hub）。
+- **`web_tools/`**：协议编辑器与仓库对比报告页；**`release.yml`**：tag 驱动的构建/冒烟/Release/PyPI 流程。
+
+### Fixed（合并期发现的新缺陷）
+- **`emit_testbench` 的 `protocol` 参数未在 `registry.py` 声明**。`tb_emitter.py` 支持它，但 `inputSchema.additionalProperties=False` 且未列 `protocol`，导致通过 MCP/`call_tool` 调用时被 `Unknown parameter(s) ['protocol']` 拒绝——多协议功能只有 CLI 内部直调可用，对外宣称支持但实际不通。已补 `protocol` 枚举参数并把 `required` 从 `["spec_path","out_dir"]` 放宽为 `["out_dir"]`（多协议路径不需要 spec_path）。
+- **测试 `test_multi_bus_classifiers` 是死代码**。它定义在 `if __name__ == "__main__": sys.exit(main())` 之后，且 `main()` 未调用它——永远不会执行，多总线分类器实际零覆盖。已移入 `main()` 正常执行。
+
+### 合并验证（全部实跑）
+- 7 种协议 TB 生成全部成功；**Verilator 5.054 实跑**：APB 8/8、AXI4 6/6、AHB-Lite 6/6、DDR3、DDR4、HBM 全 PASS；**PCIe 9/9 套件 PASS**（Gen3/4/5 × x1/x4/x16，DW=64/128/512）。
+- 本仓 36 个缺陷修复**全部存活**（脚本化逐项复核 13 个关键锚点 + 行为实测：符号链接逃逸仍被拒、`unresolved_instantiations` 仍在）。
+- `tests/test_regression.py` ALL CHECKS PASSED；`tests/test_fusion_and_cross_repo.py` ALL FUSION CHECKS PASSED（含新增 dual-side 与多总线分类器）；`audit_harness` 9/9；`docs_check` D1–D13 全绿；`ruff check fpga_toolbox tests` 通过；Python 3.10 语法门禁通过。
+- 合并期回退并重新应用的修复：`iface_extractor` 的 pure-APB draft 修复被包版本回退（纯 APB 设备又写空 `axi4_lite` 段 → 17 条 E001），已按原逻辑重新应用并把 AXI4-Full 一并纳入。
+
+详见 [`changelog/INDEX.md`](changelog/INDEX.md)。
+
 ## [Unreleased] — 未知例化不再静默丢弃
 
 ### Fixed
 - **`index_repo` 静默丢弃「例化了但仓库里没有定义」的模块**（`repo_indexer.py`）。`_find_instantiations` 只记录 `value in known` 的名字，例化厂商 IP / 加密 IP / 未克隆子模块时被完全静默丢掉：`instantiated_modules` 只剩仓库内模块、`diagnostics` 为空，下游 `resolve_deps` 的依赖闭包与 `all_files` 因此少一截却回答 `ok: True`，`copy_sandbox` 的沙箱静默缺文件。
 
-  第一版修复直接去掉 `in known` 守卫，实测在自带靶场产生 **106 条误报**（`int`/`automatic`/`void`/`axi_lite_if` 等），噪声淹没信号，已回滚。正确做法是用 slang CST 的显式节点 `HierarchyInstantiation.type.text` 精确取例化目标（零误报），slang 不可用时返回「无法判断」并退回旧行为（宁漏报不刷噪声）。新增 `unresolved_instantiations` 字段与 `W102` 诊断，并把 SV interface 定义名（`apb_if`/`axi_lite_if`）排除，否则靶场会有 45 条误报。修复后靶场 W102 = 0 条，真实未知例化精确上报。并补上缺陷的后半段：`resolve_deps` 原来不读该字段，仍返回「看起来完整」的文件清单，现透传 `unresolved_instantiations` 并新增 `closure_is_complete` 布尔信号（`False` 表示清单不完整、不要直接拿去建沙箱）。新增 `tests/test_regression.py::test_unknown_instantiations_reported`（9 项检查，含防误报与下游透传回归）。详见 [`changelog/unknown-instantiation-w102.md`](changelog/unknown-instantiation-w102.md)。
+  第一版修复直接去掉 `in known` 守卫，实测在自带靶场产生 **106 条误报**（`int`/`automatic`/`void`/`axi_lite_if` 等），噪声淹没信号，已回滚。正确做法是用 slang CST 的显式节点 `HierarchyInstantiation.type.text` 精确取例化目标（零误报），slang 不可用时返回「无法判断」并退回旧行为（宁漏报不刷噪声）。新增 `unresolved_instantiations` 字段与 `W102` 诊断，并把 SV interface 定义名（`apb_if`/`axi_lite_if`）排除，否则靶场会有 45 条误报。修复后靶场 W102 = 0 条，真实未知例化精确上报。并补上缺陷的后半段：`resolve_deps` 原来不读该字段，仍返回「看起来完整」的文件清单，现透传 `unresolved_instantiations` 并新增 `closure_is_complete` 布尔信号（`False` 表示清单不完整、不要直接拿去建沙箱）。新增 `tests/test_regression.py::test_unknown_instantiations_reported`（9 项检查，含防误报与下游透传回归）。详见 [`changelog/12-unknown-instantiation-w102.md`](changelog/12-unknown-instantiation-w102.md)。
 
 ## [Unreleased] — copy_sandbox 符号链接逃逸修复
 
@@ -16,7 +40,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
   这是「声称隔离却泄漏」——沙箱的存在意义就是不把项目外内容带进来，而共享头文件目录、monorepo 软链这类写法很常见，契约会被轻易破坏。
 
-  修复：字符串校验之后补一次真实路径校验（`resolve(strict=True)` 跟随所有链接），确认解析结果仍在 `project_root` 内；项目内部的相对符号链接解析后仍在 root 内，照常放行。新增 `tests/test_regression.py::test_sandbox_symlink_escape`（5 项检查）覆盖文件/目录两种逃逸与内部链接放行。详见 [`changelog/sandbox-symlink-escape.md`](changelog/sandbox-symlink-escape.md)。
+  修复：字符串校验之后补一次真实路径校验（`resolve(strict=True)` 跟随所有链接），确认解析结果仍在 `project_root` 内；项目内部的相对符号链接解析后仍在 root 内，照常放行。新增 `tests/test_regression.py::test_sandbox_symlink_escape`（5 项检查）覆盖文件/目录两种逃逸与内部链接放行。详见 [`changelog/11-sandbox-symlink-escape.md`](changelog/11-sandbox-symlink-escape.md)。
 
 ## [Unreleased] — 纯 APB draft 契约修复
 
@@ -25,7 +49,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
   后果：README 推荐的两步流程（`extract_interfaces --emit-draft-yaml` → `emit_testbench --spec-path`）用在纯 APB RTL 上，第一步产物被第二步以 17 条 E001 拒绝；用户只会以为自己契约写错，而不是工具只生成 AXI4-Lite wrapper。
 
-  修复：仅当 RTL 真有 AXI4-Lite 接口（或两种接口都没有，保持旧行为）时才写 `axi4_lite` 段。纯 APB 设备 draft 现在 0 ERROR、`validate_contract` 返回 `ok: True`；`emit_testbench` 的报错也从 17 条 E001 变为可读的 `Spec has no AXI4-Lite boundary ...`。新增 `tests/test_regression.py::test_pure_apb_draft`（4 项检查）锁死该行为。详见 [`changelog/pure-apb-draft.md`](changelog/pure-apb-draft.md)。
+  修复：仅当 RTL 真有 AXI4-Lite 接口（或两种接口都没有，保持旧行为）时才写 `axi4_lite` 段。纯 APB 设备 draft 现在 0 ERROR、`validate_contract` 返回 `ok: True`；`emit_testbench` 的报错也从 17 条 E001 变为可读的 `Spec has no AXI4-Lite boundary ...`。新增 `tests/test_regression.py::test_pure_apb_draft`（4 项检查）锁死该行为。详见 [`changelog/10-pure-apb-draft.md`](changelog/10-pure-apb-draft.md)。
 
 ## [Unreleased] — 独立审计修复
 

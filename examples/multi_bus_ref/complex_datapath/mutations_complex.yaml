@@ -1,0 +1,16 @@
+mutations:
+  - id: CM01_SPLIT_OFFSET_BROKEN
+    file: axi4_64_to_apb_32_bridge.sv
+    old: "m_apb_paddr   <= {cur_addr[AW-1:3], 3'b100}; // +4 byte offset"
+    new: "m_apb_paddr   <= {cur_addr[AW-1:3], 3'b000}; // +4 byte offset"
+    desc: "Break 64->32b high-word APB address offset (+4 -> +0, clobbering low word)"
+  - id: CM02_SAME_ID_ORDER_BROKEN
+    file: axi4_ooo_reorder_fabric.sv
+    old: "wire same_id_hazard = (s0_v && s0_id == s_axi_arid) || (s1_v && s1_id == s_axi_arid);"
+    new: "wire same_id_hazard = 1'b0;"
+    desc: "Disable AXI4 same-ID in-order hazard stall (allows same-ID read overtaking)"
+  - id: CM03_PCIE_4DW_FBE_BROKEN
+    file: pcie_tlp_repack_loopback.sv
+    old: "if (lat_fbe[b]) bar_mem[lat_addr[7:2]][b*8 +: 8] <= pcie_rx_tdata[32 + b*8 +: 8];"
+    new: "bar_mem[lat_addr[7:2]][b*8 +: 8] <= pcie_rx_tdata[32 + b*8 +: 8];"
+    desc: "Ignore PCIe 4DW MWr First DW Byte-Enable mask (clobbering unmasked bytes)"

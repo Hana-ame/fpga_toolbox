@@ -96,7 +96,7 @@ def tool_run_sim(
     cmd: List[str] = []
     if env_info["stdbuf"]["available"]:
         cmd.extend(["stdbuf", "-oL", "-eL"])
-    cmd.extend(["bash", str(script_p.name), suite])
+    cmd.extend(["bash", str(script_p.resolve()), suite])
 
     import os
 

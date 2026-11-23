@@ -13,15 +13,42 @@
 | 1 | `index_repo` | 解析 RTL 仓库模块、例化关系与头文件索引 |
 | 2 | `resolve_deps` | BFS 计算目标模块传递依赖闭包与 DAG 边 |
 | 3 | `copy_sandbox` | 带防误删保护与 SHA-256 校验的沙箱隔离复制 |
-| 4 | `extract_interfaces` | 抽取 AXI4-Lite / AXI4-Stream / APB / SV `interface` 与时钟复位（支持可选 `slang` AST） |
+| 4 | `extract_interfaces` | 抽取 AXI4-Lite / AXI4-Full / AXI4-Stream / APB / AHB-Lite / DDR3 / DDR4 / HBM / PCIe / SPI / Ethernet / SV `interface` 与时钟复位（支持可选 `slang` AST） |
 | 5 | `validate_contract` | 校验 YAML/JSON 边界契约与 `apb-regfile-spec/v2` 位域规则（E000–E015，E015 为位域 bits 顺序反了 hi<lo 的专门提示） |
-| 6 | `emit_testbench` | 生成 SV wrapper / SVA / bind 与含写回读、反压压测的 cocotb 测试平台 |
+| 6 | `emit_testbench` | 契约路径：生成 SV wrapper / SVA / bind 与含写回读、反压压测的 cocotb 测试平台；`protocol=` 路径：直接从 RTL 生成自检 SV testbench + Verilator 运行脚本，支持 `apb`/`axi4`/`ahb_lite`/`ddr3`/`ddr4`/`hbm`/`pcie`（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件） |
 | 7 | `normalize_sim_result` | 归一化 cocotb XML/JSON、SVA 日志与 Verilator 多套件日志（含逐套件身份核对） |
 | 8 | `render_visual_report` | 渲染独立 SVG 拓扑 + HTML 规则审计看板，内置 HTML 标签与行数一致性自检 |
 | 9 | `lint_tb` | 静态反踩坑检查：时钟沿竞争（C1–C2）、AXI 握手死锁（R1–R4）、静默通过（S1–S3） |
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
-| 12 | `audit_harness` | 故障注入式自审计（A1–A4），证明验证护栏出错时不会静默通过 |
+| 12 | `audit_harness` | 故障注入式自审计（A1–A9），证明验证护栏出错时不会静默通过 |
+
+### 多总线原生测试台（`protocol=`）
+
+不需要写契约，直接从 RTL 的 slang AST 生成可编译、自检的 SystemVerilog testbench 与 Verilator 运行脚本：
+
+```bash
+python3 -m fpga_toolbox emit_testbench \
+  --rtl-file examples/multi_bus_ref/pcie_tlp_ep.sv \
+  --out-dir /tmp/tb_pcie --protocol pcie
+bash /tmp/tb_pcie/run_pcie_tlp_ep_pcie.sh all     # Gen3/4/5 × x1/x4/x16 共 9 套件
+```
+
+`protocol` 支持 `apb` / `axi4` / `ahb_lite` / `ddr3` / `ddr4` / `hbm` / `pcie` / `auto`。
+每个生成的 TB 都以 `[CHECK] id=... | proto=... | status=PASS|FAIL` 输出逐笔事务结果，
+`normalize_sim_result` 会把这些行解析成 rule 级 check。
+
+`examples/multi_bus_ref/` 是配套靶场：7 类协议 RTL + `complex_datapath/`（AXI4-64↔APB32、
+AXI4 OoO 重排、PCIe repack loopback）+ `full_conversion_suite/`（可配 `BUF_CYCS=0/2/4` 的
+APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ `omni_hub/`。
+
+### 诊断码补充
+
+除工具表里的 `E000–E015` / `W001` / `W010–W013` / `W050–W051` / `W101` 外：
+
+- `W102` — `index_repo` 检出「形态上是例化、但仓库内无定义」的模块（厂商 IP / 加密 IP /
+  未克隆子模块）。此时 `resolve_deps` 会返回 `closure_is_complete: false`，明确告知依赖
+  闭包不完整，不要把该文件清单直接当作可编译沙箱。
 
 ## 快速验证与测试
 

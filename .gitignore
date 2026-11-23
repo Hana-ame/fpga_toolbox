@@ -17,3 +17,9 @@ out/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Verilator 构建产物（sim.sh 的 obj_<suite>/ 目录，含二进制与 .o/.a）
+obj_*/
+Vtb_*
+*.verilated
+examples/multi_bus_ref/obj_*

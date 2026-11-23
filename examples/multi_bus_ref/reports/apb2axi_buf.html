@@ -1,0 +1,262 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<title>apb_to_axi4_buf_bridge (APB → AXI4 带缓存转换桥 (BUF_CYCS=0/2/4, 全256B)) 验证审计报告</title>
+<style>
+  :root { --bg:#F8FAFC; --card:#FFFFFF; --ink:#0F172A; --muted:#64748B; --line:#E2E8F0; --accent:#1D4ED8; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:28px 20px 64px; line-height:1.5; }
+  .wrap { max-width:1260px; margin:0 auto; }
+  header { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; gap:12px; margin-bottom:20px; border-bottom:2px solid var(--ink); padding-bottom:14px; }
+  h1 { margin:0; font-size:24px; letter-spacing:-0.01em; }
+  h2 { margin:0 0 8px; font-size:17px; color:var(--ink); }
+  h3 { margin:0 0 10px; font-size:15px; color:var(--ink); }
+  .sub { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  .meta { font-size:13px; color:var(--muted); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .kpi .lbl { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; }
+  .kpi .val { font-size:22px; font-weight:700; margin-top:4px; }
+  .tab-radio { display:none; }
+  .tab-bar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+  .tab-lbl { cursor:pointer; padding:7px 14px; border-radius:999px; border:1px solid #CBD5E1; background:#FFFFFF; color:#334155; font-size:13px; font-weight:600; transition:all .15s; }
+  .tab-lbl:hover { border-color:#0F172A; color:#0F172A; }
+  .tab-panel { display:none; }
+  #tab-overview:checked ~ .tab-bar label[for='tab-overview'] { background:#0F172A; color:#FFFFFF; border-color:#0F172A; }
+  #tab-overview:checked ~ .tab-panels #panel-overview { display:block; }
+  #tab-apb2axi_buf:checked ~ .tab-bar label[for='tab-apb2axi_buf'] { background:#0F172A; color:#FFFFFF; border-color:#0F172A; }
+  #tab-apb2axi_buf:checked ~ .tab-panels #panel-apb2axi_buf { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin-bottom:18px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }
+  .tbl-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { background:#F1F5F9; color:#334155; font-weight:600; white-space:nowrap; }
+  tr:hover td { background:#F8FAFC; }
+  code { background:#F1F5F9; padding:2px 6px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; word-break:break-all; }
+  code.diff { background:#FEF2F2; color:#991B1B; }
+  .muted { font-size:11px; color:var(--muted); margin-top:2px; }
+  .eng { display:inline-block; background:#EFF6FF; color:#1E40AF; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:0.03em; }
+  .b-pass { background:#DCFCE7; color:#166534; }
+  .b-fail { background:#FEE2E2; color:#991B1B; }
+  .b-warn { background:#FEF3C7; color:#92400E; }
+  pre { background:#0F172A; color:#E2E8F0; padding:14px 16px; border-radius:8px; overflow-x:auto; font-size:12px; line-height:1.5; margin:0; }
+  pre.sv-code { background:#0D1117; color:#E6EDF3; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .sv-ln { display:inline-block; width:3.2em; color:#6E7681; user-select:none; border-right:1px solid #21262D; margin-right:10px; padding-right:6px; text-align:right; }
+  .sv-kw { color:#FF7B72; font-weight:600; }
+  .sv-num { color:#79C0FF; }
+  .sv-cmt { color:#8B949E; font-style:italic; }
+  .sv-sys { color:#D2A8FF; font-weight:600; }
+  .dir-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; font-family:ui-monospace,monospace; }
+  .dir-in { background:#DBEAFE; color:#1E40AF; }
+  .dir-out { background:#FEF3C7; color:#92400E; }
+  .dir-io { background:#E2E8F0; color:#334155; }
+</style></head><body><div class="wrap">
+<header>
+  <div>
+    <h1>FPGA 多协议验证审计报告：apb_to_axi4_buf_bridge (APB → AXI4 带缓存转换桥 (BUF_CYCS=0/2/4, 全256B)) <span class="badge b-pass">PASS</span></h1>
+    <div class="meta">checks=6 · pass=6 · fail=0 · pass_rate=1.0</div>
+  </div>
+  <div class="meta">Generated: 2026-11-23T03:42:47Z</div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><div class="lbl">总实跑检查项</div><div class="val">6</div></div>
+  <div class="kpi"><div class="lbl">通过 / 失败</div><div class="val" style="color:#166534">6 / <span style="color:#64748B">0</span></div></div>
+  <div class="kpi"><div class="lbl">通过率</div><div class="val">100.0%</div></div>
+  <div class="kpi"><div class="lbl">RTL 变异杀伤</div><div class="val">N/A</div></div>
+  <div class="kpi"><div class="lbl">行覆盖率</div><div class="val">N/A</div></div>
+</div>
+
+<div class='tabs-root'><input type="radio" name="projtab" id="tab-overview" class="tab-radio" checked><input type="radio" name="projtab" id="tab-apb2axi_buf" class="tab-radio"><div class='tab-bar'><label for="tab-overview" class="tab-lbl">总览 Overview</label><label for="tab-apb2axi_buf" class="tab-lbl">APB→AXI4(缓存)</label></div><div class='tab-panels'><div class="tab-panel" id="panel-overview">
+
+<section class="card">
+  <h2>2. 逐条真实仿真检查明细（直接解析自 Verilator / cocotb 实时日志）</h2>
+  <p class="sub">每一行均对应仿真器实际执行的一笔事务与断言结果，零伪造标签、零重复凑数。</p>
+  <div class="tbl-wrap"><table><thead><tr><th>Rule ID</th><th>协议 / 类别</th><th>执行引擎</th><th>激励与事务 (Stimulus / TX)</th><th>期望值 (Expected)</th><th>实测值 (Observed)</th><th>状态</th></tr></thead><tbody id="checks-tbody"><tr><td><code>APB2AXI_B0_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=0,lat=3)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B0_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=0)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B2_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=2,lat=5)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B2_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=2)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B4_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=4,lat=7)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B4_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=4)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr></tbody></table></div>
+</section>
+
+<section class="card">
+  <h2>架构与接口拓扑视图</h2>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 232" width="100%">
+  <rect x="140" y="16" width="440" height="150" rx="10" fill="#FFFFFF" stroke="#1D4ED8" stroke-dasharray="5 4"/>
+  <rect x="176" y="42" width="368" height="76" rx="8" fill="#0F172A"/>
+  <text x="360" y="72" text-anchor="middle" fill="#FFFFFF" font-family="ui-monospace,monospace" font-size="14" font-weight="bold">apb_to_axi4_buf_bridge (APB → AXI4 带缓存转换桥 (BUF_CYCS=0/2/4, 全256B))</text>
+  <text x="360" y="96" text-anchor="middle" fill="#94A3B8" font-family="ui-monospace,monospace" font-size="10">axi4(29), apb(9)</text>
+  <text x="360" y="146" text-anchor="middle" fill="#065F46" font-family="sans-serif" font-size="12" font-weight="bold">[PASS]</text>
+  <rect x="220" y="190" width="280" height="22" rx="4" fill="#F8FAFC" stroke="#CBD5E1"/><text x="360" y="205" text-anchor="middle" fill="#334155" font-family="ui-monospace,monospace" font-size="11">apb_to_axi4_buf_bridge</text>
+</svg>
+</section>
+<section class='card'><h2>4. 原始仿真器日志摘录（可复现命令：<code>bash examples/multi_bus_ref/sim.sh all</code>）</h2><pre>== sim: apb2axi_b0 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B0_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=0,lat=3) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B0_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=0) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=0) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 8us; walltime 0.001 s; speed 8.643 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB
+== sim: apb2axi_b2 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B2_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=2,lat=5) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B2_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=2) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=2) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 11us; walltime 0.001 s; speed 13.754 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB
+== sim: apb2axi_b4 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B4_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=4,lat=7) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B4_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=4) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=4) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 14us; walltime 0.003 s; speed 5.006 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB</pre></section>
+</div><div class="tab-panel" id="panel-apb2axi_buf"><section class='card'><h2>APB → AXI4 带缓存转换桥 (BUF_CYCS=0/2/4, 全256B) <span class="badge b-pass">PASS</span></h2><p class='sub'>DUT：<code>examples/multi_bus_ref/full_conversion_suite/apb_to_axi4_buf_bridge.sv</code> · 协议：<code>axi4(master) + apb(slave)</code> · 时钟/复位：<code>clk / rst_n</code> · 自动生成 TB：<code>full_conversion_suite/tb_apb2axi_buf.sv (BUF_CYCS=0/2/4, 256B Full Sweep)</code> · 检查项：<strong>6/6 PASS</strong> · 独立页面：<code>reports/apb2axi_buf.html</code></p></section><section class='card'><h3>逐条实跑检查明细（6/6）</h3><div class='tbl-wrap'><table><thead><tr><th>Rule ID</th><th>协议 / 类别</th><th>执行引擎</th><th>激励与事务</th><th>期望值</th><th>实测值</th><th>状态</th></tr></thead><tbody><tr><td><code>APB2AXI_B0_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=0,lat=3)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B0_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=0)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B2_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=2,lat=5)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B2_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=2)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B4_001</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>full_256B_buf_sweep</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>64W+partial_strb+64R (BUF_CYCS=4,lat=7)</code></td><td><code>256/256B_match</code></td><td><code>256/256B_match</code></td><td><span class="badge b-pass">PASS</span></td></tr><tr><td><code>APB2AXI_B4_002</code></td><td><strong>APB-to-AXI4</strong><div class='muted'>slverr_to_pslverr</div></td><td><span class='eng'>Verilator 5.054</span></td><td><code>APB RD 0x0200 (BUF=4)</code></td><td><code>pslverr=1</code></td><td><code>pslverr=1</code></td><td><span class="badge b-pass">PASS</span></td></tr></tbody></table></div></section><section class='card'><h3>slang 12.2 提取接口端口映射（38 信号）</h3><div class='tbl-wrap'><table><thead><tr><th>规范信号 (Canonical)</th><th>RTL 端口名</th><th>方向</th><th>位宽</th></tr></thead><tbody><tr><td><code>IF1:axi4(master).awaddr</code></td><td><code>m_axi_awaddr</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF1:axi4(master).awvalid</code></td><td><code>m_axi_awvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).awready</code></td><td><code>m_axi_awready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).wdata</code></td><td><code>m_axi_wdata</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF1:axi4(master).wstrb</code></td><td><code>m_axi_wstrb</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:axi4(master).wvalid</code></td><td><code>m_axi_wvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).wready</code></td><td><code>m_axi_wready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).bresp</code></td><td><code>m_axi_bresp</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF1:axi4(master).bvalid</code></td><td><code>m_axi_bvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).bready</code></td><td><code>m_axi_bready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).araddr</code></td><td><code>m_axi_araddr</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF1:axi4(master).arvalid</code></td><td><code>m_axi_arvalid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).arready</code></td><td><code>m_axi_arready</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).rdata</code></td><td><code>m_axi_rdata</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF1:axi4(master).rresp</code></td><td><code>m_axi_rresp</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF1:axi4(master).rvalid</code></td><td><code>m_axi_rvalid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).rready</code></td><td><code>m_axi_rready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).awid</code></td><td><code>m_axi_awid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:axi4(master).awlen</code></td><td><code>m_axi_awlen</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF1:axi4(master).awsize</code></td><td><code>m_axi_awsize</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>3-bit</code></td></tr><tr><td><code>IF1:axi4(master).awburst</code></td><td><code>m_axi_awburst</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF1:axi4(master).wlast</code></td><td><code>m_axi_wlast</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF1:axi4(master).bid</code></td><td><code>m_axi_bid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:axi4(master).arid</code></td><td><code>m_axi_arid</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:axi4(master).arlen</code></td><td><code>m_axi_arlen</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>8-bit</code></td></tr><tr><td><code>IF1:axi4(master).arsize</code></td><td><code>m_axi_arsize</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>3-bit</code></td></tr><tr><td><code>IF1:axi4(master).arburst</code></td><td><code>m_axi_arburst</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>2-bit</code></td></tr><tr><td><code>IF1:axi4(master).rid</code></td><td><code>m_axi_rid</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF1:axi4(master).rlast</code></td><td><code>m_axi_rlast</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:apb(slave).psel</code></td><td><code>s_apb_psel</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:apb(slave).penable</code></td><td><code>s_apb_penable</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:apb(slave).pwrite</code></td><td><code>s_apb_pwrite</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:apb(slave).paddr</code></td><td><code>s_apb_paddr</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>16-bit</code></td></tr><tr><td><code>IF2:apb(slave).pwdata</code></td><td><code>s_apb_pwdata</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF2:apb(slave).pstrb</code></td><td><code>s_apb_pstrb</code></td><td><span class='dir-pill dir-in'>input</span></td><td><code>4-bit</code></td></tr><tr><td><code>IF2:apb(slave).pready</code></td><td><code>s_apb_pready</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr><tr><td><code>IF2:apb(slave).prdata</code></td><td><code>s_apb_prdata</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>32-bit</code></td></tr><tr><td><code>IF2:apb(slave).pslverr</code></td><td><code>s_apb_pslverr</code></td><td><span class='dir-pill dir-out'>output</span></td><td><code>1-bit</code></td></tr></tbody></table></div></section><section class='card'><h3>被测 DUT 源码（<code>examples/multi_bus_ref/full_conversion_suite/apb_to_axi4_buf_bridge.sv</code> · 127 行）</h3><details open><summary style='cursor:pointer;font-weight:600;margin-bottom:8px'>展开 / 收起 DUT SystemVerilog 源码</summary><pre class='sv-code'><span class="sv-ln">   1</span> `timescale 1ns/1ps
+<span class="sv-ln">   2</span> <span class="sv-kw">module</span> apb_to_axi4_buf_bridge #(
+<span class="sv-ln">   3</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> BUF_CYCS = <span class="sv-num">2</span>,
+<span class="sv-ln">   4</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> IDW      = <span class="sv-num">4</span>,
+<span class="sv-ln">   5</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> AW       = <span class="sv-num">16</span>,
+<span class="sv-ln">   6</span>   <span class="sv-kw">parameter</span> <span class="sv-kw">int</span> DW       = <span class="sv-num">32</span>
+<span class="sv-ln">   7</span> ) (
+<span class="sv-ln">   8</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           clk,
+<span class="sv-ln">   9</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           rst_n,
+<span class="sv-ln">  10</span>   <span class="sv-cmt">// Interface 1: Upstream APB4 Slave</span>
+<span class="sv-ln">  11</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           s_apb_psel,
+<span class="sv-ln">  12</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           s_apb_penable,
+<span class="sv-ln">  13</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           s_apb_pwrite,
+<span class="sv-ln">  14</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [AW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_apb_paddr,
+<span class="sv-ln">  15</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [DW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_apb_pwdata,
+<span class="sv-ln">  16</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]     s_apb_pstrb,
+<span class="sv-ln">  17</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           s_apb_pready,
+<span class="sv-ln">  18</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [DW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  s_apb_prdata,
+<span class="sv-ln">  19</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           s_apb_pslverr,
+<span class="sv-ln">  20</span>   <span class="sv-cmt">// Interface 2: Downstream AXI4 Master</span>
+<span class="sv-ln">  21</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [IDW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] m_axi_awid,
+<span class="sv-ln">  22</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [AW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  m_axi_awaddr,
+<span class="sv-ln">  23</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]     m_axi_awlen,
+<span class="sv-ln">  24</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>]     m_axi_awsize,
+<span class="sv-ln">  25</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]     m_axi_awburst,
+<span class="sv-ln">  26</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_awvalid,
+<span class="sv-ln">  27</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_awready,
+<span class="sv-ln">  28</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [DW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  m_axi_wdata,
+<span class="sv-ln">  29</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]     m_axi_wstrb,
+<span class="sv-ln">  30</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_wlast,
+<span class="sv-ln">  31</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_wvalid,
+<span class="sv-ln">  32</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_wready,
+<span class="sv-ln">  33</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [IDW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] m_axi_bid,
+<span class="sv-ln">  34</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]     m_axi_bresp,
+<span class="sv-ln">  35</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_bvalid,
+<span class="sv-ln">  36</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_bready,
+<span class="sv-ln">  37</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [IDW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] m_axi_arid,
+<span class="sv-ln">  38</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [AW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  m_axi_araddr,
+<span class="sv-ln">  39</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">7</span>:<span class="sv-num">0</span>]     m_axi_arlen,
+<span class="sv-ln">  40</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>]     m_axi_arsize,
+<span class="sv-ln">  41</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]     m_axi_arburst,
+<span class="sv-ln">  42</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_arvalid,
+<span class="sv-ln">  43</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_arready,
+<span class="sv-ln">  44</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [IDW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] m_axi_rid,
+<span class="sv-ln">  45</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [DW-<span class="sv-num">1</span>:<span class="sv-num">0</span>]  m_axi_rdata,
+<span class="sv-ln">  46</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span> [<span class="sv-num">1</span>:<span class="sv-num">0</span>]     m_axi_rresp,
+<span class="sv-ln">  47</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_rlast,
+<span class="sv-ln">  48</span>   <span class="sv-kw">input</span>  <span class="sv-kw">logic</span>           m_axi_rvalid,
+<span class="sv-ln">  49</span>   <span class="sv-kw">output</span> <span class="sv-kw">logic</span>           m_axi_rready
+<span class="sv-ln">  50</span> );
+<span class="sv-ln">  51</span>   <span class="sv-kw">typedef</span> <span class="sv-kw">enum</span> <span class="sv-kw">logic</span> [<span class="sv-num">2</span>:<span class="sv-num">0</span>] { S_IDLE, S_BUF, S_AXI_AW, S_AXI_W, S_AXI_B, S_AXI_AR, S_AXI_R, S_DONE } st_t;
+<span class="sv-ln">  52</span>   st_t           st;
+<span class="sv-ln">  53</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]    buf_cnt;
+<span class="sv-ln">  54</span>   <span class="sv-kw">logic</span>          lat_wr;
+<span class="sv-ln">  55</span>   <span class="sv-kw">logic</span> [AW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] lat_addr;
+<span class="sv-ln">  56</span>   <span class="sv-kw">logic</span> [DW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] lat_wdata;
+<span class="sv-ln">  57</span>   <span class="sv-kw">logic</span> [<span class="sv-num">3</span>:<span class="sv-num">0</span>]    lat_strb;
+<span class="sv-ln">  58</span>   <span class="sv-kw">logic</span> [IDW-<span class="sv-num">1</span>:<span class="sv-num">0</span>] tx_id;
+<span class="sv-ln">  59</span>   <span class="sv-kw">logic</span>          _u;
+<span class="sv-ln">  60</span>   <span class="sv-kw">assign</span> _u = (^m_axi_bid) ^ (^m_axi_rid) ^ m_axi_rlast;
+<span class="sv-ln">  61</span> 
+<span class="sv-ln">  62</span>   <span class="sv-kw">assign</span> m_axi_awid    = tx_id;
+<span class="sv-ln">  63</span>   <span class="sv-kw">assign</span> m_axi_awaddr  = lat_addr;
+<span class="sv-ln">  64</span>   <span class="sv-kw">assign</span> m_axi_awlen   = <span class="sv-num">8</span>&#x27;d0;
+<span class="sv-ln">  65</span>   <span class="sv-kw">assign</span> m_axi_awsize  = <span class="sv-num">3</span>&#x27;d2;
+<span class="sv-ln">  66</span>   <span class="sv-kw">assign</span> m_axi_awburst = <span class="sv-num">2</span>&#x27;b01;
+<span class="sv-ln">  67</span>   <span class="sv-kw">assign</span> m_axi_awvalid = (st == S_AXI_AW);
+<span class="sv-ln">  68</span> 
+<span class="sv-ln">  69</span>   <span class="sv-kw">assign</span> m_axi_wdata   = lat_wdata;
+<span class="sv-ln">  70</span>   <span class="sv-kw">assign</span> m_axi_wstrb   = lat_strb;
+<span class="sv-ln">  71</span>   <span class="sv-kw">assign</span> m_axi_wlast   = <span class="sv-num">1</span>&#x27;b1;
+<span class="sv-ln">  72</span>   <span class="sv-kw">assign</span> m_axi_wvalid  = (st == S_AXI_W);
+<span class="sv-ln">  73</span>   <span class="sv-kw">assign</span> m_axi_bready  = (st == S_AXI_B);
+<span class="sv-ln">  74</span> 
+<span class="sv-ln">  75</span>   <span class="sv-kw">assign</span> m_axi_arid    = tx_id;
+<span class="sv-ln">  76</span>   <span class="sv-kw">assign</span> m_axi_araddr  = lat_addr;
+<span class="sv-ln">  77</span>   <span class="sv-kw">assign</span> m_axi_arlen   = <span class="sv-num">8</span>&#x27;d0;
+<span class="sv-ln">  78</span>   <span class="sv-kw">assign</span> m_axi_arsize  = <span class="sv-num">3</span>&#x27;d2;
+<span class="sv-ln">  79</span>   <span class="sv-kw">assign</span> m_axi_arburst = <span class="sv-num">2</span>&#x27;b01;
+<span class="sv-ln">  80</span>   <span class="sv-kw">assign</span> m_axi_arvalid = (st == S_AXI_AR);
+<span class="sv-ln">  81</span>   <span class="sv-kw">assign</span> m_axi_rready  = (st == S_AXI_R);
+<span class="sv-ln">  82</span> 
+<span class="sv-ln">  83</span>   <span class="sv-kw">always_ff</span> @(<span class="sv-kw">posedge</span> clk) <span class="sv-kw">begin</span>
+<span class="sv-ln">  84</span>     <span class="sv-kw">if</span> (!rst_n) <span class="sv-kw">begin</span>
+<span class="sv-ln">  85</span>       st &lt;= S_IDLE; buf_cnt &lt;= &#x27;<span class="sv-num">0</span>; tx_id &lt;= &#x27;<span class="sv-num">0</span>;
+<span class="sv-ln">  86</span>       lat_wr &lt;= <span class="sv-num">1</span>&#x27;b0; lat_addr &lt;= &#x27;<span class="sv-num">0</span>; lat_wdata &lt;= &#x27;<span class="sv-num">0</span>; lat_strb &lt;= &#x27;<span class="sv-num">0</span>;
+<span class="sv-ln">  87</span>       s_apb_pready &lt;= <span class="sv-num">1</span>&#x27;b0; s_apb_prdata &lt;= &#x27;<span class="sv-num">0</span>; s_apb_pslverr &lt;= <span class="sv-num">1</span>&#x27;b0;
+<span class="sv-ln">  88</span>     <span class="sv-kw">end</span> <span class="sv-kw">else</span> <span class="sv-kw">begin</span>
+<span class="sv-ln">  89</span>       s_apb_pready &lt;= <span class="sv-num">1</span>&#x27;b0;
+<span class="sv-ln">  90</span>       <span class="sv-kw">case</span> (st)
+<span class="sv-ln">  91</span>         S_IDLE: <span class="sv-kw">begin</span>
+<span class="sv-ln">  92</span>           <span class="sv-kw">if</span> (s_apb_psel &amp;&amp; s_apb_penable) <span class="sv-kw">begin</span>
+<span class="sv-ln">  93</span>             lat_wr    &lt;= s_apb_pwrite;
+<span class="sv-ln">  94</span>             lat_addr  &lt;= s_apb_paddr;
+<span class="sv-ln">  95</span>             lat_wdata &lt;= s_apb_pwdata;
+<span class="sv-ln">  96</span>             lat_strb  &lt;= s_apb_pstrb;
+<span class="sv-ln">  97</span>             buf_cnt   &lt;= <span class="sv-num">4</span>&#x27;(BUF_CYCS);
+<span class="sv-ln">  98</span>             <span class="sv-kw">if</span> (BUF_CYCS == <span class="sv-num">0</span>) st &lt;= s_apb_pwrite ? S_AXI_AW : S_AXI_AR;
+<span class="sv-ln">  99</span>             <span class="sv-kw">else</span>               st &lt;= S_BUF;
+<span class="sv-ln"> 100</span>           <span class="sv-kw">end</span>
+<span class="sv-ln"> 101</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 102</span>         S_BUF: <span class="sv-kw">begin</span>
+<span class="sv-ln"> 103</span>           <span class="sv-kw">if</span> (buf_cnt &lt;= <span class="sv-num">4</span>&#x27;d1) st &lt;= lat_wr ? S_AXI_AW : S_AXI_AR;
+<span class="sv-ln"> 104</span>           <span class="sv-kw">else</span>                 buf_cnt &lt;= buf_cnt - <span class="sv-num">4</span>&#x27;d1;
+<span class="sv-ln"> 105</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 106</span>         S_AXI_AW: <span class="sv-kw">if</span> (m_axi_awready) st &lt;= S_AXI_W;
+<span class="sv-ln"> 107</span>         S_AXI_W:  <span class="sv-kw">if</span> (m_axi_wready)  st &lt;= S_AXI_B;
+<span class="sv-ln"> 108</span>         S_AXI_B:  <span class="sv-kw">if</span> (m_axi_bvalid) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 109</span>           s_apb_pready  &lt;= <span class="sv-num">1</span>&#x27;b1;
+<span class="sv-ln"> 110</span>           s_apb_pslverr &lt;= (m_axi_bresp != <span class="sv-num">2</span>&#x27;b00);
+<span class="sv-ln"> 111</span>           tx_id         &lt;= tx_id + <span class="sv-num">4</span>&#x27;d1;
+<span class="sv-ln"> 112</span>           st            &lt;= S_DONE;
+<span class="sv-ln"> 113</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 114</span>         S_AXI_AR: <span class="sv-kw">if</span> (m_axi_arready) st &lt;= S_AXI_R;
+<span class="sv-ln"> 115</span>         S_AXI_R:  <span class="sv-kw">if</span> (m_axi_rvalid) <span class="sv-kw">begin</span>
+<span class="sv-ln"> 116</span>           s_apb_pready  &lt;= <span class="sv-num">1</span>&#x27;b1;
+<span class="sv-ln"> 117</span>           s_apb_prdata  &lt;= m_axi_rdata;
+<span class="sv-ln"> 118</span>           s_apb_pslverr &lt;= (m_axi_rresp != <span class="sv-num">2</span>&#x27;b00);
+<span class="sv-ln"> 119</span>           tx_id         &lt;= tx_id + <span class="sv-num">4</span>&#x27;d1;
+<span class="sv-ln"> 120</span>           st            &lt;= S_DONE;
+<span class="sv-ln"> 121</span>         <span class="sv-kw">end</span>
+<span class="sv-ln"> 122</span>         S_DONE: st &lt;= S_IDLE;
+<span class="sv-ln"> 123</span>         <span class="sv-kw">default</span>: st &lt;= S_IDLE;
+<span class="sv-ln"> 124</span>       <span class="sv-kw">endcase</span>
+<span class="sv-ln"> 125</span>     <span class="sv-kw">end</span>
+<span class="sv-ln"> 126</span>   <span class="sv-kw">end</span>
+<span class="sv-ln"> 127</span> <span class="sv-kw">endmodule</span></pre></details></section><section class='card'><h3>本项目原始仿真日志</h3><pre>== sim: apb2axi_b0 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B0_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=0,lat=3) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B0_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=0) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=0) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 8us; walltime 0.001 s; speed 8.643 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB
+== sim: apb2axi_b2 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B2_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=2,lat=5) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B2_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=2) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=2) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 11us; walltime 0.001 s; speed 13.754 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB
+== sim: apb2axi_b4 (top=tb_apb_to_axi4_buf) ==
+[CHECK] id=APB2AXI_B4_001 | proto=APB-to-AXI4 | cat=full_256B_buf_sweep | tx=64W+partial_strb+64R (BUF_CYCS=4,lat=7) | exp=256/256B_match | got=256/256B_match | status=PASS
+[CHECK] id=APB2AXI_B4_002 | proto=APB-to-AXI4 | cat=slverr_to_pslverr | tx=APB RD 0x0200 (BUF=4) | exp=pslverr=1 | got=pslverr=1 | status=PASS
+PASS: apb_to_axi4_buf(BUF=4) full 256B + PSLVERR passed
+- /working_dir/c_1105c25e4072332f/work/dual_side/fpga_toolbox-main/examples/multi_bus_ref/full_conversion_suite/tb_apb_to_axi4_buf.sv:81: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.054 2026-11-01
+- Verilator: $finish at 14us; walltime 0.003 s; speed 5.006 ms/s
+- Verilator: cpu 0.001 s on 1 threads; allocated 3 MB</pre></section></div></div></div>
+</div></body></html>

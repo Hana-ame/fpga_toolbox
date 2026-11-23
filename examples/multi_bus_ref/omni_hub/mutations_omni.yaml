@@ -1,0 +1,16 @@
+mutations:
+  - id: OM01_ETH_HOTPLUG_BROKEN
+    file: soc_omni_bus_hub.sv
+    old: "if (!eth_cable_present) begin"
+    new: "if (1'b0) begin"
+    desc: "Disable Ethernet hot-plug cable unplug link-drop detection"
+  - id: OM02_PCIE_HOTPLUG_BROKEN
+    file: soc_omni_bus_hub.sv
+    old: "if (!pcie_hotplug_present) begin"
+    new: "if (1'b0) begin"
+    desc: "Disable PCIe surprise-removal hot-plug drop to DETECT"
+  - id: OM03_DDR_SR_GUARD_BROKEN
+    file: soc_omni_bus_hub.sv
+    old: "if (!ddr_ready || apb_addr_r >= 16'h0100) begin"
+    new: "if (apb_addr_r >= 16'h0100) begin"
+    desc: "Bypass DDR4 POR/Self-Refresh readiness guard on APB path"

@@ -40,6 +40,11 @@ _AXIL_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("rready",  re.compile(r"(?:^|_)r_?(?:ready|rdy)$", re.I)),
 )
 
+_AXI4_BURST_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = tuple(
+    (s, re.compile(rf"(?:^|_){s}$", re.I))
+    for s in ("awid", "awlen", "awsize", "awburst", "wlast", "bid", "arid", "arlen", "arsize", "arburst", "rid", "rlast")
+)
+
 _AXIS_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("tdata",  re.compile(r"(?:^|_)t_?data$", re.I)),
     ("tvalid", re.compile(r"(?:^|_)t_?(?:valid|vld)$", re.I)),
@@ -61,10 +66,101 @@ _APB_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("pslverr", re.compile(r"(?:^|_)p_?slverr$", re.I)),
 )
 
+_AHB_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("hsel",      re.compile(r"(?:^|_)h_?sel\d*$", re.I)),
+    ("haddr",     re.compile(r"(?:^|_)h_?addr$", re.I)),
+    ("htrans",    re.compile(r"(?:^|_)h_?trans$", re.I)),
+    ("hwrite",    re.compile(r"(?:^|_)h_?write$", re.I)),
+    ("hsize",     re.compile(r"(?:^|_)h_?size$", re.I)),
+    ("hwdata",    re.compile(r"(?:^|_)h_?wdata$", re.I)),
+    ("hready",    re.compile(r"(?:^|_)h_?ready(?:out|in)?$", re.I)),
+    ("hrdata",    re.compile(r"(?:^|_)h_?rdata$", re.I)),
+    ("hresp",     re.compile(r"(?:^|_)h_?resp$", re.I)),
+)
+
+_DDR3_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("ck_p",  re.compile(r"ddr3_ck_?p$", re.I)),
+    ("ck_n",  re.compile(r"ddr3_ck_?n$", re.I)),
+    ("cke",   re.compile(r"ddr3_cke$", re.I)),
+    ("cs_n",  re.compile(r"ddr3_cs_?n$", re.I)),
+    ("ras_n", re.compile(r"ddr3_ras_?n$", re.I)),
+    ("cas_n", re.compile(r"ddr3_cas_?n$", re.I)),
+    ("we_n",  re.compile(r"ddr3_we_?n$", re.I)),
+    ("ba",    re.compile(r"ddr3_ba$", re.I)),
+    ("addr",  re.compile(r"ddr3_addr$", re.I)),
+    ("dq",    re.compile(r"ddr3_dq(?:_in|_out)?$", re.I)),
+)
+
+_DDR4_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("ck_t",     re.compile(r"ddr4_ck_?t$", re.I)),
+    ("ck_c",     re.compile(r"ddr4_ck_?c$", re.I)),
+    ("act_n",    re.compile(r"ddr4_act_?n$", re.I)),
+    ("bg",       re.compile(r"ddr4_bg$", re.I)),
+    ("ba",       re.compile(r"ddr4_ba$", re.I)),
+    ("adr",      re.compile(r"ddr4_adr$", re.I)),
+    ("cs_n",     re.compile(r"ddr4_cs_?n$", re.I)),
+    ("odt",      re.compile(r"ddr4_odt$", re.I)),
+    ("dq",       re.compile(r"ddr4_dq(?:_in|_out)?$", re.I)),
+    ("dm_dbi_n", re.compile(r"ddr4_dm_?dbi_?n$", re.I)),
+)
+
+_HBM_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("awid",    re.compile(r"hbm_.*aw_?id$", re.I)),
+    ("awaddr",  re.compile(r"hbm_.*aw_?addr$", re.I)),
+    ("awvalid", re.compile(r"hbm_.*aw_?valid$", re.I)),
+    ("awready", re.compile(r"hbm_.*aw_?ready$", re.I)),
+    ("wdata",   re.compile(r"hbm_.*w_?data$", re.I)),
+    ("wvalid",  re.compile(r"hbm_.*w_?valid$", re.I)),
+    ("wready",  re.compile(r"hbm_.*w_?ready$", re.I)),
+    ("bid",     re.compile(r"hbm_.*b_?id$", re.I)),
+    ("bvalid",  re.compile(r"hbm_.*b_?valid$", re.I)),
+    ("bready",  re.compile(r"hbm_.*b_?ready$", re.I)),
+    ("arid",    re.compile(r"hbm_.*ar_?id$", re.I)),
+    ("araddr",  re.compile(r"hbm_.*ar_?addr$", re.I)),
+    ("arvalid", re.compile(r"hbm_.*ar_?valid$", re.I)),
+    ("arready", re.compile(r"hbm_.*ar_?ready$", re.I)),
+    ("rid",     re.compile(r"hbm_.*r_?id$", re.I)),
+    ("rdata",   re.compile(r"hbm_.*r_?data$", re.I)),
+    ("rvalid",  re.compile(r"hbm_.*r_?valid$", re.I)),
+    ("rready",  re.compile(r"hbm_.*r_?ready$", re.I)),
+)
+
+
+_SPI_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("sclk", re.compile(r"(?:^|_)spi_?sclk$", re.I)),
+    ("cs_n", re.compile(r"(?:^|_)spi_?(?:cs_n|ss_n)$", re.I)),
+    ("mosi", re.compile(r"(?:^|_)spi_?mosi$", re.I)),
+    ("miso", re.compile(r"(?:^|_)spi_?miso$", re.I)),
+)
+
+_ETH_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("tx_en",   re.compile(r"(?:^|_)(?:eth|gmii|rgmii)_tx_(?:en|valid|ctl)$", re.I)),
+    ("tx_data", re.compile(r"(?:^|_)(?:eth|gmii|rgmii)_tx_?d(?:ata)?$", re.I)),
+    ("rx_dv",   re.compile(r"(?:^|_)(?:eth|gmii|rgmii)_rx_(?:dv|valid|ctl)$", re.I)),
+    ("rx_data", re.compile(r"(?:^|_)(?:eth|gmii|rgmii)_rx_?d(?:ata)?$", re.I)),
+    ("link_up", re.compile(r"(?:^|_)eth_link_up$", re.I)),
+    ("an_done", re.compile(r"(?:^|_)eth_an_done$", re.I)),
+    ("an_fail", re.compile(r"(?:^|_)eth_an_fail$", re.I)),
+)
+
+_PCIE_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("tx_valid", re.compile(r"pcie_.*tx_?t?valid$", re.I)),
+    ("tx_ready", re.compile(r"pcie_.*tx_?t?ready$", re.I)),
+    ("tx_data",  re.compile(r"pcie_.*tx_?t?data$", re.I)),
+    ("tx_last",  re.compile(r"pcie_.*tx_?t?last$", re.I)),
+    ("rx_valid", re.compile(r"pcie_.*rx_?t?valid$", re.I)),
+    ("rx_ready", re.compile(r"pcie_.*rx_?t?ready$", re.I)),
+    ("rx_data",  re.compile(r"pcie_.*rx_?t?data$", re.I)),
+    ("rx_last",  re.compile(r"pcie_.*rx_?t?last$", re.I)),
+    ("link_up",  re.compile(r"pcie_.*link_?up$", re.I)),
+    ("speed",    re.compile(r"pcie_.*(?:cfg_)?speed$", re.I)),
+    ("lanes",    re.compile(r"pcie_.*(?:cfg_)?(?:width|lanes)$", re.I)),
+)
+
 # Clock / reset naming. Anchored, so ``reset_done`` or ``clk_div2`` never match,
 # while every common prefix style (``s_axi_aresetn``, ``i_rst_n``, ``core_clk``) does.
-_CLK_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[aps]?clk|clock)$", re.I)
-_RST_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[aps]?reset|[aps]?rst|nreset|nrst)(?:_?[nb])?$", re.I)
+_CLK_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[ahps]?clk|clock)$", re.I)
+_RST_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[ahps]?reset|[ahps]?rst|nreset|nrst)(?:_?[nb])?$", re.I)
 
 
 def _norm_prefix(raw: str) -> str:
@@ -85,7 +181,7 @@ def _reset_active_low(name: str) -> bool:
         return True
     if n.endswith(("_n", "_b")):
         return True
-    return bool(re.match(r"^(?:[a-z0-9]+_)*[aps]?(?:reset|rst)[nb]$", n))
+    return bool(re.match(r"^(?:[a-z0-9]+_)*[ahps]?(?:reset|rst)[nb]$", n))
 
 
 def _infer_sv_iface_protocol(iface_type: str, port_name: str) -> str:
@@ -131,7 +227,18 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
             "missing_signals": [],
         })
 
-    for proto, pats, min_cnt in (("axi4_lite", _AXIL_PATS, 6), ("axi4_stream", _AXIS_PATS, 2), ("apb", _APB_PATS, 4)):
+    for proto, pats, min_cnt in (
+        ("hbm", _HBM_PATS, 6),
+        ("pcie", _PCIE_PATS, 4),
+        ("ddr4", _DDR4_PATS, 5),
+        ("ddr3", _DDR3_PATS, 5),
+        ("ahb_lite", _AHB_PATS, 5),
+        ("axi4_lite", _AXIL_PATS, 6),
+        ("axi4_stream", _AXIS_PATS, 2),
+        ("apb", _APB_PATS, 4),
+        ("spi", _SPI_PATS, 4),
+        ("ethernet", _ETH_PATS, 4),
+    ):
         groups: Dict[str, Dict[str, SVPortAST]] = {}
         for p in mod.ports:
             if p.name in claimed:
@@ -149,7 +256,40 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
                 v_port = sigs.get("psel") or sigs.get("penable")
                 req = REQUIRED_APB_SIGNALS
                 aw_p, dw_p = sigs.get("paddr"), sigs.get("pwdata") or sigs.get("prdata")
+            elif proto == "ahb_lite":
+                v_port = sigs.get("htrans") or sigs.get("hsel")
+                req = ("hsel", "haddr", "htrans", "hwrite", "hwdata", "hready", "hrdata", "hresp")
+                aw_p, dw_p = sigs.get("haddr"), sigs.get("hwdata") or sigs.get("hrdata")
+            elif proto in ("ddr3", "ddr4"):
+                v_port = sigs.get("cs_n") or sigs.get("act_n")
+                req = ("cs_n", "ba", "addr", "dq") if proto == "ddr3" else ("cs_n", "act_n", "bg", "ba", "adr", "dq")
+                aw_p, dw_p = sigs.get("addr") or sigs.get("adr"), sigs.get("dq")
+            elif proto == "hbm":
+                v_port = sigs.get("awvalid") or sigs.get("arvalid")
+                req = ("awaddr", "awvalid", "awready", "wdata", "wvalid", "wready", "araddr", "arvalid", "arready", "rdata", "rvalid", "rready")
+                aw_p, dw_p = sigs.get("awaddr") or sigs.get("araddr"), sigs.get("wdata") or sigs.get("rdata")
+            elif proto == "spi":
+                v_port = sigs.get("cs_n") or sigs.get("sclk")
+                req = ("sclk", "cs_n", "mosi", "miso")
+                aw_p, dw_p = None, None
+            elif proto == "ethernet":
+                v_port = sigs.get("rx_dv") or sigs.get("tx_en")
+                req = ("tx_en", "tx_data", "rx_dv", "rx_data")
+                aw_p, dw_p = None, sigs.get("tx_data") or sigs.get("rx_data")
+            elif proto == "pcie":
+                v_port = sigs.get("rx_valid") or sigs.get("tx_valid")
+                req = ("tx_valid", "tx_ready", "tx_data", "rx_valid", "rx_ready", "rx_data")
+                aw_p, dw_p = None, sigs.get("tx_data") or sigs.get("rx_data")
             elif proto == "axi4_lite":
+                for bp in mod.ports:
+                    if bp.name in claimed:
+                        continue
+                    for canon, bpat in _AXI4_BURST_PATS:
+                        bm = bpat.search(bp.name)
+                        if bm and _norm_prefix(bp.name[:bm.start()]) == grp:
+                            sigs.setdefault(canon, bp)
+                            claimed.add(bp.name)
+                            break
                 v_port = sigs.get("awvalid") or sigs.get("arvalid")
                 req = REQUIRED_AXIL_SIGNALS
                 aw_p, dw_p = sigs.get("awaddr") or sigs.get("araddr"), sigs.get("wdata") or sigs.get("rdata")
@@ -158,15 +298,26 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
                 req = ("tdata", "tvalid", "tready")
                 aw_p, dw_p = None, sigs.get("tdata")
             role = ("slave" if v_port.direction == "input" else "master") if v_port else "unknown"
-            ifaces.append({
-                "protocol": proto,
+            eff_proto = "axi4" if (proto == "axi4_lite" and any(k in sigs for k in ("awlen", "arlen", "wlast", "rlast", "awburst", "arburst"))) else proto
+            entry: Dict[str, Any] = {
+                "protocol": eff_proto,
                 "group_prefix": grp,
                 "role": role,
                 "addr_width": aw_p.width if aw_p else None,
                 "data_width": dw_p.width if dw_p else None,
                 "port_map": {k: v.name for k, v in sigs.items()},
+                "port_details": {
+                    k: {"port": v.name, "direction": v.direction, "width": v.width}
+                    for k, v in sigs.items()
+                },
                 "missing_signals": [s for s in req if s not in sigs],
-            })
+            }
+            if proto == "pcie":
+                if "GEN" in mod.parameters:
+                    entry["pcie_gen"] = mod.parameters["GEN"]
+                if "LANES" in mod.parameters:
+                    entry["pcie_lanes"] = mod.parameters["LANES"]
+            ifaces.append(entry)
 
     oos = []
     for p in mod.ports:
@@ -240,7 +391,9 @@ def tool_extract_interfaces(
 
     if emit_draft_yaml:
         m0 = extracted[0]
-        axil = next((i for i in m0["interfaces"] if i["protocol"] == "axi4_lite"), None)
+        # AXI4-Full 也归到这里：契约的 boundary.axi4_lite 是各类 AXI 端口的
+        # 统一出口，AXI4-Full 设备若被排除会得到空 axi4_lite 段。
+        axil = next((i for i in m0["interfaces"] if i["protocol"] in ("axi4_lite", "axi4")), None)
         apb = next((i for i in m0["interfaces"] if i["protocol"] == "apb"), None)
         boundary: Dict[str, Any] = {
             "module_name": m0["module_name"],
@@ -250,9 +403,10 @@ def tool_extract_interfaces(
             "reset": m0["reset"] or {"port": "aresetn", "active_low": True, "sync": True},
             "out_of_scope_ports": m0["out_of_scope_ports"],
         }
-        # 只在 RTL 真的存在 AXI4-Lite 接口时写 axi4_lite 段。纯 APB 设备若
-        # 写入空的 axi4_lite.port_map，validator 会把空 dict 当成「有 AXI 边界」
-        # 并报 17 条 E001，让合法的纯 APB 契约无法通过自家校验。
+        # 只在 RTL 真的存在 AXI 接口（或两种接口都没有，保持旧行为）时写
+        # axi4_lite 段。纯 APB 设备若写入空的 axi4_lite.port_map，validator 会把
+        # 空 dict 当成「有 AXI 边界」并报 17 条 E001，让合法的纯 APB 契约无法
+        # 通过自家校验（回归 33）。
         if axil or not apb:
             boundary["axi4_lite"] = {
                 "addr_width": (axil["addr_width"] or 12) if axil else 12,

@@ -95,6 +95,36 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     )
 
 
+
+def _parse_verilator_checks(log_txt: str) -> List[Dict[str, Any]]:
+    """Parse structured per-transaction [CHECK] lines emitted by Verilator testbenches."""
+    out: List[Dict[str, Any]] = []
+    for line in log_txt.splitlines():
+        if "[CHECK]" not in line:
+            continue
+        payload = line.split("[CHECK]", 1)[1].strip()
+        fields: Dict[str, str] = {}
+        for part in payload.split("|"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                fields[k.strip()] = v.strip()
+        if not fields.get("id"):
+            continue
+        out.append({
+            "rule_id": fields["id"],
+            "protocol": fields.get("proto", ""),
+            "category": fields.get("cat", "verilator_check"),
+            "engine": "Verilator 5.054",
+            "tx": fields.get("tx", ""),
+            "expected": fields.get("exp", ""),
+            "observed": fields.get("got", ""),
+            "status": _norm_status(fields.get("status", "FAIL")),
+            "detail": f"{fields.get('proto', '')} | {fields.get('tx', '')} | exp={fields.get('exp', '')} | got={fields.get('got', '')}",
+        })
+    return out
+
+
 def tool_normalize_sim_result(
     module_name: str,
     cocotb_results_json: Optional[str] = None,
@@ -142,13 +172,25 @@ def tool_normalize_sim_result(
             return err_result("normalize_sim_result", f"Verilator log not found: {verilator_log_path}")
         log_txt = p.read_text(encoding="utf-8", errors="ignore")
         ident = verify_suite_identities(log_txt, expected_suites or [])
-        for sname, st in ident["observed"].items():
-            checks.append({
-                "rule_id": f"SUITE_{sname}",
-                "category": "verilator_suite",
-                "status": "PASS" if st == "PASS" else "FAIL",
-                "detail": f"suite={sname} status={st}",
-            })
+        parsed_vchecks = _parse_verilator_checks(log_txt)
+        if parsed_vchecks:
+            checks.extend(parsed_vchecks)
+            for sname, st in ident["observed"].items():
+                if st != "PASS":
+                    checks.append({
+                        "rule_id": f"SUITE_{sname}",
+                        "category": "verilator_suite",
+                        "status": "FAIL",
+                        "detail": f"suite={sname} status={st}",
+                    })
+        else:
+            for sname, st in ident["observed"].items():
+                checks.append({
+                    "rule_id": f"SUITE_{sname}",
+                    "category": "verilator_suite",
+                    "status": "PASS" if st == "PASS" else "FAIL",
+                    "detail": f"suite={sname} status={st}",
+                })
         for miss in ident["missing"]:
             checks.append({
                 "rule_id": f"SUITE_{miss}",

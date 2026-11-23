@@ -1,0 +1,26 @@
+mutations:
+  - id: M01_APB_W1C_BROKEN
+    file: apb_slave.sv
+    old: "2'd2: regs[2] <= regs[2] & ~pwdata; // W1C"
+    new: "2'd2: regs[2] <= pwdata; // W1C"
+    desc: "Break APB W1C register semantics (overwrite instead of write-1-to-clear)"
+  - id: M02_AXI4_SLVERR_BROKEN
+    file: axi4_full_slave.sv
+    old: "s_axi_bresp  <= wr_err ? 2'b10 : 2'b00; // SLVERR or OKAY"
+    new: "s_axi_bresp  <= 2'b00; // SLVERR or OKAY"
+    desc: "Suppress AXI4 out-of-range write SLVERR (always return OKAY)"
+  - id: M03_AHB_RO_RESET
+    file: ahb_lite_slave.sv
+    old: "regs[1]    <= 32'hCAFEBABE; // RO"
+    new: "regs[1]    <= 32'h00000000; // RO"
+    desc: "Corrupt AHB-Lite RO register reset value"
+  - id: M04_DDR4_DM_MASK
+    file: ddr4_mem_ctrl.sv
+    old: "if (ddr4_dm_dbi_n[b]) mem[midx][b*8 +: 8] <= ddr4_dq_in[b*8 +: 8];"
+    new: "mem[midx][b*8 +: 8] <= ddr4_dq_in[b*8 +: 8];"
+    desc: "Ignore DDR4 active-low DM_DBI_n byte mask on write"
+  - id: M05_PCIE_CFG_SPEED
+    file: pcie_tlp_ep.sv
+    old: "assign pcie_cfg_speed = 4'(GEN);"
+    new: "assign pcie_cfg_speed = 4'd0;"
+    desc: "Corrupt negotiated PCIe Gen speed reporting"
