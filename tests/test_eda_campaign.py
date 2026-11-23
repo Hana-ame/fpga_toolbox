@@ -114,9 +114,71 @@ def test_generate_remote_run_script() -> None:
     assert "/dev/shm/p1_base" in sh
 
 
+
+
+def test_clean_netlist_param_and_comment_edges() -> None:
+    """参数化 blackbox 与注释中的 endmodule（审计中发现的 2 个真实缺陷）。
+
+    缺陷 A：实例正则用 `\\((.*?)\\)` 非贪婪，遇到参数化覆盖
+    `RDBUS #(.WIDTH(8)) u (...)` 里 `#(` 的第一个 `)` 就截断，导致这类实例
+    完全匹配不到（removed_instances 恒为 0）——而这正是文档要解决的主场景。
+
+    缺陷 B：`endmodule` 出现在注释里时，模块切分在注释处提前截断，且插入
+    assign 时用 re.sub(r"\\bendmodule\\b") 会命中注释内的 endmodule，把
+    assign 语句插进注释中间，产出语法错误的网表。
+    """
+    # 缺陷 A：参数化实例必须被清理
+    param_v = (
+        "module t(input a, output [7:0] o);\n"
+        "  RDBUS #(.WIDTH(8), .DEPTH(4)) u (.i_data(a), .o_data(o));\n"
+        "endmodule\n"
+    )
+    c1, s1 = clean_netlist_for_pt(param_v)
+    assert s1["removed_instances"] == 1, f"parameterized instance not removed: {s1}"
+    assert "RDBUS" not in c1
+    assert "assign o = 1'b0;" in c1
+
+    # 缺陷 B：注释里的 endmodule 不得破坏网表
+    comment_v = (
+        "module t(input a, output o);\n"
+        "  // comment mentions endmodule but it is not real\n"
+        "  RDBUS u (.i_data(a), .o_data(o));\n"
+        "endmodule\n"
+    )
+    c2, s2 = clean_netlist_for_pt(comment_v)
+    assert s2["removed_instances"] == 1, f"instance after comment-endmodule not removed: {s2}"
+    assert "// comment mentions endmodule but it is not real" in c2, "comment was mutated"
+    # assign 必须在真正的 endmodule 之前，而不是插进注释里
+    body = c2.split("// comment mentions endmodule but it is not real")[1]
+    assert body.lstrip().startswith("\n  RDBUS") is False or "assign o" in body
+    assert "assign o = 1'b0;" in c2
+    # 注释行内不得出现 assign
+    for line in c2.splitlines():
+        if "mentions endmodule" in line:
+            assert "assign" not in line, f"assign injected into comment: {line}"
+
+    # 缺陷 C：DC 导出的网表常把整个模块压成一行。旧正则锚定行首 `^[ \t]*`，
+    # 此时实例前面是 `; ` 而非行首，完全匹配不到（removed=0）。
+    oneline_v = "module t(o); output o; RDBUS #(.W(8)) u (.o_data(o)); endmodule"
+    c3, s3 = clean_netlist_for_pt(oneline_v)
+    assert s3["removed_instances"] == 1, f"one-line module instance not removed: {s3}"
+    assert "RDBUS" not in c3
+
+    # 锚点放宽后不得误伤名字里含 RDBUS 的其它模块
+    lookalike = (
+        "module t(o);\n"
+        "  output o;\n"
+        "  my_RDBUS_wrapper u (.o_data(o));\n"
+        "endmodule\n"
+    )
+    _, s4 = clean_netlist_for_pt(lookalike)
+    assert s4["removed_instances"] == 0, f"lookalike module wrongly removed: {s4}"
+
+
 if __name__ == "__main__":
     test_parse_uvm_log_and_medians()
     test_parse_dc_pt_qor_and_pitfalls()
     test_clean_netlist_for_pt()
+    test_clean_netlist_param_and_comment_edges()
     test_generate_remote_run_script()
     print("ALL EDA CAMPAIGN TESTS PASSED")

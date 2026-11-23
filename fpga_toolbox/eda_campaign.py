@@ -118,11 +118,14 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
             "actual_rate": (flips_act / pcs_words) if (flips_act is not None and pcs_words) else None,
         } if pcs_words is not None else None,
     }
-    return ok_result("parse_uvm_log", data, diagnostics=diags) if passed else err_result(
+    if passed:
+        return ok_result("parse_uvm_log", data, diagnostics=diags)
+    return err_result(
         "parse_uvm_log",
         f"UVM run gate failed (delivered={delivered}/{target_frames}, fid_bad={fid_bad}, uvm_error={uvm_error}).",
         diagnostics=diags,
-    ) | {"data": data}
+        data=data,
+    )
 
 
 def aggregate_seed_medians(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -249,7 +252,13 @@ def verify_paired_baseline_reproducibility(run_a: Dict[str, Any], run_b: Dict[st
 
 
 def _flatten_nets(expr: str) -> List[str]:
-    """Flatten a Verilog port connection (including concatenations `{a, b}`) into scalar net names."""
+    """Flatten a Verilog port connection (including concatenations `{a, b}`) into scalar net names.
+
+    注意：**保留位选择**（`.o_data({q_a[1], q_a[0]})` -> `['q_a[1]', 'q_a[0]']`，
+    而不是合并成 `q_a`）。因为下游要求「逐根插入标量 assign」，对 `{q_a[1], q_a[0]}`
+    这种拼接，展开成两条标量 assign 才能精确覆盖被 blackbox 驱动的位；若合并成
+    `assign q_a = 1'b0;` 会用 1 位去驱动多位向量，反而引入位宽不匹配。
+    """
     cleaned = expr.strip()
     if cleaned.startswith("{") and cleaned.endswith("}"):
         cleaned = cleaned[1:-1]
@@ -258,7 +267,8 @@ def _flatten_nets(expr: str) -> List[str]:
         tok = part.strip()
         if not tok or tok.startswith("1'b") or tok.startswith("0") or tok.isdigit():
             continue
-        nets.append(tok)
+        if tok not in nets:
+            nets.append(tok)
     return nets
 
 
@@ -274,9 +284,45 @@ def clean_netlist_for_pt(
     (PrimeTime rejects concatenated ``assign {a,b} = 0;``).
     """
     bb_alt = "|".join(re.escape(m) for m in blackbox_modules)
-    inst_re = re.compile(rf"^[ \t]*(?:{bb_alt})\s+[A-Za-z0-9_\\$]+\s*\((.*?)\)\s*;", re.M | re.S)
-    port_re = re.compile(r"\.([A-Za-z0-9_]+)\s*\(([^()]*)\)")
-    mod_re = re.compile(r"(module\s+[A-Za-z0-9_\\$]+.*?endmodule)", re.S)
+    # 实例匹配必须容忍嵌套括号：
+    #   1) 参数化覆盖 `RDBUS #(.WIDTH(8)) u_x (...)` —— 旧实现用 `\((.*?)\)`
+    #      非贪婪，遇到 `#(` 里的第一个 `)` 就截断，导致这类实例完全匹配不到
+    #      （removed_instances 恒为 0）。而这恰恰是本文档要解决的
+    #      「参数化 RDBUS 位宽不一致」主场景。
+    #   2) 端口值可含嵌套（`{a, b}` / `o[3:0]` / 嵌套调用）。
+    # 用显式结构：可选 `#(...)` + 实例名 + 配平端口括号，两层都允许嵌套。
+    _nested = r"(?:[^()]|\((?:[^()]|\([^()]*\))*\))*"
+    inst_re = re.compile(
+        # 不能锚定行首 `^[ \t]*`：DC 导出的网表常把整个模块压成一行
+        # （`module t(o); output o; RDBUS #(.W) u (...); endmodule`），此时实例
+        # 前面是 `; ` 而不是行首，锚定行首会完全匹配不到（实测 removed=0）。
+        # 用 `(?<![\w.$])` 保证只在标识符边界起匹配，不误伤 `my_RDBUS_x` 之类。
+        rf"(?<![\w.$])(?:{bb_alt})\b"
+        rf"(?:\s*#\s*\(\s*{_nested}\s*\))?"
+        rf"\s+[A-Za-z0-9_\$]+\s*\(\s*({_nested}\s*)\)\s*;",
+        re.M | re.S,
+    )
+    port_re = re.compile(r"\.([A-Za-z0-9_]+)\s*\((" + _nested + r")\)")
+    # `endmodule` 可能出现在注释或字符串里。旧的 `.*?endmodule` 会在注释中的
+    # endmodule 上提前截断，导致该块之后的实例（如紧随注释的 RDBUS）落在块外
+    # 而永不被清理（实测 removed_instances=0，网表原样输出）。
+    # 用「模块体原子」逐 token 前进：注释/字符串整体跳过，只有真正的
+    # endmodule 才结束匹配。
+    # `endmodule` 可能出现在注释或字符串里。旧的 `.*?endmodule` 会在注释中的
+    # endmodule 上提前截断，使该块之后的实例（如紧随注释的 RDBUS）落在块外而
+    # 永不被清理（实测 removed_instances=0，网表原样输出）。
+    # 逐个 token 前进：注释/字符串整体跳过，只有真正的 endmodule 才结束匹配。
+    _SKIP = r'''/\*.*?\*/|//[^\n]*|"(?:[^"\\]|\\.)*"'''
+    mod_re = re.compile(
+        r"module\s+[A-Za-z0-9_\$](?:" + _SKIP + r"|(?!\bendmodule\b)[\s\S])*?\bendmodule\b",
+        re.S,
+    )
+    # 注意：_clean_module 用 m.group(1) 取整块，因此上面整段必须是一个捕获组。
+    # 但 `_SKIP` 里已含非捕获组，这里用外层括号包住整个模式。
+    mod_re = re.compile(
+        "(" + mod_re.pattern + ")",
+        re.S,
+    )
 
     removed_instances = 0
     tied_nets_total: List[str] = []
@@ -302,7 +348,21 @@ def clean_netlist_for_pt(
         if mod_ties:
             tied_nets_total.extend(mod_ties)
             assigns = "\n".join(f"  assign {net} = 1'b0;" for net in mod_ties)
-            new_block = re.sub(r"\bendmodule\b", f"{assigns}\nendmodule", new_block, count=1)
+            # 只能在**真正的** endmodule 前插入 assign。旧实现用
+            # re.sub(r"\bendmodule\b", ...) 会命中注释里的 endmodule，把
+            # assign 语句插进注释中间，产出语法错误的网表（实测
+            # `// mentions   assign o = 1'b0;\nendmodule but ...`）。
+            # 这里定位块内最后一个被注释/字符串包住的 endmodule 之后的位置。
+            real_end = None
+            scan_re = re.compile(
+                _SKIP + r"|\bendmodule\b",
+                re.S,
+            )
+            for mm in scan_re.finditer(new_block):
+                if mm.group(0) == "endmodule":
+                    real_end = mm.start()
+            if real_end is not None:
+                new_block = new_block[:real_end] + assigns + "\n" + new_block[real_end:]
         return new_block
 
     cleaned = mod_re.sub(_clean_module, verilog_text)

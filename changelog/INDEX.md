@@ -16,6 +16,10 @@
 
 - [10-synopsys-vcs-dc-pt-campaign-integration.md](10-synopsys-vcs-dc-pt-campaign-integration.md) — Synopsys VCS/UVM `parse_uvm_log`、DC/PT `parse_dc_pt_qor`、PT 黑盒网表清理与远端 `csh`/`/dev/shm` 启动器。⚠ 诊断码已从 `E040–E045` 平移为 `E046–E050`（`E040` 被 `audit_harness` 占用）
 
+## eda_campaign 审计
+
+- [20-eda-campaign-audit.md](20-eda-campaign-audit.md) — 审计 `clean_netlist_for_pt` 发现 2 个真实缺陷：参数化 `#(...)` blackbox 实例完全不被清理（`removed=0`）、注释中的 `endmodule` 导致成块扫描错位并往注释里注入 assign。附一次自我纠偏：位选择不应被合并成根 net
+
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
