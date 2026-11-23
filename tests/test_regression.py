@@ -173,6 +173,39 @@ def test_reset_detection(tmp: Path) -> None:
                   m.group(1) if m else "missing")
 
 
+def test_pure_apb_draft(tmp: Path) -> None:
+    """extract_interfaces --emit-draft-yaml 对纯 APB 设备不得写空 axi4_lite 段。
+
+    回归 33：空 axi4_lite.port_map 会被 validator 当成「存在 AXI 边界」，
+    导致合法的纯 APB 契约报 17 条 E001，自家 draft 过不了自家校验。
+    """
+    proj = tmp / "pure_apb"
+    rtl = proj / "pure_apb.sv"
+    rtl.parent.mkdir(parents=True, exist_ok=True)
+    rtl.write_text(
+        "module pure_apb(input logic clk, input logic rst,\n"
+        "  input logic psel, input logic penable, input logic pwrite,\n"
+        "  input logic [7:0] paddr, input logic [31:0] pwdata,\n"
+        "  output logic pready, output logic [31:0] prdata, output logic pslverr);\n"
+        "  assign pready = 1'b1; assign prdata = 32'h0; assign pslverr = 1'b0;\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+    draft = proj / "contract.yaml"
+    ex = call_tool("extract_interfaces", {
+        "rtl_file": str(rtl), "module_name": "pure_apb", "emit_draft_yaml": str(draft),
+    })
+    check("pure-apb extract ok", ex["ok"], ex.get("error") or "")
+    text = draft.read_text(encoding="utf-8")
+    check("pure-apb draft has apb", "apb:" in text, text[:200])
+    check("pure-apb draft omits axi4_lite", "axi4_lite:" not in text,
+          "draft must not emit an empty axi4_lite block for APB-only RTL")
+    val = call_tool("validate_contract", {"spec_path": str(draft), "rtl_file": str(rtl)})
+    errs = [d for d in (val.get("diagnostics") or []) if d.get("severity") == "ERROR"]
+    check("pure-apb draft validates", val["ok"] and not errs,
+          f"ok={val['ok']} errors={[d.get('code') for d in errs]}")
+
+
 def test_normalizer(tmp: Path) -> None:
     print("normalize_sim_result: unrecognized input is an error, not an empty report")
     junk = tmp / "junk.json"
@@ -325,6 +358,7 @@ def main() -> int:
         test_sandbox_guards(tmp)
         test_sandbox_layout(tmp)
         test_reset_detection(tmp)
+        test_pure_apb_draft(tmp)
         test_normalizer(tmp)
         test_full_chain(tmp)
         test_cli(tmp)

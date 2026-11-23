@@ -248,14 +248,18 @@ def tool_extract_interfaces(
             "parameters": m0["parameters"],
             "clock": m0["clock"] or {"port": "aclk", "freq_mhz": 100.0},
             "reset": m0["reset"] or {"port": "aresetn", "active_low": True, "sync": True},
-            "axi4_lite": {
+            "out_of_scope_ports": m0["out_of_scope_ports"],
+        }
+        # 只在 RTL 真的存在 AXI4-Lite 接口时写 axi4_lite 段。纯 APB 设备若
+        # 写入空的 axi4_lite.port_map，validator 会把空 dict 当成「有 AXI 边界」
+        # 并报 17 条 E001，让合法的纯 APB 契约无法通过自家校验。
+        if axil or not apb:
+            boundary["axi4_lite"] = {
                 "addr_width": (axil["addr_width"] or 12) if axil else 12,
                 "data_width": (axil["data_width"] or 32) if axil else 32,
                 "role": (axil["role"] if axil and axil["role"] != "unknown" else "slave"),
                 "port_map": axil["port_map"] if axil else {},
-            },
-            "out_of_scope_ports": m0["out_of_scope_ports"],
-        }
+            }
         if apb:
             boundary["apb"] = {
                 "addr_width": apb["addr_width"] or 8,

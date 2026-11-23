@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — 纯 APB draft 契约修复
+
+### Fixed
+- **`extract_interfaces --emit-draft-yaml` 对纯 APB 设备生成自家 validator 拒绝的 draft**（`iface_extractor.py`）。生成 draft 时 `axi4_lite` 段是无条件写出的：RTL 只有一套 APB 端口、根本没有 AXI4-Lite 接口时，也会写出空的 `axi4_lite.port_map: {}`。而 `validator.py` 的 `has_axil = isinstance(axil_raw, dict) or not has_apb` 把空 dict 也当作「存在 AXI 边界」，于是对空 `port_map` 逐条检查 16 个必需信号，产生 **17 条 E001**。
+
+  后果：README 推荐的两步流程（`extract_interfaces --emit-draft-yaml` → `emit_testbench --spec-path`）用在纯 APB RTL 上，第一步产物被第二步以 17 条 E001 拒绝；用户只会以为自己契约写错，而不是工具只生成 AXI4-Lite wrapper。
+
+  修复：仅当 RTL 真有 AXI4-Lite 接口（或两种接口都没有，保持旧行为）时才写 `axi4_lite` 段。纯 APB 设备 draft 现在 0 ERROR、`validate_contract` 返回 `ok: True`；`emit_testbench` 的报错也从 17 条 E001 变为可读的 `Spec has no AXI4-Lite boundary ...`。新增 `tests/test_regression.py::test_pure_apb_draft`（4 项检查）锁死该行为。详见 [`changelog/pure-apb-draft.md`](changelog/pure-apb-draft.md)。
+
 ## [Unreleased] — 独立审计修复
 
 本轮对 v0.5.0 做外部审计（非作者视角重跑全部工具），发现并修复 3 处「声称能做但实际静默退化」的真实缺陷。这些缺陷的共同点恰好是本项目 README 反复批判的行为——静默通过。
