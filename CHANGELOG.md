@@ -2,6 +2,13 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — 多总线 TB 生成器端口校验
+
+### Fixed
+- **`emit_testbench --protocol <p>` 对缺端口的 DUT 生成无法编译的 TB 却返回 `ok=True`**（`protocol_tb_emitter.py`）。协议分类器只需 4 个信号就能认出 APB（APB3 允许无 `pstrb`/`pslverr`），但 TB 模板硬连全部 9 个，`_pm()` 对缺失项退回同名占位，于是 APB3 风格 DUT 得到 `.pstrb(pstrb)` 连到不存在端口的 TB——Verilator 报 `PINNOTFOUND`，而工具已报成功。
+
+  修复：新增 `REQUIRED_TB_PORTS` 表（按模板**实际连线**而非分类器阈值）与 `_missing_tb_ports()`，写文件前校验 DUT 真实端口，缺失即 `err_result` 并点名缺哪个端口。注意 `extract_interfaces` 的模块数据不含 `ports` 字段，需 `parse_sv_file` 兜底。新增 `test_multi_bus_emitter_port_guard`（6 项检查，含「不写出坏产物」）。详见 [`changelog/14-multi-bus-tb-port-guard.md`](changelog/14-multi-bus-tb-port-guard.md)。
+
 ## [Unreleased] — multi-bus-pass 合并（多总线能力 + 缺陷修复并集）
 
 把外部演进版 `fpga_toolbox-multi-bus-pass`（216 文件，9 个迭代阶段）与本仓 36 个缺陷修复做真正的三方合并，而非覆盖。该版本从同一 v0.5.0 基线分出，**不含**本轮的 W102/CST/符号链接/编码等修复，直接覆盖会全部丢失。

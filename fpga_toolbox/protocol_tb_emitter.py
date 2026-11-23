@@ -17,12 +17,47 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .core.types import err_result, ok_result
 from .iface_extractor import tool_extract_interfaces
 
 SUPPORTED_MULTI_PROTOCOLS = ("apb", "axi4", "ahb_lite", "ddr3", "ddr4", "hbm", "pcie")
+
+# 各协议 testbench 模板**实际硬连**的端口。分类器只需若干个信号就能认出协议
+# （APB 只需 4 个），但 TB 模板会连全部 9 个 —— 若 RTL 缺其中任何一个（如 APB3
+# 无 pstrb、无 pslverr），生成出的 TB 会 `.pstrb(pstrb)` 连到不存在的端口，
+# Verilator 报 PINNOTFOUND 编译失败，而工具却返回 ok=True（静默生成坏产物）。
+# 因此生成前按此表校验，缺失即 fail-fast。
+REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
+    # APB 模板硬连全部 9 个信号（含 pstrb/pslverr）——虽然 APB3 允许它们缺失，
+    # 但模板会连，所以缺了必须报错，而不是生成 PINNOTFOUND 的坏 TB。
+    "apb": ("psel", "penable", "pwrite", "paddr", "pwdata", "pstrb", "pready", "prdata", "pslverr"),
+    "axi4": (
+        "awaddr", "awvalid", "awready", "wdata", "wstrb", "wvalid", "wready",
+        "bresp", "bvalid", "bready", "araddr", "arvalid", "arready",
+        "rdata", "rresp", "rvalid", "rready",
+    ),
+    "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hsize", "hwdata", "hready", "hrdata", "hresp"),
+}
+
+
+def _missing_tb_ports(proto: str, iface: Dict[str, Any], rtl_ports: List[str]) -> List[str]:
+    """返回该协议 TB 模板需要、但 DUT 实际没有的端口名。
+
+    优先用 port_map 的映射结果判断（emitter 就是按 port_map 连线），若 port_map
+    没给某项则退回 RTL 端口名本身——两者都不存在就是真缺失。
+    """
+    required = REQUIRED_TB_PORTS.get(proto)
+    if not required:
+        return []
+    port_set = {p.lower() for p in rtl_ports}
+    missing: List[str] = []
+    for canon in required:
+        mapped = _pm(iface, canon, canon)
+        if mapped.lower() not in port_set:
+            missing.append(f"{canon}->{mapped}")
+    return missing
 
 
 def _pm(iface: Dict[str, Any], canon: str, default: str) -> str:
@@ -574,6 +609,27 @@ def emit_protocol_testbench(
             )
 
     proto = str(chosen["protocol"])
+
+    # 生成前校验 TB 模板硬连的端口在 DUT 上确实存在，避免产出无法编译的 TB
+    # 却仍报 ok=True（Verilator PINNOTFOUND 才是最终判据，但那已经太晚）。
+    rtl_ports = [str(p.get("name")) for p in (m.get("ports") or []) if isinstance(p, dict)]
+    if not rtl_ports:
+        # 兜底：extract_interfaces 的模块级端口清单不可用时，直接解析 RTL 补齐
+        from .core.sv_parser import parse_sv_file as _psf
+
+        for _m in _psf(rp):
+            if _m.name == mod_name:
+                rtl_ports = [p.name for p in _m.ports]
+                break
+    missing_ports = _missing_tb_ports(proto, chosen, rtl_ports)
+    if missing_ports:
+        return err_result(
+            "emit_testbench",
+            f"Cannot emit a '{proto}' testbench for {mod_name}: DUT is missing port(s) "
+            f"{', '.join(missing_ports)} that the generated template drives. "
+            f"Detected RTL ports: {sorted(rtl_ports)}",
+        )
+
     od = Path(out_dir).resolve()
     od.mkdir(parents=True, exist_ok=True)
 

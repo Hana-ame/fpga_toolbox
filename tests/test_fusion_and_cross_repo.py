@@ -521,6 +521,58 @@ def test_multi_bus_classifiers():
             assert pcie_if.get("pcie_lanes") == 4
 
 
+def test_multi_bus_emitter_port_guard() -> None:
+    """protocol= 的 TB 模板硬连的端口若在 DUT 上不存在，必须 fail-fast。
+
+    回归 39：分类器只需 4 个信号就能认出 APB，但 TB 模板会连全部 9 个
+    （含 pstrb/pslverr）。RTL 缺这些端口时，旧实现仍返回 ok=True 并生成
+    `.pstrb(pstrb)` 连到不存在端口的 TB——Verilator 报 PINNOTFOUND 编译
+    失败，即「静默生成坏产物」。修复后生成前校验必需端口，缺失即报错。
+    """
+    import tempfile
+
+    from fpga_toolbox import call_tool
+
+    print("fusion: multi-bus emitter required-port guard")
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        # APB3 风格：无 pstrb / pslverr（分类器仍能认出 apb）
+        missing_sv = tdp / "apb3_no_pstrb.sv"
+        missing_sv.write_text(
+            "module apb3_no_pstrb(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata,\n"
+            "   output logic pready, output logic [31:0] prdata); endmodule\n",
+            encoding="utf-8",
+        )
+        out1 = tdp / "tb_bad"
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(missing_sv), "out_dir": str(out1), "protocol": "apb",
+        })
+        check(r["ok"] is False, f"APB TB with missing pstrb is rejected (got {str(r.get('error'))[:120]})")
+        check("pstrb" in str(r.get("error")), f"error names the missing port (got {str(r.get('error'))[:160]})")
+        check(not (out1 / "tb_apb3_no_pstrb_apb.sv").exists(), "no bogus TB artifact written")
+
+        # 端口齐全时必须正常生成（不能把好路径也堵死）
+        full_sv = tdp / "apb_ok.sv"
+        full_sv.write_text(
+            "module apb_ok(input logic clk, input logic rst,\n"
+            "   input logic psel, input logic penable, input logic pwrite,\n"
+            "   input logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+            "   output logic pready, output logic [31:0] prdata, output logic pslverr); endmodule\n",
+            encoding="utf-8",
+        )
+        r2 = call_tool("emit_testbench", {
+            "rtl_file": str(full_sv), "out_dir": str(tdp / "tb_ok"), "protocol": "apb",
+        })
+        check(r2["ok"] is True, f"complete APB still emits (got {str(r2.get('error'))[:120]})")
+        if r2["ok"]:
+            tb = Path(r2["data"]["artifacts"]["sv_testbench"])
+            check(tb.is_file(), f"TB artifact exists ({tb})")
+            txt = tb.read_text(encoding="utf-8")
+            check(".pstrb(pstrb)" in txt or "pstrb = strb" in txt, "TB drives pstrb")
+
+
 def main() -> int:
     test_cross_repo_extraction()
     test_index_repo_include_boundary()
@@ -535,6 +587,7 @@ def main() -> int:
     test_dual_side_apb_slave_emitter()
     test_emit_testbench_error_paths()
     test_multi_bus_classifiers()
+    test_multi_bus_emitter_port_guard()
     print("\n" + ("ALL FUSION CHECKS PASSED" if FAILS == 0 else f"{FAILS} CHECK(S) FAILED"))
     return 0 if FAILS == 0 else 1
 
