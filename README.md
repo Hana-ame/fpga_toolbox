@@ -14,7 +14,7 @@
 | 2 | `resolve_deps` | BFS 计算目标模块传递依赖闭包与 DAG 边 |
 | 3 | `copy_sandbox` | 带防误删保护与 SHA-256 校验的沙箱隔离复制 |
 | 4 | `extract_interfaces` | 抽取 AXI4-Lite / AXI4-Stream / APB / SV `interface` 与时钟复位（支持可选 `slang` AST） |
-| 5 | `validate_contract` | 校验 YAML/JSON 边界契约与 `apb-regfile-spec/v2` 位域规则（E000–E014） |
+| 5 | `validate_contract` | 校验 YAML/JSON 边界契约与 `apb-regfile-spec/v2` 位域规则（E000–E015，E015 为位域 bits 顺序反了 hi<lo 的专门提示） |
 | 6 | `emit_testbench` | 生成 SV wrapper / SVA / bind 与含写回读、反压压测的 cocotb 测试平台 |
 | 7 | `normalize_sim_result` | 归一化 cocotb XML/JSON、SVA 日志与 Verilator 多套件日志（含逐套件身份核对） |
 | 8 | `render_visual_report` | 渲染独立 SVG 拓扑 + HTML 规则审计看板，内置 HTML 标签与行数一致性自检 |
