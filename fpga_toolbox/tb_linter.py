@@ -220,6 +220,29 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                         "message": f"Checks {sig} without visible prior {ready}=1.",
                         "context": raw.strip(),
                     })
+        # S1 扩展（SV function stub）：SV 的 function 是多行的，旧 S1 正则只匹配
+        # shell 单行 stub（func() { return 0; }）。这里识别 SV function 内只有
+        # return <常量>; 的 stub —— 真实踩坑：SV 验证 helper 函数返回常量 0/1
+        # 时旧正则漏报。
+        if re.search(r"\bfunction\b", ln, re.IGNORECASE):
+            body = []
+            for k in range(i, min(i + 25, len(lines))):
+                bk = lines[k].split("//")[0].strip()
+                if k > i:
+                    body.append(bk)
+                if re.search(r"\bendfunction\b", bk):
+                    break
+            rets = [b for b in body if re.match(r"^return\s+[-]?\d+\s*;", b)]
+            # function 体只有 return 常量语句（无 if/else/case/for/while）→ stub
+            if rets and len(body) <= 4 and not any(
+                    re.search(r"\b(if|else|case|for|while)\b", b) for b in body):
+                issues.append({
+                    "severity": "ERROR",
+                    "code": "S1",
+                    "path": f"{path}:{i + 1}",
+                    "message": "Verification helper function returns only a constant (stub).",
+                    "context": lines[i].strip(),
+                })
     return issues
 
 
