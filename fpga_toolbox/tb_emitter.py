@@ -74,14 +74,12 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
         connected.add(_aport)
         _dinfo = apb_dirs.get(_aport, ("output", 1))
         _adir, _awidth = (_dinfo[0], _dinfo[1]) if isinstance(_dinfo, tuple) else (_dinfo, 1)
-        if _adir == "input":
-            # input tie_off 用该端口实际宽度（如 prdata=32 位），而非固定 1 位
-            tie = f"{_awidth}'h0" if _awidth > 1 else "1'b0"
-            conns.append(f"    .{_aport}({tie})")
-        else:
-            w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
-            obs_decls.append(f"  logic {w}obs_{_aport};")
-            conns.append(f"    .{_aport}(obs_{_aport})")
+        # APB input（pready/prdata/pslverr）也生成可驱动的 obs_ 探针，
+        # 让 cocotb APB slave 响应器能驱动它们（桥的 APB 事务需要 pready）。
+        # output 同样连 obs_ 探针。两者都用 obs_ 探针，仅方向决定 cocotb 读写。
+        w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
+        obs_decls.append(f"  logic {w}obs_{_aport};")
+        conns.append(f"    .{_aport}(obs_{_aport})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
     # Pre-join: a backslash inside an f-string expression needs Python 3.12+.
     conn_s = ",\n".join(conns)
