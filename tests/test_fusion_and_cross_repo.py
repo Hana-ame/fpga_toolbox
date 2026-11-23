@@ -23,6 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 REF = ROOT / "examples" / "axi_apb_ref"
 sys.path.insert(0, str(ROOT))
 
+# Windows 的 cp1252 无法编码中文 print（实测 CI 失败），强制 stdout/stderr 用 UTF-8。
+# 放在所有 print 之前，让含中文的诊断输出在任意平台都安全。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from fpga_toolbox import call_tool, list_tool_schemas  # noqa: E402
 
 FAILS = 0
