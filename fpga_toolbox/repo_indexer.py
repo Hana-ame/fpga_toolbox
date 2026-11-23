@@ -63,7 +63,6 @@ def _module_body(name: str, src: str) -> str:
     """
     toks = sv_tokenize(src)
     start = None
-    depth = 0
     end_line = None
     for k, t in enumerate(toks):
         if start is None:

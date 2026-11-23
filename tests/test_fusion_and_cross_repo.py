@@ -263,7 +263,6 @@ def test_slang_backend_real_rtl() -> None:
           "no silent builtin fallback (fallbacks are reported via diagnostics)")
 
     # 4) 无 slang 的环境必须产出回退诊断（可见信号）
-    from fpga_toolbox.core import sv_parser as sp
     if bridge.is_file():
         diag2: list = []
         m2 = parse_sv_file(bridge, backend="auto", diagnostics=diag2)

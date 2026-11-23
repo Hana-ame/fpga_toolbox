@@ -22,9 +22,8 @@ from .core.types import err_result, ok_result
 from .mutation_runner import tool_run_mutation
 from .result_normalizer import tool_normalize_sim_result
 from .sandbox_copier import tool_copy_sandbox
-from .sim_runner import verify_suite_identities, tool_run_sim
+from .sim_runner import tool_run_sim, verify_suite_identities
 from .tb_emitter import tool_emit_testbench
-from .core import sv_parser
 from .tb_linter import tool_lint_tb
 
 
