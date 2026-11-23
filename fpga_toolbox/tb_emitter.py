@@ -73,12 +73,11 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
             continue
         connected.add(_aport)
         _adir, _awidth = apb_dirs.get(_aport, ("output", 1))
-        if _adir == "input":
-            conns.append(f"    .{_aport}({_awidth}'h0)")
-        else:
-            w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
-            obs_decls.append(f"  logic {w}obs_{_aport};")
-            conns.append(f"    .{_aport}(obs_{_aport})")
+        # APB input（pready/prdata/pslverr）也连 obs_ 探针，让 cocotb APB slave
+        # 响应器能驱动它们（桥的 APB 事务需要 pready）。不再 tie_off 常量。
+        _obs_w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
+        obs_decls.append(f"  logic {_obs_w}obs_{_aport};")
+        conns.append(f"    .{_aport}(obs_{_aport})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
     # Pre-join: a backslash inside an f-string expression needs Python 3.12+.
     conn_s = ",\n".join(conns)
@@ -196,6 +195,29 @@ async def test_axil_rules(dut):
     for _ in range(2):
         await RisingEdge(dut.{b.clock.port})
     m = AxiLiteMaster(AxiLiteBus.from_prefix(dut, "s_axil"), dut.{b.clock.port}, dut.{b.reset.port}, reset_active_level={not b.reset.active_low})
+
+    # APB slave 响应器：桥的 APB 侧（master）需要连 APB slave 才能完成事务。
+    # 无它时桥等不到 pready，触发 P_003 RVALID timeout（实测踩过）。
+    # APB 端口经 wrapper 连到 obs_ 探针，cocotb 从 dut.obs_* 驱动。
+    async def _apb_slave():
+        apb_mem = {{}}
+        while True:
+            await RisingEdge(dut.{b.clock.port})
+            _psel = getattr(dut, "obs_psel").value
+            _pen = getattr(dut, "obs_penable").value
+            if int(_psel) == 1 and int(_pen) == 1:
+                _addr = int(getattr(dut, "obs_paddr").value)
+                if int(getattr(dut, "obs_pwrite").value) == 1:
+                    apb_mem[_addr] = int(getattr(dut, "obs_pwdata").value)
+                    getattr(dut, "obs_pready").value = 1
+                    getattr(dut, "obs_pslverr").value = 0
+                else:
+                    getattr(dut, "obs_pready").value = 1
+                    getattr(dut, "obs_prdata").value = apb_mem.get(_addr, 0)
+                    getattr(dut, "obs_pslverr").value = 0
+            else:
+                getattr(dut, "obs_pready").value = 0
+    cocotb.start_soon(_apb_slave())
 
     # Phase 2: reset value + write/readback (honoring access mode & write_mask)
     for r in REGS:
