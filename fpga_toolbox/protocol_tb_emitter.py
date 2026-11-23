@@ -39,6 +39,31 @@ REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
         "rdata", "rresp", "rvalid", "rready",
     ),
     "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hsize", "hwdata", "hready", "hrdata", "hresp"),
+    # ddr3/ddr4/hbm/pcie 的模板不用 port_map，直接按标准端口名连线并用 `.*`
+    # 兜底。`.*` 只连接**TB 里已声明**的同名变量，所以 DUT 端口名一旦与模板
+    # 声明不一致（如 DUT 用 `inout [15:0] ddr3_dq` 而模板声明的是
+    # ddr3_dq_in/ddr3_dq_out），`.*` 会报 "Can't find definition of variable"
+    # 编译失败，而工具仍返回 ok=True。这里按模板声明的实际端口名校验。
+    "ddr3": (
+        "ddr3_ck_p", "ddr3_ck_n", "ddr3_cke", "ddr3_cs_n", "ddr3_ras_n",
+        "ddr3_cas_n", "ddr3_we_n", "ddr3_ba", "ddr3_addr", "ddr3_dq_out", "ddr3_rd_valid",
+    ),
+    "ddr4": (
+        "ddr4_ck_t", "ddr4_ck_c", "ddr4_act_n", "ddr4_bg", "ddr4_ba", "ddr4_adr",
+        "ddr4_cs_n", "ddr4_odt", "ddr4_dq_out", "ddr4_dm_dbi_n", "ddr4_rd_valid",
+    ),
+    "hbm": (
+        "hbm_awid", "hbm_awaddr", "hbm_awvalid", "hbm_awready",
+        "hbm_wdata", "hbm_wvalid", "hbm_wready",
+        "hbm_bid", "hbm_bvalid", "hbm_bready",
+        "hbm_arid", "hbm_araddr", "hbm_arvalid", "hbm_arready",
+        "hbm_rid", "hbm_rdata", "hbm_rvalid", "hbm_rready",
+    ),
+    "pcie": (
+        "pcie_tx_tvalid", "pcie_tx_tready", "pcie_tx_tdata", "pcie_tx_tlast",
+        "pcie_rx_tvalid", "pcie_rx_tready", "pcie_rx_tdata", "pcie_rx_tlast",
+        "pcie_link_up", "pcie_cfg_speed", "pcie_cfg_lanes",
+    ),
 }
 
 

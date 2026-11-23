@@ -566,6 +566,39 @@ def test_multi_bus_emitter_port_guard() -> None:
             "rtl_file": str(full_sv), "out_dir": str(tdp / "tb_ok"), "protocol": "apb",
         })
         check(r2["ok"] is True, f"complete APB still emits (got {str(r2.get('error'))[:120]})")
+
+        # ddr3/hbm/pcie 模板不用 port_map，按标准端口名硬连 + `.*` 兜底。
+        # `.*` 只连 TB 已声明的同名变量，所以 DUT 用 `inout ddr3_dq` 而模板
+        # 声明 ddr3_dq_in/ddr3_dq_out 时会编译失败（Can't find definition of
+        # variable），旧实现仍报 ok=True。回归 41。
+        inout_ddr3 = tdp / "ddr3_inout.sv"
+        inout_ddr3.write_text(
+            "module ddr3_inout(input logic clk, input logic rst_n,\n"
+            "   output logic ddr3_ck_p, output logic ddr3_ck_n, output logic ddr3_cke,\n"
+            "   output logic ddr3_cs_n, output logic ddr3_ras_n, output logic ddr3_cas_n,\n"
+            "   output logic ddr3_we_n, output logic [2:0] ddr3_ba, output logic [13:0] ddr3_addr,\n"
+            "   inout  wire  [15:0] ddr3_dq, output logic ddr3_rd_valid); endmodule\n",
+            encoding="utf-8",
+        )
+        out3 = tdp / "tb_inout"
+        r3 = call_tool("emit_testbench", {
+            "rtl_file": str(inout_ddr3), "out_dir": str(out3), "protocol": "ddr3",
+        })
+        check(r3["ok"] is False, f"ddr3 inout-dq DUT rejected (got ok={r3['ok']})")
+        check("ddr3_dq_out" in str(r3.get("error")), "error names ddr3_dq_out")
+        check(not (out3 / "tb_ddr3_inout_ddr3.sv").exists(), "no bogus ddr3 TB written")
+
+        # 端口齐全的官方靶场必须仍能生成
+        ref = Path(__file__).resolve().parents[1] / "examples" / "multi_bus_ref"
+        for fname, proto in (
+            ("ddr3_mem_ctrl.sv", "ddr3"),
+            ("hbm_pc_ctrl.sv", "hbm"),
+            ("pcie_tlp_ep.sv", "pcie"),
+        ):
+            rp = call_tool("emit_testbench", {
+                "rtl_file": str(ref / fname), "out_dir": str(tdp / f"tb_{proto}"), "protocol": proto,
+            })
+            check(rp["ok"] is True, f"reference {proto} still emits (got {str(rp.get('error'))[:100]})")
         if r2["ok"]:
             tb = Path(r2["data"]["artifacts"]["sv_testbench"])
             check(tb.is_file(), f"TB artifact exists ({tb})")

@@ -19,3 +19,4 @@
 - [12-unknown-instantiation-w102.md](12-unknown-instantiation-w102.md) — `index_repo` 曾静默丢弃仓库外模块的例化；改用 slang CST 的 `HierarchyInstantiation` 精确检出并报 `W102`，`resolve_deps` 透传 `closure_is_complete`
 - [13-windows-decoding-and-process-lessons.md](13-windows-decoding-and-process-lessons.md) — Windows cp1252 解码崩溃（`subprocess text=True` → `UnicodeDecodeError` → `AttributeError`），以及三个开发过程错误（stash 致代码漏提交、脆断言、测试依赖 CI 缺失环境）
 - [14-multi-bus-tb-port-guard.md](14-multi-bus-tb-port-guard.md) — 多总线 TB 生成器未校验必需端口，对 APB3 风格 DUT 产出 `PINNOTFOUND` 坏 TB 却报 `ok=True`；新增 `REQUIRED_TB_PORTS` 生成前校验
+- [15-ddr-hbm-pcie-port-guard.md](15-ddr-hbm-pcie-port-guard.md) — DDR3/DDR4/HBM/PCIe 模板用 `.*` 兜底，DUT 端口名不匹配（如三态 `inout ddr3_dq`）时生成 `Can't find definition of variable` 坏 TB 却报 `ok=True`；补齐 4 协议端口校验

@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — DDR/HBM/PCIe 模板端口校验缺口
+
+### Fixed
+- **`emit_testbench --protocol ddr3|ddr4|hbm|pcie` 端口名不匹配时生成坏 TB 却报 `ok=True`**（`protocol_tb_emitter.py`）。上一轮补的 `REQUIRED_TB_PORTS` 只覆盖 `apb`/`axi4`/`ahb_lite`，这四个协议仍无防护。
+
+  它们与前三个实现方式不同：**不用 `port_map`**，直接按标准端口名声明 TB 变量并用 `.*` 兜底。`.*` 只连 TB 已声明的同名变量，所以 DUT 用真实设计常见的 `inout [15:0] ddr3_dq`（模板声明的是分离的 `ddr3_dq_in`/`ddr3_dq_out`）时，Verilator 报 `Can't find definition of variable: 'ddr3_dq'` 编译失败，而工具报成功。自带靶场没暴露是因为 `ddr3_mem_ctrl.sv` 恰好用分离端口。
+
+  修复：按各模板**实际声明**的端口名补齐 `REQUIRED_TB_PORTS`（ddr3 11 / ddr4 11 / hbm 18 / pcie 11），至此 7 协议全覆盖。`test_multi_bus_emitter_port_guard` 从 6 项扩到 12 项，新增 inout-dq 拒绝与三个参考 DUT 不回归。详见 [`changelog/15-ddr-hbm-pcie-port-guard.md`](changelog/15-ddr-hbm-pcie-port-guard.md)。
+
 ## [Unreleased] — 多总线 TB 生成器端口校验
 
 ### Fixed
