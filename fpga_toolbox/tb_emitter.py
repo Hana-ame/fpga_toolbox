@@ -43,7 +43,7 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
                 for _m in parse_sv_file(_rtl):
                     if _m.name == b.module_name:
                         for _p in _m.ports:
-                            apb_dirs[_p.name] = _p.direction
+                            apb_dirs[_p.name] = (_p.direction, _p.width)
         except Exception:
             apb_dirs = {}
     params = " #(\n" + ",\n".join(f"    .{k}({v})" for k, v in b.parameters.items()) + "\n  )" if b.parameters else ""
@@ -72,11 +72,11 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
         if _aport in connected:
             continue
         connected.add(_aport)
-        _adir = apb_dirs.get(_aport, "output")
+        _adir, _awidth = apb_dirs.get(_aport, ("output", 1))
         if _adir == "input":
-            conns.append(f"    .{_aport}(1'b0)")
+            conns.append(f"    .{_aport}({_awidth}'h0)")
         else:
-            w = "[DATA_W-1:0] " if _aport in ("paddr", "pwdata") else ""
+            w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
             obs_decls.append(f"  logic {w}obs_{_aport};")
             conns.append(f"    .{_aport}(obs_{_aport})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
