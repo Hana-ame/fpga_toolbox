@@ -14,6 +14,7 @@ if __package__ in (None, ""):
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
     __package__ = "fpga_toolbox"
 
+from .core.sv_parser import parse_sv_file
 from .core.types import (
     OPTIONAL_AXIL_SIGNALS,
     REQUIRED_AXIL_SIGNALS,
@@ -37,11 +38,9 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
     apb_dirs: Dict[str, str] = {}
     if b.apb is not None and b.rtl_files:
         try:
-            from pathlib import Path as _P
-            from .core.sv_parser import parse_sv_file as _psf
-            _rtl = _P(b.rtl_files[0])
+            _rtl = Path(b.rtl_files[0])
             if _rtl.is_file():
-                for _m in _psf(_rtl):
+                for _m in parse_sv_file(_rtl):
                     if _m.name == b.module_name:
                         for _p in _m.ports:
                             apb_dirs[_p.name] = _p.direction
