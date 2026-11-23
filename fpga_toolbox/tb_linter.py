@@ -25,7 +25,12 @@ from .core.types import err_result, ok_result
 # 旧实现只认 `axi.|apb.` 前缀，漏报任意其他 interface 实例名（mst_if/slv_if/
 # u_if0/bus 等）——真实 TB 的 interface 实例名千变万化。放宽为「点号连接的
 # 层次赋值」，C1/C2 只在 @(posedge) 上下文触发，误报风险可控。
-_IFACE_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)")
+# interface 端口的 blocking drive：`instance.signal = value`（点号层次赋值）。
+# 旧实现只认 `axi.|apb.` 前缀，漏报任意其他 interface 实例名。但放宽到「任意
+# instance.」会误报非 interface 的层次引用（如 u_dut.internal_reg = x）。
+# 折中：识别 SV interface 实例的常见命名 —— *_if / *_bus / axi / apb，
+# 这覆盖了绝大多数真实写法，且不会把 u_dut 这类模块实例误当 interface。
+_IFACE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*_(?:if|bus)|axi|apb)\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)", re.IGNORECASE)
 _WAIT_RE = re.compile(r"@\s*\(\s*posedge|@\s*\(\s*negedge|repeat\s*\(|#\s*\d")
 _READY_OF = {
     "AWVALID": "AWREADY",
