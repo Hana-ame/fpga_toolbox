@@ -68,7 +68,12 @@ def _from_xml(path: Path) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     return checks, None
 
 
-def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[bool]]:
+    """Returns (checks, seed, completed).
+
+    ``completed`` 为 None 表示产出方未声明（旧格式/外部生成的 JSON）；
+    True/False 表示 cocotb 测试平台是否跑完了全部阶段。
+    """
     if isinstance(raw, dict) and isinstance(raw.get("checks"), list):
         checks = [{
             "rule_id": str(c.get("rule_id", "UNKNOWN")),
@@ -76,7 +81,7 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int]]:
             "status": _norm_status(c.get("status", "FAIL")),
             "detail": str(c.get("detail", "")),
         } for c in raw["checks"]]
-        return checks, raw.get("seed")
+        return checks, raw.get("seed"), raw.get("completed")
 
     tests = None
     seed = None
@@ -91,7 +96,7 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int]]:
             "status": _norm_status(t.get("status", t.get("result", "FAIL"))),
             "detail": str(t.get("detail", "")),
         } for t in tests if isinstance(t, dict)]
-        return checks, seed
+        return checks, seed, None
 
     raise ValueError(
         "Unrecognized results format: expected cocotb JUnit XML, "
@@ -150,14 +155,27 @@ def tool_normalize_sim_result(
         p = Path(cocotb_results_json)
         if not p.is_file():
             return err_result("normalize_sim_result", f"Results file not found: {cocotb_results_json}")
+        cocotb_completed: Optional[bool] = None
         try:
             if p.suffix.lower() == ".xml":
                 parsed, seed = _from_xml(p)
             else:
-                parsed, seed = _from_json(json.loads(p.read_text(encoding="utf-8")))
+                parsed, seed, cocotb_completed = _from_json(json.loads(p.read_text(encoding="utf-8")))
         except (ValueError, ET.ParseError, json.JSONDecodeError) as exc:
             return err_result("normalize_sim_result", f"Failed to parse '{p}': {exc}")
         checks.extend(parsed)
+        # 完整性闸门：cocotb 平台在 Phase 5 结束时写 completed=True。若 JSON 里
+        # 明确 completed=False，说明测试没跑完（异常/超时/await 卡死）——此时
+        # 残留的「前几条全 PASS」绝不能当通过。旧实现没有这个信号，残缺结果
+        # 与完整结果都判 PASS。
+        if cocotb_completed is False:
+            checks.append({
+                "rule_id": "COCOTB_INCOMPLETE",
+                "category": "cocotb_run_integrity",
+                "status": "FAIL",
+                "detail": "cocotb report has completed=false: test aborted before all phases finished "
+                          f"({len(parsed)} check(s) recorded). Treat as failure, not partial pass.",
+            })
         sources.append(str(p))
 
     if sva_log_path:

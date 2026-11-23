@@ -378,7 +378,8 @@ from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
 REGS = json.loads(r"""{regs}""")
 ILLS = json.loads(r"""{ills}""")
 STRESS = {{"random_backpressure": {tp.stress_profile.random_backpressure}, "iterations": {tp.stress_profile.iterations}, "seed": {tp.stress_profile.seed}}}
-REPORT = {{"module": "{b.module_name}", "seed": {tp.stress_profile.seed}, "checks": []}}
+REPORT = {{"module": "{b.module_name}", "seed": {tp.stress_profile.seed},
+          "completed": False, "checks": []}}
 
 def _rec(rid, cat, ok, detail):
     REPORT["checks"].append({{"rule_id": rid, "category": cat, "status": "PASS" if ok else "FAIL", "detail": detail}})
@@ -445,6 +446,12 @@ async def test_axil_rules(dut):
     # Phase 5: drain & finalize
     for _ in range(3):
         await RisingEdge(dut.{b.clock.port})
+    # 完成标记：只有 5 个阶段全部跑完才写 completed=True。
+    # 旧实现每条 check 落盘一次却无「已跑完」信号——若测试中途崩溃（异常/
+    # 超时/await 卡死），留下的 JSON 只含前几条 PASS，normalize_sim_result
+    # 会把这份**残缺**结果判成 PASS。完成标记让下游区分「跑完」与「崩了」。
+    REPORT["completed"] = True
+    Path("test_results_{b.module_name}.json").write_text(json.dumps(REPORT, indent=2), encoding="utf-8")
 '''
 
 

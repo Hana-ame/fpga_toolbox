@@ -639,6 +639,66 @@ def test_generated_sva_checker_has_heartbeat(tmp: Path) -> None:
         check("heartbeat counter reset (no PROCASSINIT)",
               "sva_hb_cnt <= 0" in sva and "int unsigned sva_hb_cnt = 0" not in sva,
               "counter init style")
+def test_cocotb_incomplete_report_is_failure(tmp: Path) -> None:
+    """cocotb 报告 completed=false 时必须判 FAIL，不能当「部分通过」。
+
+    回归 66：cocotb 平台每记录一条 check 就落盘一次，却没有任何「已跑完」信号。
+    若测试中途崩溃（异常/超时/await 卡死），留下的 JSON 只含前面几条 PASS，
+    旧实现把这份**残缺**结果判成 PASS——与 SVA 的零输出问题同类。
+    """
+    def norm(payload: dict, name: str) -> dict:
+        f = tmp / name
+        f.write_text(json.dumps(payload), encoding="utf-8")
+        return call_tool("normalize_sim_result", {"module_name": "m", "cocotb_results_json": str(f)})
+
+    base_checks = [{"rule_id": "REG_001", "category": "reset_value", "status": "PASS", "detail": "ok"}]
+
+    # 跑完：completed=true -> PASS
+    r_ok = norm({"module": "m", "seed": 1, "completed": True, "checks": base_checks}, "ok.json")
+    check("completed=true => PASS", r_ok["data"]["overall_status"] == "PASS",
+          str(r_ok["data"]["overall_status"]))
+
+    # 崩溃：completed=false -> FAIL + COCOTB_INCOMPLETE
+    r_bad = norm({"module": "m", "seed": 1, "completed": False, "checks": base_checks}, "bad.json")
+    check("completed=false => FAIL", r_bad["data"]["overall_status"] == "FAIL",
+          str(r_bad["data"]["overall_status"]))
+    check("COCOTB_INCOMPLETE emitted",
+          any(c["rule_id"] == "COCOTB_INCOMPLETE" and c["status"] == "FAIL"
+              for c in r_bad["data"]["checks"]),
+          str(r_bad["data"]["checks"]))
+
+    # 旧格式（无 completed 字段）保持向后兼容：不误判为失败
+    r_legacy = norm({"module": "m", "seed": 1, "checks": base_checks}, "legacy.json")
+    check("legacy JSON without completed still PASS",
+          r_legacy["data"]["overall_status"] == "PASS",
+          str(r_legacy["data"]["overall_status"]))
+
+
+def test_generated_cocotb_tb_writes_completion(tmp: Path) -> None:
+    """生成的 cocotb TB 必须写 completed 标记（初值 False、Phase 5 置 True）。"""
+    rtl = tmp / "cocotb_c_dut.sv"
+    rtl.write_text(
+        "`timescale 1ns/1ps\n"
+        "module cocotb_c_dut(input logic aclk, input logic aresetn,\n"
+        "  input logic [11:0] s_axi_awaddr, input logic [2:0] s_axi_awprot, input logic s_axi_awvalid, output logic s_axi_awready,\n"
+        "  input logic [31:0] s_axi_wdata, input logic [3:0] s_axi_wstrb, input logic s_axi_wvalid, output logic s_axi_wready,\n"
+        "  output logic [1:0] s_axi_bresp, output logic s_axi_bvalid, input logic s_axi_bready,\n"
+        "  input logic [11:0] s_axi_araddr, input logic [2:0] s_axi_arprot, input logic s_axi_arvalid, output logic s_axi_arready,\n"
+        "  output logic [31:0] s_axi_rdata, output logic [1:0] s_axi_rresp, output logic s_axi_rvalid, input logic s_axi_rready);\n"
+        "  assign s_axi_awready=1; assign s_axi_wready=1; assign s_axi_bresp=0; assign s_axi_bvalid=1;\n"
+        "  assign s_axi_arready=1; assign s_axi_rdata=0; assign s_axi_rresp=0; assign s_axi_rvalid=1;\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+    draft = tmp / "cocotb_c.yaml"
+    ex = call_tool("extract_interfaces", {"rtl_file": str(rtl), "module_name": "cocotb_c_dut", "emit_draft_yaml": str(draft)})
+    check("cocotb-c extract ok", ex["ok"], str(ex.get("error"))[:80])
+    em = call_tool("emit_testbench", {"spec_path": str(draft), "out_dir": str(tmp / "cocotb_c_tb"), "rtl_file": str(rtl)})
+    check("cocotb-c emit ok", em["ok"], str(em.get("error"))[:80])
+    if em["ok"]:
+        py = Path(em["data"]["artifacts"]["cocotb_testbench"]).read_text(encoding="utf-8")
+        check("completion starts False", '"completed": False' in py, "init missing")
+        check("completion set True at end", 'REPORT["completed"] = True' in py, "finalize missing")
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -656,6 +716,8 @@ def main() -> int:
         test_call_tool_enum_and_type_validation(tmp)
         test_sva_heartbeat_distinguishes_pass_from_notrun(tmp)
         test_generated_sva_checker_has_heartbeat(tmp)
+        test_cocotb_incomplete_report_is_failure(tmp)
+        test_generated_cocotb_tb_writes_completion(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

@@ -41,6 +41,9 @@
 ## 输出侧一致性
 
 - [27-sva-heartbeat-anti-silent-pass.md](27-sva-heartbeat-anti-silent-pass.md) — SVA checker 通过时零输出，导致「全部通过」与「checker 没跑」都归一化成 `NO_RESULTS`；加心跳探针使三态可区分
+## 输出侧一致性
+
+- [28-cocotb-incomplete-report.md](28-cocotb-incomplete-report.md) — cocotb 每记录一条 check 就落盘却无「已跑完」信号，测试崩在第 1 条断言时残缺报告仍判 PASS；加 `completed` 标记 + `COCOTB_INCOMPLETE`
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
