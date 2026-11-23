@@ -59,3 +59,17 @@ python3 tests/test_fusion_and_cross_repo.py
 python3 -m fpga_toolbox audit_harness
 python3 -m fpga_toolbox list
 ```
+
+## 离线文档
+
+`docs/eda-tutorials/` 存放可直接用浏览器打开的离线资料（纯文档，不含代码）：
+
+| 文件 | 内容 |
+|---|---|
+| [`eda-tools-dark-guide.html`](docs/eda-tutorials/eda-tools-dark-guide.html) | Synopsys 六大 EDA 工具的指令、Flag、参数范围与错误码参考（夜间版） |
+| [`paper-repro-guide.html`](docs/eda-tutorials/paper-repro-guide.html) | Paper 1 (DLR-MAC) / Paper 2 (RS+GBN) 实验复跑教程解读 |
+| [`multi_bus_verification_report.html`](docs/eda-tutorials/multi_bus_verification_report.html) | 六接口全向核心（`examples/multi_bus_ref/omni_hub/`）的验证审计报告 |
+| [`EXPERIMENT_REPRO_GUIDE.md`](docs/eda-tutorials/EXPERIMENT_REPRO_GUIDE.md) | Synopsys VCS/DC/PT 集成方案（**设计稿**，`eda_campaign` 模块尚未实现，详见该文件顶部声明） |
+
+另见 [`docs/TEST_REPORT_AND_PLAN.md`](docs/TEST_REPORT_AND_PLAN.md) 与
+[`docs/verification-schemes-report.html`](docs/verification-schemes-report.html)。

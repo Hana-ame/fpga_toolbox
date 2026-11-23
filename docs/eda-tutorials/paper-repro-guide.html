@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper 1 DLR-MAC 与 Paper 2 RS+GBN 实验复跑教程深度解读</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Utilitarian · Technical Reproduction Explainer · answer-first compact hero · section order: mental model -> environment/csh/shm -> Paper 1 UVM sim -> DC/PT pitfalls band + recovery SVG -> Paper 2 -> time budget SVG -> traceability & troubleshooting tables -> publishable discipline · Space Grotesk + IBM Plex Sans + IBM Plex Mono · crisp gallery white (#FFFFFF) + deep cobalt (#1D4ED8/#1E3A8A) + emerald (#047857) · 0px image radius · emphasis moment: 50,656 um2 / +0.0042 ns hero strip · signature element: full-bleed dark slate DC/PT pitfall band · charts: grouped horizontal recovery/area SVG + runtime speedup SVG */
+:root {
+  --paper: #FFFFFF;
+  --ink: #0F172A;
+  --ink2: #334155;
+  --mute: #475569;
+  --hair: #CBD5E1;
+  --accent: #1D4ED8;
+  --accent-text: #1E3A8A;
+  --accent-2: #047857;
+  --accent-2-text: #065F46;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+main {
+  padding: 68px clamp(24px, 10.4vw, 112px) 92px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 24px;
+}
+.span-12 { grid-column: 1 / -1; }
+.span-8  { grid-column: span 8; }
+.span-7  { grid-column: span 7; }
+.span-5  { grid-column: span 5; }
+.span-4  { grid-column: span 4; }
+.span-6  { grid-column: span 6; }
+.measure { max-width: 68ch; }
+.sec { margin-top: 66px; }
+.rule-top { border-top: 1px solid var(--hair); padding-top: 28px; }
+h1 {
+  font-family: "Space Grotesk", "PingFang SC", sans-serif;
+  font-size: clamp(36px, 4.4vw, 52px);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+  color: var(--ink);
+}
+.deck {
+  font-size: 18px;
+  line-height: 1.55;
+  color: var(--ink2);
+  max-width: 66ch;
+  margin: 0 0 28px;
+}
+h2 {
+  font-family: "Space Grotesk", "PingFang SC", sans-serif;
+  font-size: clamp(24px, 2.5vw, 31px);
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+h3 {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+p { margin: 0 0 14px; color: var(--ink2); }
+strong { color: var(--ink); font-weight: 600; }
+code {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--accent-text);
+  background: #F1F5F9;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+pre {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #E2E8F0;
+  background: #0F172A;
+  padding: 16px 18px;
+  margin: 14px 0 18px;
+  overflow-x: auto;
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: 13px; }
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px solid var(--hair);
+  padding: 22px 0;
+  margin-top: 8px;
+}
+.metric-val {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(26px, 2.8vw, 36px);
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.metric-val.pos { color: var(--accent-2-text); }
+.metric-val.pri { color: var(--accent-text); }
+.metric-sub {
+  font-size: 13px;
+  color: var(--mute);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.col-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+  margin-top: 20px;
+}
+.col-item {
+  border-top: 1px solid var(--hair);
+  padding-top: 14px;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px;
+  margin-top: 16px;
+}
+.num-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  counter-reset: item;
+}
+.num-list li {
+  position: relative;
+  padding: 12px 0 12px 34px;
+  border-top: 1px solid var(--hair);
+  color: var(--ink2);
+}
+.num-list li::before {
+  counter-increment: item;
+  content: counter(item);
+  position: absolute;
+  left: 0;
+  top: 13px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+/* Full-bleed dark slate band (max 1 per report) */
+.band {
+  margin: 66px calc(-1 * clamp(24px, 10.4vw, 112px)) 0;
+  padding: 54px clamp(24px, 10.4vw, 112px);
+  background: #0F172A;
+  color: #F8FAFC;
+}
+.band h2, .band h3, .band strong { color: #FFFFFF; }
+.band p { color: #CBD5E1; }
+.band code { background: #1E293B; color: #93C5FD; }
+.band .col-item { border-top-color: #334155; }
+.band .band-note {
+  border-left: 3px solid #38BDF8;
+  padding-left: 16px;
+  margin-top: 22px;
+  color: #E2E8F0;
+  max-width: 72ch;
+}
+/* Open Tables (max 3) */
+.tbl-wrap { overflow-x: auto; margin-top: 16px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+th, td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hair);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  border-bottom: 2px solid var(--ink);
+  white-space: nowrap;
+}
+td.num, th.num { white-space: nowrap; font-family: "IBM Plex Mono", monospace; font-size: 13px; }
+figure {
+  margin: 26px 0 0;
+  padding: 0;
+}
+.fig-title {
+  font-family: "Space Grotesk", "PingFang SC", sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+figcaption {
+  font-size: 13px;
+  color: var(--mute);
+  margin-top: 10px;
+}
+blockquote {
+  margin: 48px 0 0;
+  padding: 20px 0 20px 24px;
+  border-left: 3px solid var(--accent);
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--ink);
+  max-width: 58ch;
+  font-weight: 500;
+}
+@media (max-width: 860px) {
+  .hero-metrics, .col-strip, .two-col { grid-template-columns: 1fr; }
+  .span-8, .span-7, .span-5, .span-4, .span-6 { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- Answer-First Compact Hero -->
+  <header>
+    <h1>把两篇芯片论文的每个数字变成可一键复跑的确定性流水线</h1>
+    <p class="deck">
+      这份 2026-11-23 核对的实机复跑教程覆盖 Paper 1（DLR-MAC）与 Paper 2（RS+GBN）的完整仿真、14nm 综合与静态时序签核。核心法则只有四条：远端 <code>csh</code> 一律套 <code>bash -c</code> 或 <code>scp</code> 脚本，大工程一律放 <code>/dev/shm</code> 避免撑爆根盘，所有仿真用黄金正则自动判据，以及绝不信 DC K-2015.06 的异步复位报告——必须清理黑盒后交给 PrimeTime 测量。
+    </p>
+    <div class="hero-metrics">
+      <div>
+        <div class="metric-val pri">6.25 ns</div>
+        <div class="metric-sub">Paper 1 清洁信道平均延迟（avg 5 拍 / min 4 拍 5.0 ns）</div>
+      </div>
+      <div>
+        <div class="metric-val">50,656 µm²</div>
+        <div class="metric-sub">14nm 基线面积（74,265 leaf，两次重跑逐位一致）</div>
+      </div>
+      <div>
+        <div class="metric-val pos">+0.0042 ns</div>
+        <div class="metric-sub">PT 复位 recovery 从 −0.6664 ns 收敛至 0 违例（面积仅 +2.35%）</div>
+      </div>
+      <div>
+        <div class="metric-val">210 + 160</div>
+        <div class="metric-sub">Paper 1 扫掠与 E5 压力总运行次；Paper 2 另含 320 点四轴与 9 组 DC</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Section 1: Mental Model & Remote Discipline -->
+  <section class="sec rule-top">
+    <div class="grid">
+      <div class="span-4">
+        <h2>先守住三条环境铁律，再动手跑任何命令</h2>
+      </div>
+      <div class="span-8 measure">
+        <p>
+          这套实验跑在远端服务器 <code>lzc@192.168.108.128</code>（12 核 / 31 GB，工具链为 Synopsys DC K-2015.06、PrimeTime K-2015.06、VCS mx2017、Verdi O-2018.09-SP2，工艺库为 14nm LVT <code>scc14nsfp_90sdb_9tc16_lvt_tt_v0p9_25c_ccs.db</code>）。绝大多数“脚本莫名报错”或“跑了一小时被杀”都来自环境本身，而非 RTL 缺陷。
+        </p>
+      </div>
+    </div>
+
+    <div class="col-strip">
+      <div class="col-item">
+        <h3>绕开远端 csh 语法陷阱</h3>
+        <p>远端默认 shell 是 <code>csh</code>，对分号、重定向和 <code>$()</code> 极敏感；同时老版本 SSH 需显式加 <code>-oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedKeyTypes=+ssh-rsa</code>。凡是带管道或循环的命令一律塞进 <code>bash -c '...'</code>，复杂任务直接在本地写 <code>.sh</code> 再 <code>scp</code> 上去 <code>nohup bash</code> 后台跑。</p>
+      </div>
+      <div class="col-item">
+        <h3>所有工作目录放 /dev/shm</h3>
+        <p>服务器根盘仅剩几 GB，综合网表和 VCS 编译产物很容易把磁盘写满并触发进程被杀。教程强制要求把综合与改版编译目录拷到 16 GB tmpfs 的 <code>/dev/shm/&lt;tag&gt;</code>，跑完只把 <code>report/</code> 和 CSV 拷回 <code>~/work/...</code>，随后立即 <code>rm -rf /dev/shm/&lt;tag&gt;</code>。</p>
+      </div>
+      <div class="col-item">
+        <h3>严格控制并发上限</h3>
+        <p>DC 的一个 <code>compile_ultra</code> 吃 4 核和 6–8 GB 内存，<strong>最多同时跑 2 个 DC</strong>；VCS 编译为单线程，可与 DC 并行。三大根目录各司其职：<code>~/dlr_release/</code> 放 Paper 1 发布源码与基线，<code>~/work/review20261027/e3d/</code> 放已验证的 <code>simv</code>，<code>~/rsgbn_verify/RS_GBN_Redesign_20261025/</code> 放 Paper 2 全套工程。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: Paper 1 UVM Simulation Architecture -->
+  <section class="sec rule-top">
+    <h2>Paper 1 仿真实验：一个 simv 配合八组 plusarg 覆盖全部 8 类验证</h2>
+    <p class="measure">
+      如果不改 RTL，直接复用 <code>~/work/review20261027/e3d/simv</code> 即可省去 5–10 分钟编译；一旦改了 RTL，务必把目录拷到 <code>/dev/shm</code> 替换目标文件再编译，严禁原地污染基准产物。每次运行结束绝不靠肉眼翻日志，而是用统一的黄金正则抽取指标并按 <code>delivered == frames &amp;&amp; fid_bad == 0 &amp;&amp; UVM_ERROR == 0</code> 自动判绿。
+    </p>
+
+    <div class="two-col">
+      <div>
+        <h3>8 类仿真实验各自回答什么问题</h3>
+        <ol class="num-list">
+          <li><strong>清洁信道延迟（§1.3）</strong>：<code>pcs_ber_p=0</code> 跑 5 个种子各 1000 帧，得出 <code>min=4 / avg=5 / max=5</code> 拍，即论文中的 <strong>6.25 ns 均值 / 5.0 ns 最小值</strong>与 ≤1 拍抖动。</li>
+          <li><strong>42 配置 × 5 种子扫掠（§1.4）</strong>：7 档名义误码率 × 6 档缓存深度 B（8～255）共 210 次 10,000 帧运行，脚本内置断点续跑；Table 3 汇报的是每配置 5 种子 <code>lat_avg</code> 的<strong>中位数</strong>。</li>
+          <li><strong>名义 p 与实际翻转率标定（§1.5）</strong>：聚合 <code>flips_act / flips_exp</code> 与 <code>flips_act / pcs_words</code>。实测 <code>p=0.001</code> 仅发生 6 次翻转（期望 60 次，比值 0.10，等效 <strong>9.8e-5</strong>），说明 <code>p</code> 是名义注入强度而非实际位翻转率。</li>
+          <li><strong>重传率与回退窗口（§1.6–1.7）</strong>：<code>all_retry / frames ≈ 2p</code> 且受深度 B 影响 1.5–2×（不能再写“与 B 无关”）；开 <code>+nack_log=1</code> 测得各 B 下的最大 <code>win_span</code> 为 <code>5/13/29/61/123/123</code>。</li>
+          <li><strong>CDC 相位扫描（§1.8）</strong>：9 个 45° 步进相位点 + 1 个 7.5 ns 错位周期点，10/10 全零错通过。</li>
+          <li><strong>E5 压力测试（§1.9）</strong>：<code>k=1..8</code> × 20 种子共 160 runs（<code>p=0.1, B=255</code>），唯一短交付在 <code>k=4, seed16</code>（交付 744 帧），条件漏检率 <code>18/159,000 = 1.13e-4</code>。</li>
+          <li><strong>+1 级流水配对仿真（§1.10）</strong>：同一组 <code>p/B/seed/frames</code> 只换 <code>simv</code>，验证边界插寄存器后仿真平均延迟从 138 拍恶化到 3,926 拍，坐实“边界不流水化”结论。</li>
+        </ol>
+      </div>
+      <div>
+        <h3>核心 plusarg 与日志解析黄金正则</h3>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr><th>参数 / 正则字段</th><th>作用与常用取值</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>+pcs_ber_p</code></td><td>字级伯努利翻转名义概率：<code>0</code> / <code>0.001</code> ～ <code>0.1</code></td></tr>
+              <tr><td><code>+pcs_ber_kbits</code></td><td><code>0</code>=整字 64b 取反（扫掠）；<code>1..8</code>=每帧随机 k bit（E5 压力）</td></tr>
+              <tr><td><code>+buf_depth</code></td><td>运行时缓冲深度阈值 B：<code>8 / 16 / 32 / 64 / 128 / 255</code></td></tr>
+              <tr><td><code>+case_watchdog_ns</code></td><td>防挂死看门狗：1000 帧设 <code>1.2e7</code>，10000 帧设 <code>8e7</code></td></tr>
+              <tr><td><code>delivered / fid_bad</code></td><td><code>[C3900] FID: delivered=\K\d+</code> 与 <code>fid_bad=\K\d+</code></td></tr>
+              <tr><td><code>lat_avg</code></td><td><code>[C3900] NP_LAT: frames=\d+ avg=\K\d+</code></td></tr>
+              <tr><td><code>all_retry / UVM_ERROR</code></td><td><code>all_retry=\K\d+</code> 与 <code>UVM_ERROR :\s+\K\d+</code>（必须为 0）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre><code># 断点续跑判据：日志非空且已打出 UVM_ERROR 汇总才跳过
+[ -s "$L" ] &amp;&amp; grep -q "UVM_ERROR :" "$L" || timeout 2400 ./simv \
+  +UVM_TESTNAME=my_case +pcs_ber_p=$p +pcs_ber_kbits=0 +buf_depth=$B \
+  +case_frames=10000 +pcs_ber_seed=$S +case_watchdog_ns=80000000 &gt; "$L" 2&gt;&amp;1</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Full-Bleed Dark Band: DC K-2015.06 Pitfalls & PrimeTime Netlist Cleaning -->
+  <section class="band">
+    <h2>DC K-2015.06 四大死坑与 PrimeTime 网表清理的唯一正确做法</h2>
+    <p class="measure">
+      本教程最值钱的工程经验都在综合与时序签核阶段：Synopsys K-2015.06 在异步复位优化、命令对象类型和数据库导出上存在多个“静默假成功”陷阱。直接照抄新版 DC 脚本会白白浪费数小时，必须按以下规范执行。
+    </p>
+
+    <div class="col-strip">
+      <div class="col-item">
+        <h3>坑 1：DC 假成功（UID-423）</h3>
+        <p>DC K-2015.06 不支持 <code>report_timing -group async_default</code>，报错写进报告文件却不抛异常，脚本仍打印“wrote xxx.rep”，打开只有 592 字节和 <code>No paths.</code>。唯一正解是在 DC 里只开 <code>enable_recovery_removal_arcs true</code> 和 <code>high_fanout_net_threshold 100000</code>，真正测量移交 PrimeTime 的 <code>{**async_default**}</code>。</p>
+      </div>
+      <div class="col-item">
+        <h3>坑 2 &amp; 3：fanout 失效与 write_db 废止</h3>
+        <p><code>set_max_fanout</code> 打在 net 上报 <code>UID-119</code>；打在模块输入 pin 上虽然不报错却是 no-op（该网仅 7 pin，27,648 个真实负载在内部）；打在 design 级则会把全设计冲烂超过 32 分钟不收敛。另外 K-2015.06 已移除 <code>write_db</code>（<code>UID-530</code>），必须导出 <code>.v / .sdc / .sdf</code> 给 PT。</p>
+      </div>
+      <div class="col-item">
+        <h3>PrimeTime 黑盒网表清理（§3.1）</h3>
+        <p>DC 导出的网表里有 96 个参数化黑盒实例（<code>RDBUS</code>、<code>CLKCROSSBUS</code>、<code>CLKCROSSDFF</code>），因位宽不一致会让 PT <code>link_design</code> 失败。需按 <code>module...endmodule</code> 切分删掉这三类实例，并在模块末尾把其输出端口拆成单根标量 <code>assign &lt;net&gt; = 0;</code>（PT 拒收花括号拼接 <code>assign {a,b}=0;</code>）。这 96 个实例全在 CSR/CDC 域，不影响 <code>pcs_clk</code> 复位路径。</p>
+      </div>
+    </div>
+
+    <div class="band-note">
+      <strong>配对综合与 OCV 结论：</strong>基线两次重跑均得到 <code>90,733 cells / 50,656.129497 µm²</code> 逐位一致；加 <code>set_timing_derate -early 0.95 -late 1.05</code> 后 setup 仍 0.00 ns 0 违例（leaf 仅 +1.1%）；边界 +1 级流水变体 slack 仍 0.00 ns 且面积仅减 177 µm²，证实无流水化收益。
+    </div>
+  </section>
+
+  <!-- SVG Visual 1: PrimeTime Recovery & Area Tradeoff -->
+  <section class="sec">
+    <figure>
+      <div class="fig-title">开启 arc-aware 复位优化以 2.35% 面积代价消除全部 10,303 条 PrimeTime 违例</div>
+      <svg viewBox="0 0 700 390" width="100%" role="img" aria-label="Baseline vs Arc-Aware PrimeTime recovery and area comparison">
+        <!-- Gridlines -->
+        <line x1="200" y1="44" x2="200" y2="334" stroke="#CBD5E1" stroke-width="1"/>
+        <line x1="330" y1="44" x2="330" y2="334" stroke="#E2E8F0" stroke-width="1"/>
+        <line x1="460" y1="44" x2="460" y2="334" stroke="#E2E8F0" stroke-width="1"/>
+        <line x1="590" y1="44" x2="590" y2="334" stroke="#E2E8F0" stroke-width="1"/>
+
+        <!-- Legend -->
+        <rect x="200" y="14" width="14" height="14" fill="#94A3B8"/>
+        <text x="220" y="26" font-family="IBM Plex Sans, sans-serif" font-size="14" fill="#334155">基线（arcs off）</text>
+        <rect x="360" y="14" width="14" height="14" fill="#047857"/>
+        <text x="380" y="26" font-family="IBM Plex Sans, sans-serif" font-size="14" fill="#065F46" font-weight="600">arc-aware（arcs on）</text>
+
+        <!-- Row 1: Worst Path Delay (ns): 1.8136 vs 1.1294 (scale 0..2.0 ns -> 390px) -->
+        <text x="188" y="84" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="600" fill="#0F172A">最差复位路径延迟</text>
+        <text x="188" y="102" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">ns (越小越好)</text>
+        <rect x="200" y="64" width="353" height="20" fill="#94A3B8"/>
+        <text x="561" y="79" font-family="IBM Plex Mono, monospace" font-size="14" fill="#334155">1.8136 ns</text>
+        <rect x="200" y="88" width="220" height="20" fill="#047857"/>
+        <text x="428" y="103" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="#065F46">1.1294 ns (−38%)</text>
+
+        <!-- Row 2: Buffer Depth (stages): 13 vs 5 (scale 0..15 -> 390px) -->
+        <text x="188" y="156" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="600" fill="#0F172A">复位树缓冲级数</text>
+        <text x="188" y="174" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">CLKBUF 级数</text>
+        <rect x="200" y="136" width="338" height="20" fill="#94A3B8"/>
+        <text x="546" y="151" font-family="IBM Plex Mono, monospace" font-size="14" fill="#334155">13 级</text>
+        <rect x="200" y="160" width="130" height="20" fill="#047857"/>
+        <text x="338" y="175" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="#065F46">5 级</text>
+
+        <!-- Row 3: Violating Paths: 10,303 vs 0 -->
+        <text x="188" y="228" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="600" fill="#0F172A">async_default 违例数</text>
+        <text x="188" y="246" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">PT setup 违例路径</text>
+        <rect x="200" y="208" width="370" height="20" fill="#94A3B8"/>
+        <text x="578" y="223" font-family="IBM Plex Mono, monospace" font-size="14" fill="#334155">10,303 条</text>
+        <rect x="200" y="232" width="4" height="20" fill="#047857"/>
+        <text x="214" y="247" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="#065F46">0 条 (slack +0.0042 ns)</text>
+
+        <!-- Row 4: Total Area (um2): 50,656.13 vs 51,848.50 (scale 0..60,000 -> 390px) -->
+        <text x="188" y="300" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="15" font-weight="600" fill="#0F172A">综合总面积</text>
+        <text x="188" y="318" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">14nm LVT (µm²)</text>
+        <rect x="200" y="280" width="329" height="20" fill="#94A3B8"/>
+        <text x="537" y="295" font-family="IBM Plex Mono, monospace" font-size="14" fill="#334155">50,656 µm²</text>
+        <rect x="200" y="304" width="337" height="20" fill="#1D4ED8"/>
+        <text x="545" y="319" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="#1E3A8A">51,849 µm² (+2.35%)</text>
+
+        <text x="200" y="362" font-family="IBM Plex Sans, sans-serif" font-size="13" fill="#475569">注：各行按指标独立归一显示比例，数值均取自 PrimeTime K-2015.06 与 DC 14nm 实测报告。</text>
+      </svg>
+      <figcaption>数据来源：教程 §2.3 与 §3.3 实测基准表（基线 async_default setup slack −0.6664 ns / TNS −2861；arc-aware 仅留 2 条 −5.5 ps removal）。</figcaption>
+    </figure>
+  </section>
+
+  <!-- Section 3: Paper 2 RS+GBN & Runtime Budget -->
+  <section class="sec rule-top">
+    <div class="grid">
+      <div class="span-5">
+        <h2>Paper 2（RS+GBN）三条实验线与全局时间预算</h2>
+        <p>
+          Paper 2 全部工程集中在 <code>~/rsgbn_verify/RS_GBN_Redesign_20261025/</code>，由三块互补证据组成：
+        </p>
+        <ol class="num-list">
+          <li><strong>C++ 周期精确模拟器（§4.1）</strong>：编译运行 <code>sim_4axes_rtl.cpp</code> 产出四轴 320 点 CSV，另用 <code>synth_4axes_netlists.py</code> 做解析门级估算（注意区分于真实 DC）。</li>
+          <li><strong>14nm DC 实测（§4.2）</strong>：在 <code>/dev/shm/rsdc</code> 跑 <code>run_all.sh</code> 覆盖 9 组配置（500 MHz），六码型全收敛，协议 DFF <code>3,117–24,742</code>、面积 <code>4,616–41,286 µm²</code>，实测印证解析模型 DFF 偏差 ≤2.0%、面积偏差 +2.6%～+11.5%。</li>
+          <li><strong>210 万次误纠/静默注入（§4.3）</strong>：<code>e ≤ t</code> 全部纠正，误纠仅出现在 <code>t=2</code> 码型（最差 3.11%），静默错误为 0（95% 上界 <code>1.5e-5</code>）。</li>
+        </ol>
+      </div>
+      <div class="span-7">
+        <figure style="margin-top:0">
+          <div class="fig-title">四路并行把 Paper 1 两大长尾仿真从 18 小时压缩至 4.5 小时</div>
+          <svg viewBox="0 0 680 410" width="100%" role="img" aria-label="Runtime comparison between serial and 4-way parallel execution">
+            <line x1="175" y1="42" x2="175" y2="352" stroke="#CBD5E1" stroke-width="1"/>
+            <line x1="275" y1="42" x2="275" y2="352" stroke="#E2E8F0" stroke-width="1"/>
+            <line x1="375" y1="42" x2="375" y2="352" stroke="#E2E8F0" stroke-width="1"/>
+            <line x1="475" y1="42" x2="475" y2="352" stroke="#E2E8F0" stroke-width="1"/>
+            <line x1="575" y1="42" x2="575" y2="352" stroke="#E2E8F0" stroke-width="1"/>
+
+            <!-- Axis ticks (0 to 10h, 40px per hour) -->
+            <text x="175" y="372" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">0h</text>
+            <text x="275" y="372" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">2.5h</text>
+            <text x="375" y="372" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">5h</text>
+            <text x="475" y="372" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">7.5h</text>
+            <text x="575" y="372" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#475569">10h</text>
+
+            <!-- Legend -->
+            <rect x="175" y="12" width="14" height="14" fill="#94A3B8"/>
+            <text x="195" y="24" font-family="IBM Plex Sans, sans-serif" font-size="14" fill="#334155">串行耗时</text>
+            <rect x="295" y="12" width="14" height="14" fill="#1D4ED8"/>
+            <text x="315" y="24" font-family="IBM Plex Sans, sans-serif" font-size="14" fill="#1E3A8A" font-weight="600">并行 / 单次实测耗时</text>
+
+            <!-- 210-run sweep: 10h serial vs 2.5h parallel -->
+            <text x="163" y="80" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">210-run 扫掠</text>
+            <rect x="175" y="56" width="400" height="18" fill="#94A3B8"/>
+            <text x="583" y="70" font-family="IBM Plex Mono, monospace" font-size="13" fill="#334155">~10 h</text>
+            <rect x="175" y="78" width="100" height="18" fill="#1D4ED8"/>
+            <text x="283" y="92" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#1E3A8A">~2.5 h (4 worker)</text>
+
+            <!-- 160-run E5: 8h serial vs 2h parallel -->
+            <text x="163" y="144" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">160-run E5 压力</text>
+            <rect x="175" y="120" width="320" height="18" fill="#94A3B8"/>
+            <text x="503" y="134" font-family="IBM Plex Mono, monospace" font-size="13" fill="#334155">~8 h</text>
+            <rect x="175" y="142" width="80" height="18" fill="#1D4ED8"/>
+            <text x="263" y="156" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#1E3A8A">~2.0 h (4 worker)</text>
+
+            <!-- Paper 2 DC campaign (9 configs): 40 min = 0.67h -->
+            <text x="163" y="204" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">Paper 2 DC (9组)</text>
+            <rect x="175" y="188" width="27" height="20" fill="#047857"/>
+            <text x="210" y="203" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#065F46">~40 min (6核)</text>
+
+            <!-- Paper 1 Recovery DC: 36 min -->
+            <text x="163" y="254" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">Recovery DC</text>
+            <rect x="175" y="238" width="24" height="20" fill="#047857"/>
+            <text x="207" y="253" font-family="IBM Plex Mono, monospace" font-size="13" fill="#334155">36 min (4核)</text>
+
+            <!-- Paper 1 Base / OCV DC: 24-27 min -->
+            <text x="163" y="302" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">基线 / OCV DC</text>
+            <rect x="175" y="286" width="18" height="20" fill="#047857"/>
+            <text x="201" y="301" font-family="IBM Plex Mono, monospace" font-size="13" fill="#334155">24–27 min (最多2 DC并行)</text>
+
+            <!-- UVM Compile & PT: 2-10 min -->
+            <text x="163" y="346" text-anchor="end" font-family="IBM Plex Sans, sans-serif" font-size="14" font-weight="600" fill="#0F172A">UVM编译 / PT</text>
+            <rect x="175" y="330" width="7" height="20" fill="#475569"/>
+            <text x="190" y="345" font-family="IBM Plex Mono, monospace" font-size="13" fill="#334155">5–10 min / 2–3 min</text>
+          </svg>
+          <figcaption>数据来源：教程 §6 时间预算（12 核 / 31 GB 服务器口径，单位：小时 / 分钟）。</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 4: Paper Number -> Experiment Traceability Table (Table 2) -->
+  <section class="sec rule-top">
+    <h2>论文数字到可复跑实验与机器判据的一一对照表</h2>
+    <p class="measure">
+      每次新增或修改实验，只需在对照表里追加一行，即可保证论文里的每一个关键数字都能直接追溯到具体命令、日志文件和客观通过门槛。
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>论文核心数字</th><th>对应实验章节</th><th>机器验收判据</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">6.25 ns avg / 5.0 ns min</td><td>§1.3 清洁信道 5 种子</td><td><code>NP_LAT</code> min=4 / avg=5 / max=5</td></tr>
+          <tr><td class="num">210 runs, B≤128 全交付</td><td>§1.4 42 配置 × 5 种子扫掠</td><td><code>delivered==10000</code> 且 <code>fid_bad==0</code>，取 5 种子中位数</td></tr>
+          <tr><td class="num">9.8e-5 (p=0.001 实际率)</td><td>§1.5 注入量标定</td><td><code>Σflips_act / Σpcs_words</code>（6 次实现 vs 60 次期望）</td></tr>
+          <tr><td class="num">≈2p, B 影响 1.5–2×</td><td>§1.6 重传率统计</td><td><code>all_retry / case_frames</code></td></tr>
+          <tr><td class="num">5/13/29/61/123/123</td><td>§1.7 回退窗口</td><td><code>+nack_log=1</code> 日志中 <code>win_span</code> 最大值</td></tr>
+          <tr><td class="num">CDC 10/10 通过</td><td>§1.8 相位扫描（9 相位 + 7.5 ns）</td><td><code>delivered==1000</code> 且 <code>UVM_ERROR==0</code></td></tr>
+          <tr><td class="num">1.13e-4 条件漏检</td><td>§1.9 E5 压力（160 runs, k=1..8）</td><td><code>18 / 159,000</code>；唯一短交付在 <code>k=4, seed16</code></td></tr>
+          <tr><td class="num">50,656 µm² / 74,265 leaf</td><td>§2.1 基线 DC（14nm）</td><td><code>qor.rep</code> WNS 0.00 / TNS 0.00 / 0 违例，双跑逐位一致</td></tr>
+          <tr><td class="num">OCV 仍 0.00 ns</td><td>§2.2 OCV derate (0.95/1.05)</td><td><code>qor.rep</code> setup 0 违例，leaf +1.1%</td></tr>
+          <tr><td class="num">−0.6664 → +0.0042 ns</td><td>§2.3 DC + §3 PT 复位 recovery</td><td>PT <code>**async_default**</code> 违例 10,303 → 0 条，面积 +2.35%</td></tr>
+          <tr><td class="num">+1 级变体无增益</td><td>§2.4 + §1.10 配对综合与仿真</td><td>slack 0→0、面积 −177 µm²、仿真延迟 138→3,926 拍</td></tr>
+          <tr><td class="num">Paper 2 六码型全收敛</td><td>§4.2 DC 500 MHz（9 配置）</td><td><code>/dev/shm/rsdc/out/*.rep</code> DFF 偏差 ≤2.0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 5: Troubleshooting Table (Table 3) -->
+  <section class="sec rule-top">
+    <h2>高频故障排查速查表与“可发表级”实验四条底线</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>现场症状</th><th>根因定位</th><th>直接解法</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>no matching host key type</code></td><td>旧版 SSH 服务端仅支持 ssh-rsa</td><td>加 <code>-oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedKeyTypes=+ssh-rsa</code></td></tr>
+          <tr><td><code>Ambiguous output redirect</code></td><td>远端默认 shell 为 <code>csh</code></td><td>改用 <code>ssh ... "bash -c '...'"</code> 或 <code>scp</code> 脚本上去跑</td></tr>
+          <tr><td>PT 报 <code>Can't find design DLR_TOP</code></td><td>96 个参数化黑盒实例位宽冲突</td><td>按 §3.1 删黑盒并在模块内逐根 <code>assign &lt;net&gt; = 0;</code></td></tr>
+          <tr><td>报告仅 592 B 且含 <code>No paths.</code></td><td>DC K-2015 不支持 <code>async_default</code> 假成功</td><td>检查报告正文而非日志“wrote”，改用 PT <code>**async_default**</code></td></tr>
+          <tr><td>DC 跑 1 小时被杀（Signal 15）</td><td>根盘写满或内存超限</td><td>工作目录挪到 <code>/dev/shm</code> 且并发 DC ≤ 2</td></tr>
+          <tr><td><code>simv</code> 秒退且只打一行</td><td>拿错旧构建 <code>simv</code> 不认 plusarg</td><td>核对构建时间戳，统一用 <code>review20261027/e3d/simv</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <blockquote>
+      把实验做成“可发表级”的四条底线：做配对实验并双跑基线验逐位一致；先写死机器判据再开跑；日志、CSV 与 report 打包归档；主动披露 pre-layout、PT 黑盒 tie-off 与注入器实际翻转率。
+    </blockquote>
+  </section>
+
+</main>
+</body>
+</html>
