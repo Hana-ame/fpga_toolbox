@@ -28,6 +28,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent      # verilog/axi
 
+# Windows 的 cp1252 无法编码本检查器的中文输出（D 系列的 ✓/✗/中文诊断），
+# 会抛 UnicodeEncodeError。强制 stdout/stderr 用 UTF-8，任意平台都安全。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def fail(msg):
     print(f"  \033[31m✗\033[0m {msg}")
