@@ -43,7 +43,7 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
                 for _m in parse_sv_file(_rtl):
                     if _m.name == b.module_name:
                         for _p in _m.ports:
-                            apb_dirs[_p.name] = (_p.direction, _p.width)
+                            apb_dirs[_p.name] = _p.direction
         except Exception:
             apb_dirs = {}
     params = " #(\n" + ",\n".join(f"    .{k}({v})" for k, v in b.parameters.items()) + "\n  )" if b.parameters else ""
@@ -72,14 +72,13 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
         if _aport in connected:
             continue
         connected.add(_aport)
-        _dinfo = apb_dirs.get(_aport, ("output", 1))
-        _adir, _awidth = (_dinfo[0], _dinfo[1]) if isinstance(_dinfo, tuple) else (_dinfo, 1)
-        # APB input（pready/prdata/pslverr）也生成可驱动的 obs_ 探针，
-        # 让 cocotb APB slave 响应器能驱动它们（桥的 APB 事务需要 pready）。
-        # output 同样连 obs_ 探针。两者都用 obs_ 探针，仅方向决定 cocotb 读写。
-        w = f"[{_awidth-1}:0] " if _awidth > 1 else ""
-        obs_decls.append(f"  logic {w}obs_{_aport};")
-        conns.append(f"    .{_aport}(obs_{_aport})")
+        _adir = apb_dirs.get(_aport, "output")
+        if _adir == "input":
+            conns.append(f"    .{_aport}(1'b0)")
+        else:
+            w = "[DATA_W-1:0] " if _aport in ("paddr", "pwdata") else ""
+            obs_decls.append(f"  logic {w}obs_{_aport};")
+            conns.append(f"    .{_aport}(obs_{_aport})")
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
     # Pre-join: a backslash inside an f-string expression needs Python 3.12+.
     conn_s = ",\n".join(conns)
@@ -197,41 +196,6 @@ async def test_axil_rules(dut):
     for _ in range(2):
         await RisingEdge(dut.{b.clock.port})
     m = AxiLiteMaster(AxiLiteBus.from_prefix(dut, "s_axil"), dut.{b.clock.port}, dut.{b.reset.port}, reset_active_level={not b.reset.active_low})
-
-    # APB slave 响应器：桥的 APB 侧（master）需要连 APB slave 才能完成事务。
-    # 无它时桥等不到 pready，触发 P_003 RVALID timeout（实测踩过）。
-    # 这里实现最小 APB slave：响应桥的 APB 读写，提供 pready/prdata。
-    apb_ports = {{
-        "paddr": "{b.apb.port_map.get('paddr', 'paddr')}",
-        "pwdata": "{b.apb.port_map.get('pwdata', 'pwdata')}",
-        "pstrb": "{b.apb.port_map.get('pstrb', 'pstrb')}",
-        "pwrite": "{b.apb.port_map.get('pwrite', 'pwrite')}",
-        "psel": "{b.apb.port_map.get('psel', 'psel')}",
-        "penable": "{b.apb.port_map.get('penable', 'penable')}",
-        "pready": "{b.apb.port_map.get('pready', 'pready')}",
-        "prdata": "{b.apb.port_map.get('prdata', 'prdata')}",
-        "pslverr": "{b.apb.port_map.get('pslverr', 'pslverr')}",
-    }}
-    async def _apb_slave():
-        apb_mem = {{}}
-        while True:
-            await RisingEdge(dut.{b.clock.port})
-            psel_v = getattr(dut, "obs_psel").value
-            penable_v = getattr(dut, "obs_penable").value
-            if int(psel_v) == 1 and int(penable_v) == 1:
-                addr = int(getattr(dut, "obs_paddr").value)
-                if int(getattr(dut, "obs_pwrite").value) == 1:
-                    getattr(dut, "obs_pwdata")
-                    apb_mem[addr] = int(getattr(dut, "obs_pwdata").value)
-                    getattr(dut, "obs_pready").value = 1
-                    getattr(dut, "obs_pslverr").value = 0
-                else:
-                    getattr(dut, "obs_pready").value = 1
-                    getattr(dut, "obs_prdata").value = apb_mem.get(addr, 0)
-                    getattr(dut, "obs_pslverr").value = 0
-            else:
-                getattr(dut, "obs_pready").value = 0
-    cocotb.start_soon(_apb_slave())
 
     # Phase 2: reset value + write/readback (honoring access mode & write_mask)
     for r in REGS:
