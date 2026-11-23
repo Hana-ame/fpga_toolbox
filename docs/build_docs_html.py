@@ -213,10 +213,14 @@ def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
             html_parts = []
             for p in paras:
                 if all(re.match(r"^\s*[-*]\s", x) or not x.strip() for x in p.splitlines()):
-                    items = [
-                        f"<li>{_inline(re.sub(r'^\s*[-*]\s+', '', x))}</li>"
-                        for x in p.splitlines() if x.strip()
-                    ]
+                    # 注意：f-string 的表达式部分在 Python 3.12 之前不能含反斜杠，
+                    # 所以正则必须提到循环外/变量里，不能内联在 f"{...}" 中。
+                    items = []
+                    for x in p.splitlines():
+                        if not x.strip():
+                            continue
+                        content = re.sub(r"^\s*[-*]\s+", "", x)
+                        items.append(f"<li>{_inline(content)}</li>")
                     html_parts.append("<ul>" + "".join(items) + "</ul>")
                 else:
                     html_parts.append("<p>" + _inline(p.replace("\n", " ")) + "</p>")

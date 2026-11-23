@@ -69,6 +69,88 @@ if href.endswith(".md"):
 
 修复：正文里的 `level == 1` 直接跳过，只保留模板 hero。
 
+## 缺陷 D — f-string 里的反斜杠：CI 才暴露的 Python 版本差异
+
+前三个缺陷是我自己看截图/查链接发现的。**这个不是**——本地全套测试（regression /
+fusion / eda / audit 11/11 / ruff / docs_check）全部通过后推送，CI 立刻红：
+
+```
+test (ubuntu-latest, py3.11)   failure
+test (ubuntu-24.04, py3.10)    failure
+test (ubuntu-latest, py3.13)   success     ← 本地也是这个版本
+test (windows-latest, py3.13)  success
+lint                           success     ← lint job 是 3.12，同样不报
+```
+
+日志：
+
+```
+File "docs/build_docs_html.py", line 218
+SyntaxError: f-string expression part cannot include a backslash
+```
+
+违规代码（blockquote 内列表项）：
+
+```python
+items = [
+    f"<li>{_inline(re.sub(r'^\s*[-*]\s+', '', x))}</li>"
+    for x in p.splitlines() if x.strip()
+]
+```
+
+**PEP 701**（Python **3.12**）才允许 f-string 的表达式部分包含反斜杠。
+本地/CI-lint 是 3.12/3.13，全都正常；只有真正跑 3.10/3.11 的测试 job 才炸。
+
+### 为什么本地没发现：语法门自己也有覆盖漏洞
+
+CI 里那道 `Syntax gate for Python 3.10` 用的是 `ast.parse(..., feature_version=(3,10))`，
+**它确实能查出这个问题**——但扫描范围只有：
+
+```python
+for root in ("fpga_toolbox", "tests"):   # ← docs/ 不在里面
+```
+
+`docs/build_docs_html.py` 从未被扫描。两处叠加：新文件放在没人检查的目录里，
+用了一个新版本才允许的语法。
+
+修复两件事：
+
+1. 把正则移出 f-string 表达式：
+
+   ```python
+   items = []
+   for x in p.splitlines():
+       if not x.strip():
+           continue
+       content = re.sub(r"^\s*[-*]\s+", "", x)   # 在 f-string 之外求值
+       items.append(f"<li>{_inline(content)}</li>")
+   ```
+
+2. 语法门扫描范围对齐到全仓库（`fpga_toolbox` / `tests` / `docs` / `examples`）：
+
+   ```python
+   for root in ("fpga_toolbox", "tests", "docs", "examples"):
+   ```
+
+### 本地可复现的回归测试
+
+不能靠 CI 才发现这类问题。新增 `test_all_scripts_parse_under_py310`：
+
+- 全仓库 `ast.parse(feature_version=(3,10))`，并断言扫描到的文件数 > 0
+  （防止有人把目录名改错导致"零文件 = 全过"）
+- 专项 AST 检查：遍历所有 `JoinedStr` / `FormattedValue`，用
+  `ast.get_source_segment` 取出表达式源码，断言其中无 `\`
+
+> 第一版专项检查用正则扫原始文本，结果**误报了自己**——本测试的 docstring 里
+> 就有一段"错误写法"作为说明。改用 AST 后只命中真实 f-string 节点。
+
+反向验证：把违规写法重新注入 `docs/build_docs_html.py`，本地立即失败：
+
+```
+  FAIL no backslash inside f-string expressions  docs/build_docs_html.py:222
+FAILED (1): no backslash inside f-string expressions
+```
+
 ## 产物设计
 
 - **完全自包含**：无外部字体 / CDN / JS 依赖（`grep 'href="https\?://'` 为空），
@@ -143,6 +225,15 @@ python3 -m fpga_toolbox audit_harness         11 / 11
 ruff check fpga_toolbox tests                 All checks passed!
 python3 examples/axi_apb_ref/axi/docs_check.py  D1–D13 全过
 ```
+
+### 教训
+
+本地套件全绿 + 推送后 CI 红，说明**本地缺了 CI 的一个维度**：这里缺的是 Python
+版本。3.12 的 `ast.parse` 用 `feature_version=(3,10)` 能报出违规，但违规文件不在
+扫描范围里，所以两处都要修——只修代码不改扫描范围，下次换个目录还会再犯。
+
+修复后新增的 `test_all_scripts_parse_under_py310` 让这个维度在本地就能覆盖，
+不必等 CI。
 
 ## 顺带修正
 

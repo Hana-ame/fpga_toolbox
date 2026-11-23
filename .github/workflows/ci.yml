@@ -37,8 +37,12 @@ jobs:
           python - <<'PY'
           import ast, pathlib, sys
 
+          # 全仓库扫描，不只是包和测试：docs/ 与 examples/ 里的脚本同样会被
+          # 用户在低版本 Python 上执行。真实缺陷：docs/build_docs_html.py 曾把
+          # 反斜杠放进 f-string 表达式（Python 3.12+ 才允许），本地 3.13 测不出，
+          # py3.10/3.11 的 CI 直接 SyntaxError。旧的扫描范围漏掉了 docs/。
           bad = []
-          for root in ("fpga_toolbox", "tests"):
+          for root in ("fpga_toolbox", "tests", "docs", "examples"):
               for path in pathlib.Path(root).rglob("*.py"):
                   try:
                       ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 10))

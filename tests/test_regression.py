@@ -843,6 +843,70 @@ def test_docs_html_markdown_sync(tmp: Path) -> None:
             check(f"{meta['out']} has no dead link {href}", f'href="{href}"' not in current)
 
 
+def test_all_scripts_parse_under_py310() -> None:
+    """全仓库脚本必须能在 Python 3.10 下解析（含 docs/ 与 examples/）。
+
+    回归 72：`docs/build_docs_html.py` 把反斜杠写进了 f-string 的表达式部分：
+
+        f"<li>{_inline(re.sub(r'^\\s*[-*]\\s+', '', x))}</li>"
+
+    PEP 701 从 **Python 3.12** 起才允许这种写法。本地开发机是 3.12（更宽松），
+    所以本地怎么跑都正常；CI 的 py3.10 / py3.11 job 直接 SyntaxError。
+
+    更根本的问题是语法门只扫了 `fpga_toolbox/` 和 `tests/`，`docs/`、`examples/`
+    下的脚本从未被检查——用户同样会在低版本 Python 上执行它们。这里把扫描范围
+    对齐到 CI，并断言「未被覆盖的目录为空」。
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    scanned = 0
+    bad: list[str] = []
+    for sub in ("fpga_toolbox", "tests", "docs", "examples"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for py in d.rglob("*.py"):
+            if "__pycache__" in py.parts:
+                continue
+            scanned += 1
+            try:
+                ast.parse(py.read_text(encoding="utf-8"), feature_version=(3, 10))
+            except SyntaxError as exc:
+                bad.append(f"{py.relative_to(root)}:{exc.lineno}: {exc.msg}")
+
+    check("py3.10 syntax gate covers docs/ + examples/", scanned > 0, str(scanned))
+    check("all repo scripts parse under Python 3.10", not bad, "; ".join(bad[:3]))
+
+    # 专项：f-string 表达式内不得出现反斜杠（3.10/3.11 不允许）。
+    # 必须走 AST + get_source_segment，不能用正则扫原始文本——本函数的 docstring
+    # 里就有一段"错误写法"的示例代码，正则会把它误判成真实违规。
+    offenders: list[str] = []
+    for sub in ("fpga_toolbox", "tests", "docs", "examples"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for py in d.rglob("*.py"):
+            if "__pycache__" in py.parts:
+                continue
+            src = py.read_text(encoding="utf-8")
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                for v in node.values:
+                    if not isinstance(v, ast.FormattedValue):
+                        continue
+                    seg = ast.get_source_segment(src, v.value) or ""
+                    if "\\" in seg:
+                        offenders.append(f"{py.relative_to(root)}:{v.lineno}")
+    check("no backslash inside f-string expressions", not offenders,
+          ", ".join(sorted(set(offenders))[:3]))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -865,6 +929,7 @@ def main() -> int:
         test_verilator_missing_summary_is_failure(tmp)
         test_sv_silent_pass_detected(tmp)
         test_docs_html_markdown_sync(tmp)
+        test_all_scripts_parse_under_py310()
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

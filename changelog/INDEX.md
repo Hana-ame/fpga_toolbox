@@ -44,7 +44,7 @@
 
 ## 文档交付
 
-- [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 3 个真实坑——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`；附产物自检（死链/锚点/转义泄漏）与 16 项回归断言
+- [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
 
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
