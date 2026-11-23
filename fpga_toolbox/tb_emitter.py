@@ -198,6 +198,41 @@ async def test_axil_rules(dut):
         await RisingEdge(dut.{b.clock.port})
     m = AxiLiteMaster(AxiLiteBus.from_prefix(dut, "s_axil"), dut.{b.clock.port}, dut.{b.reset.port}, reset_active_level={not b.reset.active_low})
 
+    # APB slave 响应器：桥的 APB 侧（master）需要连 APB slave 才能完成事务。
+    # 无它时桥等不到 pready，触发 P_003 RVALID timeout（实测踩过）。
+    # 这里实现最小 APB slave：响应桥的 APB 读写，提供 pready/prdata。
+    apb_ports = {{
+        "paddr": "{b.apb.port_map.get('paddr', 'paddr')}",
+        "pwdata": "{b.apb.port_map.get('pwdata', 'pwdata')}",
+        "pstrb": "{b.apb.port_map.get('pstrb', 'pstrb')}",
+        "pwrite": "{b.apb.port_map.get('pwrite', 'pwrite')}",
+        "psel": "{b.apb.port_map.get('psel', 'psel')}",
+        "penable": "{b.apb.port_map.get('penable', 'penable')}",
+        "pready": "{b.apb.port_map.get('pready', 'pready')}",
+        "prdata": "{b.apb.port_map.get('prdata', 'prdata')}",
+        "pslverr": "{b.apb.port_map.get('pslverr', 'pslverr')}",
+    }}
+    async def _apb_slave():
+        apb_mem = {{}}
+        while True:
+            await RisingEdge(dut.{b.clock.port})
+            psel_v = getattr(dut, "obs_psel").value
+            penable_v = getattr(dut, "obs_penable").value
+            if int(psel_v) == 1 and int(penable_v) == 1:
+                addr = int(getattr(dut, "obs_paddr").value)
+                if int(getattr(dut, "obs_pwrite").value) == 1:
+                    getattr(dut, "obs_pwdata")
+                    apb_mem[addr] = int(getattr(dut, "obs_pwdata").value)
+                    getattr(dut, "obs_pready").value = 1
+                    getattr(dut, "obs_pslverr").value = 0
+                else:
+                    getattr(dut, "obs_pready").value = 1
+                    getattr(dut, "obs_prdata").value = apb_mem.get(addr, 0)
+                    getattr(dut, "obs_pslverr").value = 0
+            else:
+                getattr(dut, "obs_pready").value = 0
+    cocotb.start_soon(_apb_slave())
+
     # Phase 2: reset value + write/readback (honoring access mode & write_mask)
     for r in REGS:
         acc = r["access"]
