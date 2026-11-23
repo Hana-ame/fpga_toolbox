@@ -23,3 +23,4 @@
 - [16-port-direction-guard.md](16-port-direction-guard.md) — 端口方向反向（如 `pready` 写成 input）时 TB 的握手等待永久挂起，工具却报 `ok=True`；新增 `EXPECTED_TB_DIR` 方向校验
 - [17-tb-vectors-scale-with-width.md](17-tb-vectors-scale-with-width.md) — APB 测试向量写死 32 位字面量，窄总线上 `WIDTHDIGITS` 截断、断言值失真；按 `dw`/`aw` 缩放值与十六进制位数，并保留部分写语义
 - [18-emitter-robustness-matrix.md](18-emitter-robustness-matrix.md) — 用自动畸形矩阵扫出 3 个缺陷：缺 reset 时硬连 `rst_n`（PINNOTFOUND）、额外端口触发 PINMISSING 阻断构建、多模块文件盲取 `mods[0]`
+- [19-wildcard-to-explicit-connections.md](19-wildcard-to-explicit-connections.md) — 6 协议模板的 `.*` 通配在 DUT 有额外端口时报硬错误（`Can't find definition of variable`），上轮的 `lint_off PINMISSING` 无效；改为显式连接，并修 `lint_off` 对多行 module 头不生效

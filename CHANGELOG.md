@@ -2,6 +2,15 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — `.*` 通配改显式连接
+
+### Fixed
+- **6 个协议模板用 `.*` 通配连接，DUT 有 TB 未声明端口时编译失败**（`protocol_tb_emitter.py`）。上一轮给 TB 插 `lint_off PINMISSING` 只覆盖了 APB，本轮把扫描器扩到 7 协议后发现 6/7 仍 BAD：`.*` 要求 DUT 每个端口在 TB 里都有同名变量，否则 Verilator 报 `%Error: Can't find definition of variable: 'dbg_status'`——**这是硬错误，不是 PINMISSING 警告**，`lint_off` 抑制不了。改为显式端口连接后，额外端口退化为可抑制的 `PINMISSING` 警告。
+
+  附带修 `add_lint_off()` 对参数化多行 module 头（`module tb_x #( ... );`）不生效，导致 PCIe 的 PINMISSING 一直没被抑制。
+
+  另有一次判断失误已回退：尝试参数化 DDR4 模板位宽，但 DDR4 是 64 位定宽模型（`ddr4_adr` 高 3 位编码命令、`midx` 索引、DM/DBI 掩码全与 64 位语义耦合），参数化后 `DDR4_001/002` 从 PASS 变 FAIL。已回退并在代码里注明。教训：位宽参数化必须以「测试语义不变」为前提。详见 [`changelog/19-wildcard-to-explicit-connections.md`](changelog/19-wildcard-to-explicit-connections.md)。
+
 ## [Unreleased] — 自动畸形矩阵扫出的 3 个 TB 生成器缺陷
 
 前四轮是「测一个点修一个点」，本轮改成写自动扫描器（8 种畸形 RTL × `verilator --lint-only -Wall`）一次抓全。
