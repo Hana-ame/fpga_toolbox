@@ -316,6 +316,46 @@ def test_unknown_instantiations_reported(tmp: Path) -> None:
           str([d.get("message") for d in w102b]))
 
 
+def test_subprocess_encoding_robust(tmp: Path) -> None:
+    """外部工具输出含非法 UTF-8 时，解析器不得因解码失败整段崩掉。
+
+    回归 36（Windows CI 实测）：subprocess.run(text=True) 在 Windows 用
+    locale 编码（cp1252）解码，slang 诊断含非 ASCII 字节时抛
+    UnicodeDecodeError，随后 proc.stderr 为 None 触发 AttributeError，
+    整个 AST 解析被打断。sv_parser / sim_runner 已改为显式
+    encoding="utf-8", errors="replace"。
+    """
+    import subprocess
+    import sys as _sys
+
+    # 直接验证修复所依赖的 subprocess 语义：默认 text=True 会抛，
+    # 显式 encoding + errors="replace" 不会。
+    code = "import sys; sys.stdout.buffer.write(b'\\xff\\xfe bad \\x8f\\n'); sys.stdout.flush()"
+    raised = False
+    try:
+        subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    except UnicodeDecodeError:
+        raised = True
+    check("text=True alone can raise on invalid utf8", raised,
+          "expected UnicodeDecodeError without explicit encoding")
+
+    proc = subprocess.run(
+        [_sys.executable, "-c", code], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", check=False,
+    )
+    check("explicit utf-8 + replace does not raise", True)
+    check("replacement chars present", "\ufffd" in (proc.stdout or ""), repr(proc.stdout))
+
+    # sv_parser 里两个 slang 调用点都必须带显式编码
+    import inspect
+
+    import fpga_toolbox.core.sv_parser as svp
+    src_sv = inspect.getsource(svp)
+    check("sv_parser _run_slang sets encoding",
+          src_sv.count('encoding="utf-8", errors="replace"') >= 2,
+          f"found {src_sv.count(chr(101)+chr(110)+chr(99)+chr(111)+chr(100)+chr(105)+chr(110)+chr(103))} encoding occurrences")
+
+
 def test_normalizer(tmp: Path) -> None:
     print("normalize_sim_result: unrecognized input is an error, not an empty report")
     junk = tmp / "junk.json"
@@ -471,6 +511,7 @@ def main() -> int:
         test_pure_apb_draft(tmp)
         test_sandbox_symlink_escape(tmp)
         test_unknown_instantiations_reported(tmp)
+        test_subprocess_encoding_robust(tmp)
         test_normalizer(tmp)
         test_full_chain(tmp)
         test_cli(tmp)

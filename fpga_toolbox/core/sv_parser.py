@@ -435,18 +435,28 @@ def _run_slang(
     for cmd, is_single_file in attempts:
         attempt_diags: List[str] = []
         try:
+            # 必须显式指定 encoding：Windows 上 text=True 用 locale 编码
+            # （cp1252）解码，slang 诊断里含非 ASCII 字节时抛 UnicodeDecodeError，
+            # 随后 proc.stderr 为 None 又触发 AttributeError（CI Windows job 实测）。
+            # errors="replace" 保证任何字节都能解出文本，不让编码问题吞掉解析结果。
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30, check=False
+                cmd, capture_output=True, text=True, timeout=30, check=False,
+                encoding="utf-8", errors="replace",
             )
         except Exception as exc:
             attempt_diags.append(f"slang invocation error: {exc}")
             diags.extend(attempt_diags)
             continue
-        if proc.stderr.strip():
-            for line in proc.stderr.strip().splitlines():
+        # capture_output=True 下理论上不会是 None，但不同 Python/平台的
+        # CompletedProcess 构造差异曾让 stderr 为 None（Windows job 真实踩到），
+        # 这里显式兜底，避免编码类问题退化成 AttributeError 打断整个解析。
+        err_text = (proc.stderr or "")
+        out_text = (proc.stdout or "")
+        if err_text.strip():
+            for line in err_text.strip().splitlines():
                 if "error" in line.lower() or "warning" in line.lower():
                     attempt_diags.append(line.strip()[:200])
-        out = proc.stdout.strip()
+        out = out_text.strip()
         if not out:
             diags.extend(attempt_diags)
             continue
@@ -654,10 +664,13 @@ def slang_instantiation_targets(rtl_path: Path) -> Optional[List[str]]:
     ]
     for cmd in attempts:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+                encoding="utf-8", errors="replace",
+            )
         except (OSError, subprocess.SubprocessError):
             continue
-        raw = proc.stdout
+        raw = proc.stdout or ""
         start = raw.find("{")
         if start < 0:
             continue

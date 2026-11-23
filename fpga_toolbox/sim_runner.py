@@ -114,6 +114,11 @@ def tool_run_sim(
             env=run_env,
             capture_output=True,
             text=True,
+            # Windows 上 text=True 用 locale 编码（cp1252）解码，Verilator/sim.sh
+            # 输出含非 ASCII 字节时抛 UnicodeDecodeError；显式 UTF-8 + replace
+            # 保证日志总能被解析，而不是让编码问题打断仿真结果归一化。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_sec,
             check=False,
         )
