@@ -18,7 +18,7 @@
 > **运行时工具特定码**（供 agent 排查）：`run_sim` — `E020/E021`（Verilator/slang 缺失或不达标）、`E022/E023`（仿真退出非 0 / 套件静默跳过）；`run_mutation` — `E030`（残留变异未还原）、`E031`（变异得分低于门槛）；`audit_harness` — `E040`（自审计护栏失效）。
 | `lint_tb` | 实测 | **PASS** | 检出故障注入脚本中的 `C1`、`R2`、`S1`、`S3` 违规 |
 | `run_mutation` | 实测 | **PASS** | 100% 变异杀死、`try/finally` 原文件完好还原、残留变异触发 `E030` 拦截 |
-| `audit_harness` | 实测 | **PASS** | 4/4 故障注入自审计全绿（`A1–A4`） |
+| `audit_harness` | 实测 | **PASS** | 10/10 故障注入自审计全绿（`A1–A10`，含套件身份、版本守卫、emit fail-fast、slang 回退可见性、PT 网表残留守卫） |
 | `run_sim` | **部分实测（门禁）** | **PASS（门禁） / 待实机仿真** | 缺失 Verilator 时正确触发 `E020` 拒绝静默通过；真实仿真需外部 EDA 环境（见第二节） |
 | `tests/test_regression.py` | 全量运行 | **PASS** | `ALL CHECKS PASSED` |
 | `tests/test_fusion_and_cross_repo.py` | 全量运行 | **PASS** | `ALL FUSION CHECKS PASSED` |

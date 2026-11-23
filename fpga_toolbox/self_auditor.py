@@ -176,6 +176,28 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "detail": f"slang-missing diagnostics={len(diags)} visible={a9_ok}",
         })
 
+        # A10: clean_pt_netlist 必须在「黑盒无法清理」时报错，而不是静默成功。
+        # 背景：缺分号/截断语句的实例不会被正则匹配，旧实现仍返回 ok=True +
+        # removed_instances=0，输出网表里黑盒原样保留，PrimeTime 仍会 link 失败。
+        # 护栏的价值在于「产出物可断言」——所以这里要求它自检产物并显式报错。
+        from .eda_campaign import tool_clean_pt_netlist
+
+        _pt = root / "pt"
+        _pt.mkdir()
+        _bad_nl = _pt / "bad.v"
+        _bad_nl.write_text(
+            "module t(o);\n  output [7:0] o;\n  RDBUS u (.o_data(o))\nendmodule\n",
+            encoding="utf-8",
+        )
+        _r_pt = tool_clean_pt_netlist(str(_bad_nl), str(_pt / "bad_out.v"))
+        _residual_codes = {d.get("code") for d in (_r_pt.get("diagnostics") or [])}
+        a10_ok = (not _r_pt["ok"]) and ("E051" in _residual_codes)
+        checks.append({
+            "id": "A10_PT_NETLIST_RESIDUAL_GUARD",
+            "passed": a10_ok,
+            "detail": f"ok={_r_pt['ok']} codes={sorted(_residual_codes)}",
+        })
+
     failed = [c for c in checks if not c["passed"]]
     data = {"total": len(checks), "passed": len(checks) - len(failed), "failed": len(failed), "checks": checks}
     if failed and strict:

@@ -22,7 +22,7 @@
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
 | 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
-| 13 | `audit_harness` | 故障注入式自审计（A1–A9），证明验证护栏出错时不会静默通过 |
+| 13 | `audit_harness` | 故障注入式自审计（A1–A10），证明验证护栏出错时不会静默通过 |
 
 ### 多总线原生测试台（`protocol=`）
 
@@ -60,6 +60,7 @@ APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ 
 | `E048` | K-2015.06 调用 `write_db` / `-format db` 报 `UID-530` |
 | `E049` | `Received Signal 15` 或 `No space left on device` |
 | `E050` | 旧 `simv` / 截断日志（少于 3 行或缺 `UVM_ERROR :` 汇总）|
+| `E051` | `clean_pt_netlist` 清理后输出网表仍残留黑盒实例（实例语法未被匹配，PT 仍会 link 失败）|
 
 > 注：这批码原设计用 `E040–E045`，但 `E040` 已被 `audit_harness` 占用（自审计护栏失效），
 > 故整体平移至空闲的 `E046–E050`，避免同一码两种语义。

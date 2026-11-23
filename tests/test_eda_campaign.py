@@ -307,6 +307,49 @@ No. of Violating Paths: 0
     assert d["timing_clean"] is True
 
 
+
+
+def test_clean_pt_netlist_residual_guard() -> None:
+    """清理后若黑盒实例仍残留，必须报错（E051），不能静默返回成功。
+
+    回归 60：缺分号/截断语句的实例不会被正则匹配，旧实现仍返回 ok=True +
+    removed_instances=0，输出网表里黑盒原样保留——用户以为清理完了，实际
+    PrimeTime 仍会 link_design 失败。工具不仅要清理，还要证明清理生效。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        # 缺分号：实例无法被匹配
+        bad = tdp / "bad.v"
+        bad.write_text(
+            "module t(o);\n  output [7:0] o;\n  RDBUS u (.o_data(o))\nendmodule\n",
+            encoding="utf-8",
+        )
+        out = tdp / "bad_out.v"
+        r = tool_clean_pt_netlist(str(bad), str(out))
+        assert r["ok"] is False, "residual blackbox must not report success"
+        codes = {d.get("code") for d in (r.get("diagnostics") or [])}
+        assert "E051" in codes, f"E051 not emitted: {codes}"
+
+        # 正常场景仍应成功
+        good = tdp / "good.v"
+        good.write_text(
+            "module t(o);\n  output [7:0] o;\n  RDBUS #(.WIDTH(8)) u (.o_data(o));\nendmodule\n",
+            encoding="utf-8",
+        )
+        r2 = tool_clean_pt_netlist(str(good), str(tdp / "good_out.v"))
+        assert r2["ok"] is True and r2["data"]["removed_instances"] == 1
+
+        # 黑盒名只出现在注释里时不得误报
+        comment_only = tdp / "c.v"
+        comment_only.write_text(
+            "module t(o);\n  output o;\n  // RDBUS is used elsewhere\n"
+            "  assign o = 1'b0;\nendmodule\n",
+            encoding="utf-8",
+        )
+        r3 = tool_clean_pt_netlist(str(comment_only), str(tdp / "c_out.v"))
+        assert r3["ok"] is True, "comment-only mention wrongly flagged as residual"
+
+
 if __name__ == "__main__":
     test_parse_uvm_log_and_medians()
     test_parse_dc_pt_qor_and_pitfalls()
@@ -317,5 +360,6 @@ if __name__ == "__main__":
     test_remote_script_rejects_shell_injection()
     test_uvm_thousands_separator_and_field_order()
     test_qor_thousands_separator()
+    test_clean_pt_netlist_residual_guard()
     test_generate_remote_run_script()
     print("ALL EDA CAMPAIGN TESTS PASSED")

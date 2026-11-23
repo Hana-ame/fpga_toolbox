@@ -29,6 +29,9 @@
 ## 集成层修复
 
 - [23-clean-pt-netlist-tool-registration.md](23-clean-pt-netlist-tool-registration.md) — `tool_clean_pt_netlist` 是 ToolResult 信封却不注册（CLI/MCP 都调不到）；README 仍称 `eda_campaign`「尚未实现」；顺带把硬编码 `tools==12` 断言改为下限
+## 集成层修复
+
+- [24-pt-netlist-residual-guard.md](24-pt-netlist-residual-guard.md) — `clean_pt_netlist` 只检查「有没有清理动作」不检查「清理是否生效」，缺分号网表静默产出仍含黑盒的坏网表；新增产物自检 + `E051` + A10 自审计项
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出

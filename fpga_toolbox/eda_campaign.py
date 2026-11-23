@@ -501,4 +501,33 @@ def tool_clean_pt_netlist(
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text(cleaned, encoding="utf-8")
     stats["out_verilog"] = str(outp.resolve())
+
+    # 产物自检：清理后输出里不应再出现黑盒模块的**实例**。若仍有残留，
+    # 说明输入里那些实例的写法没被正则覆盖（如缺少分号、语法不完整、黑盒名
+    # 出现在无法识别的构造里）。旧实现此时仍返回 ok=True + removed_instances=0，
+    # 用户以为清理完了，实际 PrimeTime 仍会 link 失败——不仅要清理，还要
+    # 证明清理生效。
+    bb_names = blackbox_modules or ["RDBUS", "CLKCROSSBUS", "CLKCROSSDFF"]
+    # 检测残留前先剥掉注释与字符串：黑盒名可能只出现在注释里（如
+    # `// RDBUS is used elsewhere`），那不是实例，不能误报成未清理。
+    _no_comment = re.sub(r"/\*.*?\*/|//[^\n]*|\"(?:[^\"\\]|\\.)*\"", " ", cleaned, flags=re.S)
+    residual = []
+    for name in bb_names:
+        # 只认「实例化」形态：模块名后跟参数块 `#(` 或实例标识符
+        if re.search(rf"\b{re.escape(name)}\b\s*(?:#\s*\(|[A-Za-z_$])", _no_comment):
+            residual.append(name)
+    if residual:
+        return err_result(
+            "clean_pt_netlist",
+            f"Blackbox instance(s) still present in the cleaned netlist: {residual}. "
+            "Their instantiation syntax was not matched (missing semicolon / truncated "
+            "statement / unsupported construct). PrimeTime would still fail link_design.",
+            diagnostics=[{
+                "severity": "ERROR",
+                "code": "E051",
+                "path": "pt.netlist",
+                "message": f"Unremoved blackbox instance(s) {residual}; netlist is not PT-clean.",
+            }],
+            data=stats,
+        )
     return ok_result("clean_pt_netlist", stats)
