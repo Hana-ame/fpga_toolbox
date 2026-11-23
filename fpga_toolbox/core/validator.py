@@ -259,9 +259,20 @@ def build_and_validate_ir(
             facc = str(fld.get("attr", fld.get("access", acc))).upper()
             if facc not in VALID_ACCESS_MODES:
                 diags.append(Diagnostic("ERROR", "E006", f"test_plan.register_rules[{idx}].fields[{fidx}].attr", f"Invalid field access '{facc}'."))
-            rng = _parse_bits(fld.get("bits", "0"))
-            if rng is None or rng[0] >= data_w:
-                diags.append(Diagnostic("ERROR", "E014", f"test_plan.register_rules[{idx}].fields[{fidx}].bits", f"Bitfield '{fname}' bits '{fld.get('bits')}' exceed data_width {data_w}."))
+            bits_raw = fld.get("bits", "0")
+            rng = _parse_bits(bits_raw)
+            if rng is None:
+                # 区分两种失败：bits 写成 hi<lo（如 "0:3" 低位在前）vs 非数字。
+                # 旧实现两者都报 E014 "exceed data_width"，对反序 bits 是误导
+                # （"0:3" 明明在 32 位内）。这里给专门的 E015 提示真实原因。
+                sbits = str(bits_raw).strip()
+                if ":" in sbits:
+                    diags.append(Diagnostic("ERROR", "E015", f"test_plan.register_rules[{idx}].fields[{fidx}].bits", f"Bitfield '{fname}' bits '{sbits}' has hi < lo — use high:low order (e.g. '3:0')."))
+                else:
+                    diags.append(Diagnostic("ERROR", "E014", f"test_plan.register_rules[{idx}].fields[{fidx}].bits", f"Bitfield '{fname}' bits '{sbits}' is not a valid bit range."))
+                continue
+            if rng[0] >= data_w:
+                diags.append(Diagnostic("ERROR", "E014", f"test_plan.register_rules[{idx}].fields[{fidx}].bits", f"Bitfield '{fname}' bits '{bits_raw}' exceed data_width {data_w}."))
                 continue
             hi, lo = rng
             for bpos in range(lo, hi + 1):
