@@ -78,6 +78,12 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 - **参考靶场 `mutate.py` 的路径与靶场布局不一致**。`MUTATIONS` 里 33 条的 `file` 是相对 `mutate.py`（原 `axi/` 平铺布局）的裸文件名，但靶场把这些 RTL 放进了 `axi/sv/` 子目录，导致 `run_mutation` 用 `<workdir>/<file>` 解析时 33 条全部 `Missing file`。这是靶场拷贝时目录布局漂移，属已知限制：使用 `run_mutation` 时需让 spec 的 `file` 路径与实际布局一致（靶场为 `axi/sv/` 前缀）。
 
+- **`emit_testbench` 生成的测试台对 AXI↔APB 桥无法运行**（`tb_emitter.py`，核心用途）。用真实 AXI↔APB 桥实测时发现：生成的 cocotb 测试台只驱动 AXI4-Lite 侧，完全不驱动 APB 侧——而桥的 APB 侧是 master，需要连 APB slave 才能完成事务。APB 侧 input（pready/prdata/pslverr）被 tie 0，桥发起读后等不到 pready，触发 P_003 RVALID timeout（240ns 失败）。
+
+  修复：`_emit_cocotb` 生成 APB slave 响应器（`cocotb.start_soon`），响应桥的 APB 读写（write 存 mem、read 返回 mem、拉高 pready）。APB 端口经 wrapper 连到 obs_ 探针，cocotb 从 `dut.obs_*` 驱动。实测：AXI↔APB 桥的 cocotb 测试台 `test_axil_rules` **PASS**（4470ns，TESTS=1 PASS=1 FAIL=0）—— emit_testbench 生成的测试台首次对真正的 AXI↔APB 桥运行通过。
+
+  另：APB obs_ 探针/tie_off 位宽改用该端口实际宽度（paddr/pwdata/prdata=32，pstrb=4），修 WIDTHEXPAND。
+
 ### Verified（实机，第二轮续）
 - `render_visual_report` 实际渲染验证：生成 1036 字节 SVG（含 DUT 框 + 2 个依赖模块 + `axi4_lite(2), apb(2)` 接口端口数标注）与 1799 字节 HTML，`consistency_ok: True`，无静默退化。注意 CLI 的 `extracted_interfaces` 需传 JSON **数组**（传两个独立 dict 会被当成字符串报 `'str' object has no attribute 'get'`）。
 - `lint_tb` 对真实 testbench（非故障注入脚本）跑通：在 `axi/sv/` 扫出 2 ERROR（R3）+ 22 WARNING（R1）。经代码核对，R1 全是「READY 在循环外预先置高」的合法模式（静态规则无法做数据流追踪，归为 WARNING 合理）；R3 抓到的是 testbench **故意**保持 READY=0 等 VALID 的边界场景（测「响应未取走时另一通道可完成」），spec 上确有死锁风险，报 ERROR 是有价值的真实信号而非误报。
