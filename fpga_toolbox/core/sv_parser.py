@@ -623,3 +623,65 @@ def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
     if changed:
         # 原地替换（slang_mods 是调用方持有的 list，直接改写其元素）
         slang_mods[:] = enriched
+
+
+def slang_instantiation_targets(rtl_path: Path) -> Optional[List[str]]:
+    """用 slang CST 提取文件的模块例化目标名（``HierarchyInstantiation.type``）。
+
+    为什么需要它：``repo_indexer`` 用 token 启发式找例化，只能认出**仓库内
+    已定义**的模块（``value in known``）。一旦例化一个仓库里没有定义的模块
+    （厂商 IP / 加密 IP / 未克隆子模块），启发式会静默丢弃，依赖闭包看起来
+    完整、沙箱静默缺文件。而单纯放宽启发式又会把 ``function automatic int
+    foo(...)``、``axi_lite_if slave;``、``return x;`` 之类全误报成例化
+    （实测参考靶场 106 条误报），噪声淹没信号。
+
+    slang 的 CST 里例化是显式节点 ``HierarchyInstantiation``，其 ``type``
+    字段就是被例化的模块名，零误报。因此：slang 可用时用它拿准确的例化目标
+    列表；不可用（或解析失败）返回 None，调用方退回旧启发式且不报未知例化。
+
+    返回 None 表示「无法判断」，返回 [] 表示「确实没有例化」，两者不可混用。
+    """
+    slang_bin = shutil.which("slang")
+    if not slang_bin:
+        return None
+    extra_files, inc_dirs = _find_slang_context(rtl_path)
+    inc_args = [arg for d in inc_dirs for arg in ("-I", d)]
+    timescale_args = ["--timescale", "1ns/1ps"]
+    rtl_abs = str(rtl_path.resolve())
+    attempts = [
+        [slang_bin, "--cst-json", "-", *inc_args, *timescale_args, rtl_abs],
+        [slang_bin, "--cst-json", "-", *inc_args, *timescale_args, *extra_files, rtl_abs],
+    ]
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        raw = proc.stdout
+        start = raw.find("{")
+        if start < 0:
+            continue
+        try:
+            # `--cst-json -` 在 JSON 之后还会追加解释器汇总文本，整段
+            # json.loads 会报 "Extra data"；用 raw_decode 只取第一个 JSON 对象。
+            tree, _end = json.JSONDecoder().raw_decode(raw, start)
+        except json.JSONDecodeError:
+            continue
+        targets: List[str] = []
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, dict):
+                if node.get("kind") == "HierarchyInstantiation":
+                    typ = node.get("type")
+                    text = typ.get("text") if isinstance(typ, dict) else None
+                    if isinstance(text, str) and text and text not in targets:
+                        targets.append(text)
+                for v in node.values():
+                    _walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _walk(v)
+
+        _walk(tree)
+        return targets
+    return None

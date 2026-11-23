@@ -2,6 +2,13 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+## [Unreleased] — 未知例化不再静默丢弃
+
+### Fixed
+- **`index_repo` 静默丢弃「例化了但仓库里没有定义」的模块**（`repo_indexer.py`）。`_find_instantiations` 只记录 `value in known` 的名字，例化厂商 IP / 加密 IP / 未克隆子模块时被完全静默丢掉：`instantiated_modules` 只剩仓库内模块、`diagnostics` 为空，下游 `resolve_deps` 的依赖闭包与 `all_files` 因此少一截却回答 `ok: True`，`copy_sandbox` 的沙箱静默缺文件。
+
+  第一版修复直接去掉 `in known` 守卫，实测在自带靶场产生 **106 条误报**（`int`/`automatic`/`void`/`axi_lite_if` 等），噪声淹没信号，已回滚。正确做法是用 slang CST 的显式节点 `HierarchyInstantiation.type.text` 精确取例化目标（零误报），slang 不可用时返回「无法判断」并退回旧行为（宁漏报不刷噪声）。新增 `unresolved_instantiations` 字段与 `W102` 诊断，并把 SV interface 定义名（`apb_if`/`axi_lite_if`）排除，否则靶场会有 45 条误报。修复后靶场 W102 = 0 条，真实未知例化精确上报。并补上缺陷的后半段：`resolve_deps` 原来不读该字段，仍返回「看起来完整」的文件清单，现透传 `unresolved_instantiations` 并新增 `closure_is_complete` 布尔信号（`False` 表示清单不完整、不要直接拿去建沙箱）。新增 `tests/test_regression.py::test_unknown_instantiations_reported`（9 项检查，含防误报与下游透传回归）。详见 [`changelog/unknown-instantiation-w102.md`](changelog/unknown-instantiation-w102.md)。
+
 ## [Unreleased] — copy_sandbox 符号链接逃逸修复
 
 ### Fixed

@@ -246,6 +246,66 @@ def test_sandbox_symlink_escape(tmp: Path) -> None:
     check("internal symlink still allowed", r["ok"] is True, str(r.get("error"))[:120])
 
 
+def test_unknown_instantiations_reported(tmp: Path) -> None:
+    """index_repo 必须上报「例化了但仓库里没有定义」的模块（W102）。
+
+    回归 35：token 启发式只收 `value in known` 的名字，例化仓库外模块
+    （厂商 IP / 加密 IP / 未克隆子模块）被静默丢弃，resolve_deps 闭包看起来
+    完整却漏依赖、沙箱静默缺文件。放宽启发式又会让 `function int foo(`
+    之类全误报（实测 106 条噪声），故用 slang CST 的显式例化节点精确判定。
+    """
+    proj = tmp / "unkproj"
+    (proj / "rtl").mkdir(parents=True, exist_ok=True)
+    (proj / "rtl" / "top.sv").write_text(
+        "module top(input logic clk);\n"
+        "  leaf u_leaf(.clk(clk));\n"
+        "  vendor_ip u_vip(.clk(clk));\n"
+        "endmodule\n", encoding="utf-8")
+    (proj / "rtl" / "leaf.sv").write_text(
+        "module leaf(input logic clk); endmodule\n", encoding="utf-8")
+
+    res = call_tool("index_repo", {"project_root": str(proj)})
+    check("unknown-inst index ok", res["ok"], res.get("error") or "")
+    top = res["data"]["modules"]["top"]
+    check("known instantiation still recorded", top["instantiated_modules"] == ["leaf"],
+          str(top["instantiated_modules"]))
+    check("unknown instantiation reported", top.get("unresolved_instantiations") == ["vendor_ip"],
+          str(top.get("unresolved_instantiations")))
+    w102 = [d for d in (res.get("diagnostics") or []) if d.get("code") == "W102"]
+    check("W102 emitted for unknown", len(w102) == 1, str(w102))
+
+    # 真·叶子模块不应被误报
+    leaf = res["data"]["modules"]["leaf"]
+    check("leaf has no unresolved", leaf.get("unresolved_instantiations") == [],
+          str(leaf.get("unresolved_instantiations")))
+
+    # 下游 resolve_deps 必须透传：否则调用方拿「看起来完整」的文件清单去
+    # copy_sandbox，沙箱静默缺文件。
+    dep = call_tool("resolve_deps", {"target_module": "top", "repo_index": res["data"]})
+    check("resolve_deps ok", dep["ok"], dep.get("error") or "")
+    check("closure flagged incomplete", dep["data"].get("closure_is_complete") is False,
+          str(dep["data"].get("closure_is_complete")))
+    check("resolve_deps carries unresolved",
+          dep["data"].get("unresolved_instantiations") == {"top": ["vendor_ip"]},
+          str(dep["data"].get("unresolved_instantiations")))
+    dep_w = [d for d in (dep.get("diagnostics") or []) if d.get("code") == "W102"]
+    check("resolve_deps emits W102", len(dep_w) == 1, str(dep_w))
+
+    # 函数返回类型/interface 声明不得被误报成例化（曾产生 106 条噪声）
+    proj2 = tmp / "fpproj"
+    (proj2 / "rtl").mkdir(parents=True, exist_ok=True)
+    (proj2 / "rtl" / "f.sv").write_text(
+        "interface my_if(input logic clk); endinterface\n"
+        "module f(input logic clk);\n"
+        "  my_if u_if(.clk(clk));\n"
+        "  function automatic int calc(input int x); return x; endfunction\n"
+        "endmodule\n", encoding="utf-8")
+    res2 = call_tool("index_repo", {"project_root": str(proj2)})
+    w102b = [d for d in (res2.get("diagnostics") or []) if d.get("code") == "W102"]
+    check("no false-positive W102 for func/interface", len(w102b) == 0,
+          str([d.get("message") for d in w102b]))
+
+
 def test_normalizer(tmp: Path) -> None:
     print("normalize_sim_result: unrecognized input is an error, not an empty report")
     junk = tmp / "junk.json"
@@ -400,6 +460,7 @@ def main() -> int:
         test_reset_detection(tmp)
         test_pure_apb_draft(tmp)
         test_sandbox_symlink_escape(tmp)
+        test_unknown_instantiations_reported(tmp)
         test_normalizer(tmp)
         test_full_chain(tmp)
         test_cli(tmp)

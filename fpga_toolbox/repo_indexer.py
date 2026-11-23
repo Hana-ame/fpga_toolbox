@@ -14,11 +14,13 @@ if __package__ in (None, ""):
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
     __package__ = "fpga_toolbox"
 
-from .core.sv_parser import SVModuleAST, parse_sv_file, sv_tokenize
+from .core.sv_parser import SVModuleAST, parse_sv_file, slang_instantiation_targets, sv_tokenize
 from .core.types import err_result, ok_result
 
 RTL_EXTS = {".v", ".sv", ".vh", ".svh"}
 _INC_RE = re.compile(r'^\s*`include\s+"([^"]+)"', re.MULTILINE)
+_IFACE_DEF_RE = re.compile(r"\binterface\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)")
+
 _NON_INST = {
     "module", "endmodule", "if", "else", "for", "while", "case", "begin", "end",
     "always", "always_ff", "always_comb", "assign", "function", "task", "generate",
@@ -98,6 +100,14 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             parsed.extend((fpath, m) for m in parse_sv_file(fpath))
 
     known = {m.name for _, m in parsed}
+    # SV interface 类型名也要算「已定义」：`axi_lite_if slave;` 在 slang CST 里
+    # 同样是 HierarchyInstantiation 节点，若不排除会被误报成缺失模块（靶场实测
+    # 45 条 W102 里绝大多数是 apb_if / axi_lite_if 这类 interface 声明）。
+    iface_defined: Set[str] = set()
+    for fpath in rtl_files:
+        if fpath.suffix.lower() not in {".v", ".sv", ".vh", ".svh"}:
+            continue
+        iface_defined.update(_IFACE_DEF_RE.findall(sources[fpath]))
     headers = {p.name: str(p.relative_to(root)) for p in rtl_files if p.suffix.lower() in {".vh", ".svh"}}
 
     # 归属修正：`include 会把子模块展开进顶层文件，导致同一模块出现在多个文件
@@ -115,24 +125,57 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             if _module_body(mname, sources[fpath]):
                 owner[mname] = fpath
 
-    modules = {
-        m.name: {
+    # 未知例化检测：token 启发式只能认出仓库内**已定义**的模块（value in known），
+    # 例化一个仓库外的模块（厂商 IP / 加密 IP / 未克隆子模块）会被静默丢弃，
+    # 依赖闭包看起来完整、沙箱静默缺文件。放宽启发式又会让 `function int foo(`
+    # 之类全误报（实测 106 条噪声）。因此用 slang CST 的 HierarchyInstantiation
+    # 精确拿例化目标；slang 不可用时返回 None，退回旧行为且不报未知（宁缺勿噪）。
+    cst_cache: Dict[str, Optional[List[str]]] = {}
+    unresolved: Dict[str, List[str]] = {}
+    modules = {}
+    for fp, m in parsed:
+        if fp not in cst_cache:
+            cst_cache[fp] = slang_instantiation_targets(fp)
+        cst_targets = cst_cache[fp]
+        insts = _find_instantiations(
+            _module_body(m.name, sources[fp]), known, m.name)
+        unknown: List[str] = []
+        if cst_targets is not None:
+            unknown = [
+                t for t in cst_targets
+                if t not in known and t not in iface_defined and t not in _NON_INST
+            ]
+        modules[m.name] = {
             "name": m.name,
             "file_path": str(owner.get(m.name, fp).relative_to(root)),
             "port_count": len(m.ports),
             "parameters": m.parameters,
-            "instantiated_modules": _find_instantiations(
-                _module_body(m.name, sources[fp]), known, m.name),
+            "instantiated_modules": insts,
+            "unresolved_instantiations": unknown,
             "includes": list(dict.fromkeys(_INC_RE.findall(sources[fp]))),
         }
-        for fp, m in parsed
-    }
+        if unknown:
+            unresolved[m.name] = unknown
+    diags = [
+        {
+            "severity": "WARNING",
+            "code": "W102",
+            "path": mod,
+            "message": (
+                f"Instantiation of module '{child}' has no definition in this repo; "
+                "the dependency closure will not cover it (vendor/encrypted IP?)."
+            ),
+        }
+        for mod, children in sorted(unresolved.items())
+        for child in children
+    ]
     return ok_result("index_repo", {
         "project_root": str(root.resolve()),
         "total_rtl_files": len(rtl_files),
         "headers": headers,
         "modules": modules,
-    })
+        "unresolved_instantiations": unresolved,
+    }, diagnostics=diags)
 
 
 def tool_resolve_deps(
@@ -171,11 +214,32 @@ def tool_resolve_deps(
                 q.append(child)
 
     diags = [{"severity": "WARNING", "code": "W101", "path": inc, "message": f"Header '{inc}' not found."} for inc in sorted(set(missing_inc))]
+    # 透传未知例化：闭包里某个模块例化了仓库外模块时，依赖闭包并不完整
+    # （少那些模块的 rtl_files）。只在 index_repo 报 W102 不够——调用方常把
+    # repo_index 直接喂给 resolve_deps 拿文件清单去 copy_sandbox，若这里不透传，
+    # 它仍然会得到一份「看起来完整」的文件列表。只报闭包内模块的，避免噪声。
+    unresolved_in_closure: Dict[str, List[str]] = {}
+    for mname in closure:
+        kids = mods.get(mname, {}).get("unresolved_instantiations") or []
+        if kids:
+            unresolved_in_closure[mname] = list(kids)
+            for child in kids:
+                diags.append({
+                    "severity": "WARNING",
+                    "code": "W102",
+                    "path": mname,
+                    "message": (
+                        f"Instantiation of module '{child}' has no definition in this repo; "
+                        "the dependency closure does not cover it (vendor/encrypted IP?)."
+                    ),
+                })
     return ok_result("resolve_deps", {
         "target_module": target_module,
         "target_file": mods[target_module]["file_path"],
         "dependency_closure": closure,
         "dependency_edges": edges,
+        "unresolved_instantiations": unresolved_in_closure,
+        "closure_is_complete": not unresolved_in_closure,
         "rtl_files": sorted(rtl_set),
         "header_files": sorted(hdr_set),
         "all_files": sorted(rtl_set | hdr_set),

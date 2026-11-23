@@ -49,6 +49,16 @@ slang 的 CST 里例化是**显式节点** `HierarchyInstantiation`，其 `type.
 | `function automatic int foo()` 等 | — | 不误报 |
 | 参数化例化 / `generate` 内例化 | 已知模块正常 | 未知模块同样精确检出 |
 
+### 下游透传（同一缺陷的后半段）
+
+只在上游 `index_repo` 报 `W102` 不够：调用方常把 `repo_index` 直接喂给 `resolve_deps` 拿文件清单去 `copy_sandbox`，而 `resolve_deps` 原来根本不读 `unresolved_instantiations`，仍会返回一份「看起来完整」的文件列表与 `ok: True`。已补：
+
+- `resolve_deps` 现在只对**依赖闭包内**的模块汇总未解析例化（闭包外的不报，避免噪声）；
+- 新增 `unresolved_instantiations` 字段与 `closure_is_complete` 布尔量——后者是给调用方的单点信号：`False` 意味着这份文件清单不完整，别直接拿去建沙箱；
+- 同时为每条缺失模块补一条 `W102`。
+
+实测：`/tmp/unk`（例化 `vendor_ip_missing`/`another_unknown`）→ `closure_is_complete: False` + 2 条 W102；自带靶场的 `axi_apb_bridge` → `closure_is_complete: True` 且 0 告警。
+
 ### Tests
 
 新增 `tests/test_regression.py::test_unknown_instantiations_reported`（6 项检查）：已知例化仍记录、未知例化上报、`W102` 恰好 1 条、真叶子模块无误报、**函数返回类型与 interface 声明不误报**（锁死第一版 106 条噪声的回归）。
