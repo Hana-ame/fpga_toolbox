@@ -198,6 +198,44 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "detail": f"ok={_r_pt['ok']} codes={sorted(_residual_codes)}",
         })
 
+        # A11: lint_tb 必须能检出 SV 测试台的「只 $display 不判定」（S4）。
+        # 背景：scan_silent_pass 原本只被喂 .sh/.py，SV 文件不进这个扫描器，
+        # 于是 README 宣传的头号症状（打印几句 $display 就 $finish）返回 ok=True。
+        # 同时要求它不误报带真实判定的 TB —— 一个只会说「坏」不会说「好」的
+        # 检查器同样不能用。
+        _s4 = root / "tb_s4.sv"
+        _s4.write_text(
+            "module tb_s4;\n"
+            "  initial begin\n"
+            "    #100;\n"
+            "    $display(\"TEST DONE\");\n"
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        _r_s4 = tool_lint_tb(str(_s4), rules=["silent_pass"])
+        _s4_codes = {d.get("code") for d in (_r_s4.get("diagnostics") or [])}
+
+        _good = root / "tb_good.sv"
+        _good.write_text(
+            "module tb_good;\n"
+            "  initial begin\n"
+            "    assert (d == 8'h12) else $error(\"bad\");\n"
+            "    $display(\"PASS\");\n"
+            "  end\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        _r_good = tool_lint_tb(str(_good), rules=["silent_pass"])
+        a11_ok = (not _r_s4["ok"]) and ("S4" in _s4_codes) and _r_good["ok"]
+        checks.append({
+            "id": "A11_SV_SILENT_PASS_DETECT",
+            "passed": a11_ok,
+            "detail": (f"silent ok={_r_s4['ok']} codes={sorted(_s4_codes)} "
+                       f"judged_ok={_r_good['ok']}"),
+        })
+
     failed = [c for c in checks if not c["passed"]]
     data = {"total": len(checks), "passed": len(checks) - len(failed), "failed": len(failed), "checks": checks}
     if failed and strict:

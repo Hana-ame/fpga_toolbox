@@ -744,6 +744,54 @@ def test_verilator_missing_summary_is_failure(tmp: Path) -> None:
         "== sim: axi (top=t) ==\nPASS: all 35 checks passed\n", "vl_word.log")
     check("summary not named after suite still PASS",
           r_word["data"]["overall_status"] == "PASS", str(r_word["data"]["overall_status"]))
+
+
+def test_sv_silent_pass_detected(tmp: Path) -> None:
+    """SV 测试台「只 $display 不判定」必须被 lint_tb 判出（S4）。
+
+    回归 68：`scan_silent_pass` 只被喂 `.sh`/`.py`，SV 文件根本不过这个扫描器。
+    于是 README/FEATURES 反复宣传的头号症状——测试台打印几句 `$display`
+    就 `$finish`、全程没有任何判定——`lint_tb` 返回 ok=True、零发现。
+    这类 TB 的仿真必然「通过」，因为它从未表达过失败。
+
+    同时保证不误报：带 assert / $error / $fatal / 自研 check 任务的正常 TB
+    必须保持干净。
+    """
+    silent = tmp / "tb_silent.sv"
+    silent.write_text(
+        "module tb_silent;\n"
+        "  initial begin\n"
+        "    #100;\n"
+        "    $display(\"TEST DONE\");\n"
+        "    $finish;\n"
+        "  end\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+    r = call_tool("lint_tb", {"target_path": str(silent), "rules": ["silent_pass"]})
+    codes = {d["code"] for d in r["diagnostics"]}
+    check("silent-pass SV TB fails lint_tb", not r["ok"], str(r["ok"]))
+    check("S4 emitted for $display-without-judgement", "S4" in codes, str(sorted(codes)))
+
+    # 反向：真实判定形态都不得误报
+    judged = {
+        "assert_tb.sv": "module t; initial begin assert (d==8'h12) else $error(\"bad\"); $display(\"PASS\"); end endmodule\n",
+        "if_error_tb.sv": "module t; initial begin if (d !== 8'h12) $error(\"mismatch\"); $display(\"PASS\"); end endmodule\n",
+        "fatal_tb.sv": "module t; initial begin if (d !== 8'h12) $fatal(1, \"mismatch\"); $display(\"PASS\"); end endmodule\n",
+        "check_task_tb.sv": (
+            "module t; initial begin check_eq(d, 8'h12); $display(\"PASS\"); end\n"
+            "  task check_eq; input [7:0] a, b; begin if (a !== b) $error(\"x\"); end endtask\n"
+            "endmodule\n"
+        ),
+    }
+    for name, src in judged.items():
+        f = tmp / name
+        f.write_text(src, encoding="utf-8")
+        rj = call_tool("lint_tb", {"target_path": str(f), "rules": ["silent_pass"]})
+        check(f"judged TB not flagged ({name})", rj["ok"],
+              f"{name}: {sorted({d['code'] for d in rj['diagnostics']})}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fpga_tb_") as td:
         tmp = Path(td)
@@ -764,6 +812,7 @@ def main() -> int:
         test_cocotb_incomplete_report_is_failure(tmp)
         test_generated_cocotb_tb_writes_completion(tmp)
         test_verilator_missing_summary_is_failure(tmp)
+        test_sv_silent_pass_detected(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

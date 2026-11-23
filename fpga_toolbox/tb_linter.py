@@ -249,6 +249,57 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def scan_sv_silent_pass(path: Path) -> List[Dict[str, Any]]:
+    """SV testbench silent-pass check (S4).
+
+    旧实现只把 .sh/.py 送进 silent_pass 扫描器，SV 测试台根本没有对应的检查。
+    结果是文档/README 反复宣传的头号症状——「测试台只 $display("DONE") 就结束，
+    没有任何判定」——lint_tb 完全看不见，返回 ok=True。
+
+    真实形态：initial/always 块里跑完整激励，打印若干 $display，然后 $finish，
+    全程没有 if/assert/$error/$fatal/check 任务去做判定。仿真必然「通过」，
+    因为它从未表达过失败。
+
+    判定口径（保守，避免误报真实 TB）：
+      * 文件里存在 $display（说明它打算汇报结果）
+      * 且不存在任何判定构造：assert / $error / $fatal / $assert / else $error
+        以及自研 check 任务调用（check/expect/verify/fail/error）
+      * 且不存在 if(...) 与 $error/$fatal 的邻近组合
+    """
+    text = path.read_text(encoding="utf-8", errors="replace")
+    # 去掉行注释与块注释，避免注释里的关键字造成漏报/误报
+    code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    code = re.sub(r"//[^\n]*", "", code)
+    if not re.search(r"\$display\b", code):
+        return []
+    judges = [
+        r"\bassert\b", r"\$error\b", r"\$fatal\b", r"\$assert\b", r"\$assertoff\b",
+        r"\$\w*assert\w*\b",
+        r"\b(?:check|expect|verify|compare|scoreboard|fail|error)(?:ing|_)?\w*\s*\(",
+        r"\bif\s*\([^)]*\)[^;\n]*\$(?:error|fatal)\b",
+    ]
+    for pat in judges:
+        if re.search(pat, code, re.IGNORECASE):
+            return []
+    # 定位第一个 $display，用它作为证据行号
+    line_no = 1
+    for i, ln in enumerate(text.splitlines(), 1):
+        if re.search(r"\$display\b", ln):
+            line_no = i
+            break
+    return [{
+        "severity": "ERROR",
+        "code": "S4",
+        "path": f"{path}:{line_no}",
+        "message": (
+            "SV testbench emits $display but contains no pass/fail decision "
+            "(no assert/$error/$fatal/check task). The simulation can only pass; "
+            "it never expresses failure."
+        ),
+        "context": text.splitlines()[line_no - 1].strip(),
+    }]
+
+
 def scan_silent_pass(path: Path) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -325,6 +376,8 @@ def tool_lint_tb(
             findings.extend(scan_clocking(f))
         if "handshake" in enabled:
             findings.extend(scan_handshake(f))
+        if "silent_pass" in enabled:
+            findings.extend(scan_sv_silent_pass(f))
     for f in script_files:
         if "silent_pass" in enabled:
             findings.extend(scan_silent_pass(f))

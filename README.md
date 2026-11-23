@@ -18,11 +18,11 @@
 | 6 | `emit_testbench` | 契约路径：生成 SV wrapper / SVA / bind 与含写回读、反压压测的 cocotb 测试平台；`protocol=` 路径：直接从 RTL 生成自检 SV testbench + Verilator 运行脚本，支持 `apb`/`axi4`/`ahb_lite`/`ddr3`/`ddr4`/`hbm`/`pcie`（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件） |
 | 7 | `normalize_sim_result` | 归一化 cocotb XML/JSON、SVA 日志与 Verilator 多套件日志（含逐套件身份核对） |
 | 8 | `render_visual_report` | 渲染独立 SVG 拓扑 + HTML 规则审计看板，内置 HTML 标签与行数一致性自检 |
-| 9 | `lint_tb` | 静态反踩坑检查：时钟沿竞争（C1–C2）、AXI 握手死锁（R1–R4）、静默通过（S1–S3） |
+| 9 | `lint_tb` | 静态反踩坑检查：时钟沿竞争（C1–C2）、AXI 握手死锁（R1–R4）、静默通过（S1–S4，含 SV 测试台「只 `$display` 无判定」）|
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
 | 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
-| 13 | `audit_harness` | 故障注入式自审计（A1–A10），证明验证护栏出错时不会静默通过 |
+| 13 | `audit_harness` | 故障注入式自审计（A1–A11），证明验证护栏出错时不会静默通过 |
 
 ### 多总线原生测试台（`protocol=`）
 
@@ -76,6 +76,15 @@ python3 -m fpga_toolbox list
 ```
 
 ## 离线文档
+
+### 功能手册与示例
+
+| 文件 | 内容 |
+|---|---|
+| [`docs/FEATURES.md`](docs/FEATURES.md) | **功能手册**：13 个工具的用途、参数与真实输出，诊断码总表，三种调用方式，边界与已知限制 |
+| [`docs/EXAMPLES.md`](docs/EXAMPLES.md) | **示例集**：10 个可直接运行的端到端示例（契约生成链、多协议 TB、静默通过检测、变异测试、三源日志归一化、PT 网表清理、自审计、沙箱逃逸） |
+
+### EDA 工具资料
 
 `docs/eda-tutorials/` 存放可直接用浏览器打开的离线资料（纯文档，不含代码）：
 

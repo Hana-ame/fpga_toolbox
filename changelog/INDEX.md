@@ -19,34 +19,29 @@
 ## eda_campaign 审计
 
 - [20-eda-campaign-audit.md](20-eda-campaign-audit.md) — 审计 `clean_netlist_for_pt` 发现 2 个真实缺陷：参数化 `#(...)` blackbox 实例完全不被清理（`removed=0`）、注释中的 `endmodule` 导致成块扫描错位并往注释里注入 assign。附一次自我纠偏：位选择不应被合并成根 net
-
-## eda_campaign 审计
-
 - [21-eda-campaign-audit-2.md](21-eda-campaign-audit-2.md) — 第二轮审计剩余 5 个函数：`generate_remote_run_script` **命令注入**（实测可执行任意命令）、`aggregate_seed_medians` 传错层级静默返回空、配对基线用不完整数据判「逐位一致」
-## eda_campaign 审计
-
 - [22-eda-campaign-audit-3.md](22-eda-campaign-audit-3.md) — 第三轮审 `parse_uvm_log` 正则层：千分位 `10,000` 被截成 `10`（**可致假通过**）、`delivered=` 依赖字段顺序
+
 ## 集成层修复
 
 - [23-clean-pt-netlist-tool-registration.md](23-clean-pt-netlist-tool-registration.md) — `tool_clean_pt_netlist` 是 ToolResult 信封却不注册（CLI/MCP 都调不到）；README 仍称 `eda_campaign`「尚未实现」；顺带把硬编码 `tools==12` 断言改为下限
-## 集成层修复
-
 - [24-pt-netlist-residual-guard.md](24-pt-netlist-residual-guard.md) — `clean_pt_netlist` 只检查「有没有清理动作」不检查「清理是否生效」，缺分号网表静默产出仍含黑盒的坏网表；新增产物自检 + `E051` + A10 自审计项
+
 ## 跨工具一致性
 
 - [25-call-tool-required-and-outdir-cwd.md](25-call-tool-required-and-outdir-cwd.md) — 跨工具 schema↔签名扫描发现：`out_dir` 为空时 4 个产物静默写进调用方 cwd；根因是 `call_tool` 从不校验 schema 的 `required`
-## 跨工具一致性
-
 - [26-call-tool-enum-and-type-validation.md](26-call-tool-enum-and-type-validation.md) — `call_tool` 也不校验 enum 与 type：非法协议名报错指向 RTL，「string 传 int」漏出 CPython 内部错误；同时保留数字字符串兼容（MCP 序列化）
+
 ## 输出侧一致性
 
 - [27-sva-heartbeat-anti-silent-pass.md](27-sva-heartbeat-anti-silent-pass.md) — SVA checker 通过时零输出，导致「全部通过」与「checker 没跑」都归一化成 `NO_RESULTS`；加心跳探针使三态可区分
-## 输出侧一致性
-
 - [28-cocotb-incomplete-report.md](28-cocotb-incomplete-report.md) — cocotb 每记录一条 check 就落盘却无「已跑完」信号，测试崩在第 1 条断言时残缺报告仍判 PASS；加 `completed` 标记 + `COCOTB_INCOMPLETE`
-## 输出侧一致性
-
 - [29-verilator-missing-summary.md](29-verilator-missing-summary.md) — Verilator 套件在 CHECK 之后崩、无 `PASS:`/`FAIL:` 汇总行时仍被判 PASS；改用「启动套件数 vs 汇总行数」计数校验（逐名匹配会误伤 `PASS: all 20 ...` 这类日志）
+
+## 输入侧一致性
+
+- [30-lint-tb-sv-silent-pass.md](30-lint-tb-sv-silent-pass.md) — `scan_silent_pass` 只被喂 `.sh`/`.py`，SV 测试台从不进入该扫描器，于是 README 头号宣传场景（TB 只 `$display("DONE")` 就结束、无任何判定）返回 `ok=True`；新增 `S4` 规则 + 自审计 `A11`
+
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
 - [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
