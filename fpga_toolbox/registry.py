@@ -20,14 +20,14 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index_repo": {
         "fn": tool_index_repo,
         "description": "Syntax-parse an RTL repo into a module, instantiation, and header index.",
-        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string"}}, "required": ["project_root"]},
+        "inputSchema": {"type": "object", "properties": {"project_root": {"type": "string", "description": "Absolute or relative path to the RTL project root to index."}}, "required": ["project_root"]},
     },
     "resolve_deps": {
         "fn": tool_resolve_deps,
         "description": "Compute BFS transitive dependency closure and DAG edges for a target module.",
         "inputSchema": {
             "type": "object",
-            "properties": {"target_module": {"type": "string"}, "repo_index": {"type": "object"}, "project_root": {"type": "string"}},
+            "properties": {"target_module": {"type": "string", "description": "Name of the module whose transitive dependency closure should be computed."}, "repo_index": {"type": "object", "description": "Optional repo index output from index_repo (recomputed if omitted)."}, "project_root": {"type": "string", "description": "Path to the RTL project root."}},
             "required": ["target_module"],
         },
     },
@@ -37,11 +37,11 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "project_root": {"type": "string"},
-                "relative_files": {"type": "array", "items": {"type": "string"}},
-                "sandbox_dir": {"type": "string"},
-                "clean": {"type": "boolean"},
-                "force": {"type": "boolean"},
+                "project_root": {"type": "string", "description": "Path to the source RTL project root."},
+                "relative_files": {"type": "array", "items": {"type": "string"}, "description": "Project-relative paths of the RTL/header files to stage into the sandbox."},
+                "sandbox_dir": {"type": "string", "description": "Target sandbox directory (must not be the project root or an ancestor)."},
+                "clean": {"type": "boolean", "description": "Clean an existing marked sandbox directory before copying (default false)."},
+                "force": {"type": "boolean", "description": "Allow cleaning a directory that carries the sandbox marker."},
             },
             "required": ["project_root", "relative_files", "sandbox_dir"],
         },
