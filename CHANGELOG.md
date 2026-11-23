@@ -15,7 +15,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 - **`slang` 不导出 `InterfacePort.interfaceDef/modport`**（slang 12.x 的 ast-json 只有 `{name,kind,addr,isGeneric}`）。直接切到 slang 会丢掉 `axi_lite_if.slave` 这类信息。新增 `_enrich_from_builtin`：slang 为主后端，用 builtin 解析补齐它缺失的 interface 类型/modport，两种后端互补而非二选一。
 
-- **`slang` 回退对调用方不可见**。新增 `W013` 诊断（`iface_extractor.py`）：slang 装了却没生效时明确上报原因，而不是静默退回 builtin。
+- **`slang` 回退对调用方不可见**。新增 `W013` 诊断（`iface_extractor.py`）：slang 装了却没生效时明确上报原因，而不是静默退回 builtin。相关 W 码：`W001`（可选 axi4_lite 信号未映射）、`W010`/`W011`（无 clock/reset 时默认值提示）、`W101`（`include` 头文件未找到）。
 
 - **`emit_testbench` 报错只有 `'awaddr'` 一个单词**（`tb_emitter.py`）。spec 缺 AXI4-Lite boundary（如纯 APB 寄存器文件）时，IR 会带着空 `port_map` 往下走，最终在生成 wrapper 时抛 `KeyError('awaddr')`，调用方看不出根因。修复后两处 fail-fast：
   - 存在 ERROR 级诊断（如 E001 缺必需 port_map）时提前失败并透传完整诊断；
