@@ -101,7 +101,12 @@ def _normalize_regfile_spec_v2(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_raw_spec(spec_path: Path) -> Dict[str, Any]:
-    text = spec_path.read_text(encoding="utf-8")
+    # 契约 YAML/JSON 可能由用户手写，注释里带 GBK/Shift-JIS/latin-1 字节
+    # （实测：latin-1 注释 0xE9 会让 utf-8 解码抛 UnicodeDecodeError 直接冒泡，
+    # 报一句 CPython 内部异常、完全没指向编码）。用 errors="replace" 容错：
+    # 注释里的乱码不影响 key/value 结构解析。JSON 是 ASCII 子集、不受影响；
+    # YAML 注释行被解析器忽略。
+    text = spec_path.read_text(encoding="utf-8", errors="replace")
     data = json.loads(text) if spec_path.suffix.lower() == ".json" else yaml.safe_load(text)
     if not isinstance(data, dict):
         raise ValueError("Specification must be a YAML/JSON mapping.")

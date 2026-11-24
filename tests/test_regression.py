@@ -1163,6 +1163,21 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
             check("no spurious E011 port-missing from encoding issue", not e011,
                   str([d.get("message") for d in e011][:2]))
 
+    # —— 缺陷 84：非 UTF-8 契约 YAML 同样会崩（用户手写 YAML 注释带本地编码）——
+    raw_contract = Path(contract).read_bytes()
+    nonutf_contract = tmp / "contract_nonutf8.yaml"
+    nonutf_contract.write_bytes(raw_contract.replace(
+        b"boundary:", b"# commentaire latin-1: \xe9\xe8\nboundary:", 1))
+    r3 = call_tool("emit_testbench", {
+        "spec_path": str(nonutf_contract), "out_dir": str(tmp / "tb_nonutf8yaml"),
+        "rtl_file": str(tmp / "dut.sv"),
+    })
+    check("non-UTF-8 contract YAML still emits ok (tolerant decode)", r3["ok"],
+          str(r3.get("error")))
+    if r3["ok"]:
+        check("non-UTF-8 YAML produces same module", r3["data"]["module"] == "reg_slave",
+              str(r3["data"].get("module")))
+
     # —— 缺陷 C：run_sim waveform=True 但无波形 → W014 警告（ok 仍为 True）——
     # 需要真跑一次脚本，而 run_sim 在跑之前会检查 Verilator >= 5.040（E020），
     # 所以无 verilator 的环境（裸容器）必须跳过，否则把"环境缺失"当"功能失效"。

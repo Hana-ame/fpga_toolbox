@@ -72,10 +72,28 @@ build_docs_html.py --check            HTML 与 md 同步
 - `non-UTF-8 RTL copied byte-for-byte`
 - `no spurious E011 port-missing from encoding issue`
 
-## 未修的相关项（记录）
+## 缺陷 84 — 非 UTF-8 契约 YAML 同样崩（同一排查顺带修）
 
-仓库里另有 8 处 `read_text(encoding="utf-8")` 无容错（cli / validator /
-mutation_runner / result_normalizer / eda_campaign）。它们处理的是**工具自己
-生成的产物**（契约 YAML、变异 spec、cocotb JSON、报告），这些由本工具写出、
-必为 UTF-8，风险低于用户提供的 RTL。本轮只修**用户输入的 RTL** 这条最高价值
-路径；其余若将来发现真实案例再逐个修。
+写完 83 去测"用户手写契约 YAML 带本地编码注释"，果然也崩：
+
+```
+ok: false
+error: 'utf-8' codec can't decode byte 0xe9 in position 33: invalid continuation byte
+```
+
+我原本在"未修相关项"里把契约 YAML 归为"工具自己生成的产物、必为 UTF-8"，
+但**用户手写的契约 YAML**（带 GBK/Shift-JIS 注释）同样常见——分类错了。
+修复成本极低（`load_raw_spec` 一行加 `errors="replace"`），既然已撞见真实
+案例就一并修，而不是留在"待办"里。
+
+修复后同一份 latin-1 注释 YAML：`ok=True`，正常产出 wrapper。
+
+新增 2 项回归断言：
+- `non-UTF-8 contract YAML still emits ok (tolerant decode)`
+- `non-UTF-8 YAML produces same module`
+
+## 仍未修的相关项（记录，均处理工具自产产物）
+
+仓库里剩余的无容错 `read_text` 处理的是**工具自己生成的产物**（变异 spec、
+cocotb JSON、报告），这些由本工具写出、必为 UTF-8，风险低于**用户提供的输入**
+（RTL / 契约 YAML，本轮两条都已修）。若将来发现真实案例再逐个修。
