@@ -1161,6 +1161,37 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
               "COCOTB_PLUSARGS = +WAVE" in mtext)
         check("Makefile names the cocotb test module",
               f"MODULE = test_{r['data']['module']}_axil" in mtext)
+        # —— 缺陷 94：RTL 含 `include 时 Makefile 必须带 -I inc 并复制 inc ——
+        # make_project 生成的 RTL 首行就是 `include "defs.svh"，inc 在项目根
+        # （RTL 同级/父目录/项目根三种布局都见过）。旧实现不复制 inc、Makefile
+        # 也无 -I → cocotb 编译报 "Cannot find include file: 'defs.svh'"。
+        inc_proj = tmp / "tb_inc"
+        inc_proj.mkdir(parents=True, exist_ok=True)
+        import sys as _sys2
+        _sys2.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+        from test_regression import make_project as _mkp
+        _mkp(inc_proj)
+        # 先 extract_interfaces 生成契约（make_project 不自带契约）
+        from fpga_toolbox import call_tool as _ct
+        _r_ext = _ct("extract_interfaces", {
+            "rtl_file": str(inc_proj / "rtl" / "reg_slave.sv"),
+            "emit_draft_yaml": str(inc_proj / "contract.yaml"),
+        })
+        assert _r_ext["ok"], str(_r_ext.get("error"))
+        r_inc = call_tool("emit_testbench", {
+            "spec_path": str(inc_proj / "contract.yaml"),
+            "out_dir": str(inc_proj / "tb"),
+            "rtl_file": str(inc_proj / "rtl" / "reg_slave.sv"),
+        })
+        check("emit with include RTL ok", r_inc["ok"], str(r_inc.get("error")))
+        if r_inc["ok"]:
+            inc_tb = Path(r_inc["data"]["artifacts"]["unit_isolation_wrapper"]).parent
+            check("inc/ copied into out_dir", (inc_tb / "inc" / "defs.svh").is_file())
+            mk_inc = (inc_tb / "Makefile").read_text(encoding="utf-8")
+            check("Makefile defines INCDIR", "INCDIR" in mk_inc)
+            check("Makefile adds -I$(INCDIR) conditionally",
+                  "-I$(INCDIR)" in mk_inc and "wildcard $(INCDIR)" in mk_inc)
+
         # 缺陷 93：Makefile 必须在 cocotb 缺失时给出明确安装指引。
         # 旧实现 include $(shell cocotb-config --makefiles) 在无 cocotb 时展开成
         # 空串 → include /Makefile.sim → "No such file or directory" +

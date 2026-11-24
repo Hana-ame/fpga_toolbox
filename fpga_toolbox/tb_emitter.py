@@ -529,6 +529,13 @@ TOPLEVEL = {module}_axil_wrap
 VERILOG_SOURCES = {module}_axil_wrap.sv {module}_axil_sva_checker.sv {module}_axil_bind.sv \\
   {rtl_entries if rtl_entries else "$(error no RTL: regenerate with --rtl-file)"}
 COMPILE_ARGS += --timescale 1ns/1ps
+# RTL 的 `include 依赖：inc 目录存在时加 -I，否则编译报
+# "Cannot find include file: 'defs.svh'"（实测踩坑 —— make_project 生成的
+# RTL 首行就是 `include "defs.svh"，inc 在 RTL 同级目录）。
+INCDIR ?= inc
+ifneq ($(wildcard $(INCDIR)),)
+COMPILE_ARGS += -I$(INCDIR)
+endif
 # +WAVE 触发 wrapper 里的 $dumpvars（不加则 --trace 编了也拿不到波形）
 COCOTB_PLUSARGS = +WAVE
 # cocotb 依赖前置检查：无 cocotb 时给出明确安装指引，而不是让
@@ -666,6 +673,21 @@ def tool_emit_testbench(
             # 完全没指向编码问题）。按字节复制保留原始编码，交由解析器容错。
             (od / rtl_src.name).write_bytes(rtl_src.read_bytes())
             rtl_entries = rtl_src.name
+            # RTL 依赖的 inc/ 目录一并复制（RTL 常含 `include "xxx.svh"`，
+            # 实测 make_project 生成的 RTL 首行就是 `include "defs.svh"）。
+            # 不复制则 cocotb 编译报 "Cannot find include file"。
+            # inc 可能在 RTL 同级、RTL 父目录、或项目根（实测三种布局都见过，
+            # 旧实现只查 RTL 同级 → 漏掉项目根布局，复现 make_project fixture）。
+            import shutil
+            _inc_dst = od / "inc"
+            if _inc_dst.exists():
+                shutil.rmtree(_inc_dst)
+            for _cand in (rtl_src.parent / "inc",
+                          rtl_src.parent.parent / "inc",
+                          Path(rtl_file).resolve().parent / "inc"):
+                if _cand.is_dir():
+                    shutil.copytree(_cand, _inc_dst)
+                    break
     mk_path.write_text(_emit_cocotb_makefile(mod, rtl_entries), encoding="utf-8")
     artifacts["makefile"] = str(mk_path.resolve())
     return ok_result(
