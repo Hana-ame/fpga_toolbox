@@ -914,6 +914,20 @@ def test_waveform_and_log_capture(tmp: Path) -> None:
                   "== sim: apb" in content, content[:60])
             check("log file keeps last line", "PASS: apb" in content, content[-60:])
 
+    # —— 缺陷 88：run_sim 传 Makefile → 明确指引用 make，而非 code 127 ——
+    # 契约路径（emit_testbench --spec-path）产出的是 Makefile，不是 shell 脚本。
+    # 旧实现直接 `bash Makefile` → 127 "command not found"，用户不知道该用 make。
+    # 这条不依赖 Verilator：Makefile 类型检测在版本检查之前。
+    mkf = base / "Makefile"
+    mkf.write_text("# 契约路径 cocotb Makefile\nTOPLEVEL_LANG = verilog\n", encoding="utf-8")
+    r_mk = call_tool("run_sim", {"sim_script": str(mkf), "suite": "x"})
+    check("run_sim rejects a Makefile with actionable hint", not r_mk["ok"],
+          str(r_mk.get("error")))
+    check("Makefile error suggests using make",
+          "run it with make" in str(r_mk.get("error")), str(r_mk.get("error"))[:120])
+    check("Makefile error mentions VERILATOR_TRACE for waveform",
+          "VERILATOR_TRACE=1" in str(r_mk.get("error")))
+
     # —— 长日志：返回值里是 tail，但磁盘上必须是全文 ——
     long_script = mk_script("run_long.sh",
                             'for i in $(seq 1 400); do echo "[CHECK] id=L$i padding"; done\n'

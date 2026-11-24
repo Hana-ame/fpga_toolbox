@@ -202,6 +202,20 @@ def tool_run_sim(
     if not script_p.is_file():
         return err_result("run_sim", f"Simulation entry script not found: {sim_script}")
 
+    # 契约路径（emit_testbench --spec-path）产出的是 **Makefile**，不是可执行
+    # shell 脚本。旧实现直接 `bash Makefile` → 127 "command not found"，用户
+    # 完全不知道应该用 `make`。这里给出可操作的指引。
+    if script_p.suffix.lower() in (".mk",) or script_p.name in ("Makefile", "makefile", "GNUmakefile"):
+        return err_result(
+            "run_sim",
+            f"{sim_script} is a Makefile, not a shell script — run it with make, e.g. "
+            f"`make -C {script_p.parent} SIM=verilator`. To capture a waveform add "
+            "VERILATOR_TRACE=1 (the generated Makefile already sets COCOTB_PLUSARGS=+WAVE). "
+            "run_sim drives a POSIX sim script (the protocol path's run_*.sh); it cannot "
+            "drive a cocotb Makefile.",
+            data={"script": str(script_p.resolve()), "hint": "use make"},
+        )
+
     env_info = probe_eda_env()
     if not env_info["verilator"]["meets_min_version"]:
         return err_result(
