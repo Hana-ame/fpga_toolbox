@@ -44,11 +44,39 @@ _READY_OF = {
 }
 
 
+def _strip_comment(raw: str) -> str:
+    """剥掉行注释，但跳过字符串内的 //。
+
+    旧实现用 `_strip_comment(raw)`：字符串里的 // 被误判为注释起点，
+    导致该行后续的真实代码被丢弃。实测：
+        a = 1'b1; $display("path = a//b"); @(posedge clk);
+    朴素分割 → 'a = 1\'b1; $display("path = a'，@(posedge clk); 丢失
+    —— 后续代码里的握手/时钟检查被漏掉，lint 判定不准。
+
+    这里逐字符扫描，正确处理字符串边界与反斜杠转义（与
+    visual_renderer.py 的注释高亮同一算法）。
+    """
+    in_str = False
+    esc_ch = False
+    for i, ch in enumerate(raw):
+        if esc_ch:
+            esc_ch = False
+            continue
+        if ch == "\\" and in_str:
+            esc_ch = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+        elif not in_str and ch == "/" and i + 1 < len(raw) and raw[i + 1] == "/":
+            return raw[:i]
+    return raw
+
+
 def scan_clocking(path: Path) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     for i, raw in enumerate(lines):
-        code = raw.split("//")[0]
+        code = _strip_comment(raw)
         if not code.strip():
             continue
         if re.search(r"@\s*\(\s*posedge", code):
@@ -64,7 +92,7 @@ def scan_clocking(path: Path) -> List[Dict[str, Any]]:
                 })
                 continue
             for k in range(i + 1, min(i + 4, len(lines))):
-                nxt = lines[k].split("//")[0]
+                nxt = _strip_comment(lines[k])
                 if not nxt.strip():
                     continue
                 if _WAIT_RE.search(nxt) or re.search(r"\b(axi|apb)\.[A-Za-z_]+\s*<=", nxt):
@@ -83,7 +111,7 @@ def scan_clocking(path: Path) -> List[Dict[str, Any]]:
         if re.search(r"always\s*@\s*\(\s*posedge", code):
             depth = 0
             for k in range(i, min(i + 60, len(lines))):
-                nxt = lines[k].split("//")[0]
+                nxt = _strip_comment(lines[k])
                 if k > i and re.search(r"always\s*@|endmodule", nxt):
                     break
                 if re.search(r"\bbegin\b", nxt):
@@ -109,7 +137,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
 
     def _ready_raised_before(idx: int, ready_sig: str, window: int = 40) -> bool:
         for j in range(idx - 1, max(0, idx - window) - 1, -1):
-            ln = lines[j].split("//")[0]
+            ln = _strip_comment(lines[j])
             if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1'b0", ln):
                 return False
             if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1", ln):
@@ -117,7 +145,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
         return False
 
     for i, raw in enumerate(lines):
-        ln = raw.split("//")[0]
+        ln = _strip_comment(raw)
         if not ln.strip():
             continue
         # 检测「等 VALID 但未同时检查 READY」的握手风险。两种等价写法都要覆盖：
@@ -174,7 +202,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                 if "begin" in ln:
                     depth = 1
                     for k in range(i + 1, min(i + 30, len(lines))):
-                        body = lines[k].split("//")[0]
+                        body = _strip_comment(lines[k])
                         if re.search(r"\bbegin\b", body):
                             depth += 1
                         if re.search(r"\bend\b", body):
@@ -182,7 +210,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                             if depth <= 0:
                                 break
                 for j in range(k + 1, min(k + 4, len(lines))):
-                    nxt = lines[j].split("//")[0]
+                    nxt = _strip_comment(lines[j])
                     if re.search(r"@\s*\(|#\s*\d", nxt):
                         break
                     if re.search(rf"\b{ready4}\b\s*(<=|=)\s*1'b0", nxt):
@@ -201,7 +229,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
             if ready:
                 danger = False
                 for k in range(i, min(i + 6, len(lines))):
-                    nxt = lines[k].split("//")[0]
+                    nxt = _strip_comment(lines[k])
                     if k > i and re.search(r"@\s*\(|repeat\s*\(|#\s*\d", nxt):
                         break
                     if re.search(rf"\b{ready}\b\s*(<=|=)\s*1'b0", nxt):
@@ -230,7 +258,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
         if re.search(r"\bfunction\b", ln, re.IGNORECASE):
             body = []
             for k in range(i, min(i + 25, len(lines))):
-                bk = lines[k].split("//")[0].strip()
+                bk = _strip_comment(lines[k]).strip()
                 if k > i:
                     body.append(bk)
                 if re.search(r"\bendfunction\b", bk):
