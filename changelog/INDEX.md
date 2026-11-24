@@ -45,6 +45,7 @@
 ## 观测能力（波形 / 日志）
 
 - [33-contract-path-waveform.md](33-contract-path-waveform.md) — **契约路径（文档示例 1）完全没有波形支持**：`--spec-path` 走 tb_emitter 而非 protocol_tb_emitter，产出的 wrapper 一个 `$dumpfile` 都没有。修时连踩 3 个坑：兜底文件名裸输出导致契约 TB **编译不过**、编译期 `` `ifdef WAVE_DUMP `` 是没人 define 的**死宏**（静默失效）、`waveform=True` 脚本不响应 `WAVE=1` 时无声返回空。新增 `W014` 与自审计 `A13`
+- [34-blockquote-code-block.md](34-blockquote-code-block.md) — `convert()` 的 blockquote 分支不认 ```` ``` ```` 围栏，引用块内的代码被平铺成一段、整段内容丢失并泄漏 `\x00` 占位符（自检当场报）。围栏解析抽成 `_render_fence`，blockquote 递归调 `convert()`；附确认契约路径 cocotb TB 能真跑通 + cocotb 2.x 的 4 个反直觉配置点
 
 - [32-waveform-and-log-capture.md](32-waveform-and-log-capture.md) — 工具箱原先没有波形与日志持久化（只返回 4000 字符 tail）；新增 `run_sim --log-dir/--waveform/--require-waveform` 与 TB 内 `$dumpfile/$dumpvars`。修 4 个「说抓到了其实没有」的缺陷：`wave_path` 未声明编译失败、矛盾组合静默通过、**旧波形冒充本次证据**、**FST 缺 lz4 头时产出后缀 .fst 内容是 VCD 的假文件**；新增诊断码 `E024`/`E025` 与自审计 `A12`
 
