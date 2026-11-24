@@ -73,13 +73,14 @@
 - [48-generated-shell-syntax-audit.md](48-generated-shell-syntax-audit.md) — 自审计新增 **A14**：生成的 shell 脚本语法/`set -u` 运行期校验（真跑 stub 脚本抓 unbound variable）。含 runtime 检查的「假验证」陷阱教训（BIN echo 0 次 = 没跑到 run_one）
 
 
-## 输入健壮性与注入面封堵（沙箱 / shell / CLI / 依赖解析）
+## 输入健壮性与误报封堵（沙箱 / shell / CLI / 依赖解析 / lint）
 
 - [49-mutation-target-containment.md](49-mutation-target-containment.md) — `run_mutation` 变异目标无沙箱约束，绝对路径 / `..` / 指向外部的符号链接会被 `write_bytes` 改写工作目录之外的文件（`try/finally` 还原只在正常走到时生效，crash 落在 write 与 restore 之间就永久破坏外部文件）。加 `_resolve_mutation_target`：越界目标跳过不改写，合法目标照常变异并还原
 - [50-remote-work-dir-injection.md](50-remote-work-dir-injection.md) — `generate_remote_run_script` 的 `remote_work_dir` 参数被原文插进**远端执行**的脚本，却没有任何白名单（host/tag/local_script_name 都有校验）。实测 `remote_work_dir='x; touch /tmp/PWNED; #'` 让远端 bash 真的执行 touch，使三道白名单形同虚设。加 `_REMOTE_WORK_DIR_RE`（允许目录分隔符与 `~`，拒绝 shell 元字符）
 - [51-cli-atfile-structured-error.md](51-cli-atfile-structured-error.md) — CLI 的 `@file` 参数指向不存在的路径时，`read_text` 抛 `FileNotFoundError`（`OSError` 子类）而非 `ValueError`，`main()` 的 `except ValueError` 接不住，堆栈直接冒泡。`_parse_json_or_file` 加 `except OSError` 归一成 `ValueError`，与「非法 UTF-8」「JSON 语法错」同构处理
 - [52-resolve-deps-prefixed-include.md](52-resolve-deps-prefixed-include.md) — `resolve_deps` 对带路径前缀的 `` `include "inc/defs.svh"``（headers 按 basename 索引）直接 `hdrs[inc]` 查不到 -> 真实存在的 header 被误报 W101 not-found 并排除在 `all_files` 之外，`copy_sandbox` 拿这份清单就漏拷 header、沙箱 RTL 编译报 Cannot find include file。加 `_resolve_include` 按 basename 两级查找
 - [53-validator-bad-offset.md](53-validator-bad-offset.md) — 契约 spec 由用户/AI 手写，`offset` 写成非数字（`"abc"` / `4.5` / `"0xZZ"`）时 `_to_int` 里 `int(str(val), 0)` 直接抛 `ValueError` 冒泡成裸堆栈，而同一字段越界输入走的是 E005 诊断 —— 同一字段非法输入一条给诊断一条给崩溃，不一致且无定位。加 `_to_int_or_none`，解析不出按 E005（register）/ E008（illegal_addr）报可定位诊断并 `continue` 避免级联假 E004
+- [54-handshake-while-case-insensitive-ready.md](54-handshake-while-case-insensitive-ready.md) — `lint_tb` while 分支的 READY 映射用 `sig.replace("axi.", "")` 不做大小写归一（wait 分支用 `.split(".")[-1].upper()`）。实测同一份代码 `while (!axi.BVALID)` 报 R1 而 `while (!axi.bvalid)` 报 R3 假错误 —— 纯大小写差异，真实的第三方 TB 大量用小写全中。改用与 wait 分支一致的归一
 
 ## 文档交付
 

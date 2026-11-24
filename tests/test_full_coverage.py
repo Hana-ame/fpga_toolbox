@@ -668,6 +668,34 @@ def test_validator_bad_offset_no_crash() -> None:
         assert not e005, e005  # 合法 hex offset 不误报
 
 
+def test_handshake_while_case_insensitive_ready() -> None:
+    """Defect 104: while 分支的 READY 映射不做大小写归一。
+
+    _READY_OF 键为全大写，但 while 分支用 sig.replace("axi.", "") 不 .upper()，
+    而 wait() 分支用 .split(".")[-1].upper()。实测同一份代码只改 VALID 信号
+    大小写：`while (!axi.BVALID)` 在 BREADY 已拉高时报 R1（safe），而
+    `while (!axi.bvalid)` 报 R3（假错误）—— 纯大小写差异导致判定不同。
+    """
+    print("coverage: while-loop READY mapping case-insensitive (R1 for all cases)")
+    from fpga_toolbox.tb_linter import scan_handshake
+
+    def _scan(stmt: str, sig: str) -> list:
+        with tempfile.TemporaryDirectory() as td:
+            tb = Path(td) / "tb.sv"
+            tb.write_text(
+                "module tb;\ninitial begin\nBREADY = 1;\n"
+                f"{stmt.replace('SIG', sig)}\nend\nendmodule\n",
+                encoding="utf-8")
+            return [i["code"] for i in scan_handshake(tb)]
+
+    # wait() 与 while() 两个分支、UPPER/lower/裸名三种写法，全部应一致报 R1
+    for sig in ("axi.BVALID", "axi.bvalid", "BVALID", "bvalid", "axi.Bvalid"):
+        assert "R1" in _scan("wait (SIG);", sig), ("wait", sig)
+        assert "R1" in _scan("while (!SIG) @(posedge clk);", sig), ("while", sig)
+        # 绝不能因大小写差异产生假 R3 错误
+        assert "R3" not in _scan("while (!SIG) @(posedge clk);", sig), ("while-false-R3", sig)
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -684,6 +712,7 @@ def main() -> int:
     test_cli_atfile_errors_structured()
     test_resolve_deps_path_prefixed_include()
     test_validator_bad_offset_no_crash()
+    test_handshake_while_case_insensitive_ready()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
