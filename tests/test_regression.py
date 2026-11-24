@@ -1161,8 +1161,30 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
               "COCOTB_PLUSARGS = +WAVE" in mtext)
         check("Makefile names the cocotb test module",
               f"MODULE = test_{r['data']['module']}_axil" in mtext)
-        check("Makefile includes cocotb Makefile.sim",
-              "cocotb-config --makefiles)/Makefile.sim" in mtext)
+        # 缺陷 93：Makefile 必须在 cocotb 缺失时给出明确安装指引。
+        # 旧实现 include $(shell cocotb-config --makefiles) 在无 cocotb 时展开成
+        # 空串 → include /Makefile.sim → "No such file or directory" +
+        # "No rule to make target"，rc=2，用户完全不知道该 pip install cocotb。
+        # 这里在 PATH 无 cocotb-config 的环境里真跑一次 make，断言报错指向安装。
+        # 该断言不依赖 cocotb 是否真的装了（用干净 PATH 强制缺失）。
+        import os
+        import subprocess as _sp
+        _mk = mk.parent / "Makefile"
+        _no_cocotb_env = dict(os.environ)
+        _no_cocotb_env["PATH"] = "/usr/bin:/bin"  # 无 cocotb-config
+        _pr = _sp.run(["make", "SIM=verilator"], cwd=str(mk.parent),
+                      env=_no_cocotb_env, capture_output=True, text=True)
+        _pr_blob = _pr.stdout + _pr.stderr
+        check("make without cocotb gives install hint (not cryptic path error)",
+              "cocotb not found" in _pr_blob and "pip install cocotb" in _pr_blob,
+              _pr_blob[:160])
+        check("make without cocotb exits non-zero", _pr.returncode != 0,
+              str(_pr.returncode))
+
+        # 用已探测的 COCOTB_CONFIG 变量引用 cocotb 的 Makefile.sim（缺陷 93：
+        # 无 cocotb 时 $(shell cocotb-config ...) 展开成空串 → include /Makefile.sim）
+        check("Makefile includes cocotb Makefile.sim via COCOTB_CONFIG",
+              "include $(shell $(COCOTB_CONFIG) --makefiles)/Makefile.sim" in mtext)
         # RTL 已复制进 out_dir，产物自包含（cocotb 在 out_dir 里找不到外部 RTL）
         check("RTL copied into out_dir so Makefile is self-contained",
               (mk.parent / "dut.sv").is_file())

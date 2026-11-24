@@ -531,7 +531,16 @@ VERILOG_SOURCES = {module}_axil_wrap.sv {module}_axil_sva_checker.sv {module}_ax
 COMPILE_ARGS += --timescale 1ns/1ps
 # +WAVE 触发 wrapper 里的 $dumpvars（不加则 --trace 编了也拿不到波形）
 COCOTB_PLUSARGS = +WAVE
-include $(shell cocotb-config --makefiles)/Makefile.sim
+# cocotb 依赖前置检查：无 cocotb 时给出明确安装指引，而不是让
+# $(shell cocotb-config --makefiles) 展开成空串 → include /Makefile.sim
+# → "No such file or directory" + "No rule to make target"（实测 rc=2，
+# 用户完全不知道该 pip install cocotb）。cocotb-config 属 cocotb_tools。
+COCOTB_CONFIG := $(shell command -v cocotb-config 2>/dev/null)
+ifeq ($(COCOTB_CONFIG),)
+$(error cocotb not found: install it with 'pip install cocotb cocotbext-axi' (needs cocotb >= 2.0). \
+  cocotb-config must be on PATH — it ships with the cocotb package.)
+endif
+include $(shell $(COCOTB_CONFIG) --makefiles)/Makefile.sim
 """
 
 
