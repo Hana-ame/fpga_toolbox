@@ -1184,6 +1184,14 @@ def test_docs_html_markdown_sync(tmp: Path) -> None:
         check(f"{meta['out']} has no escaped tags",
               "&lt;strong&gt;" not in current and "&lt;code&gt;" not in current)
 
+        # 回归 81：blockquote 内嵌围栏代码块曾被当普通文本，整段代码丢失并
+        # 泄漏 \x00 占位符（lint_output 会抓到）。这里直测生成器的核心转换。
+        probe_md = "> 引用行\n>\n> ```makefile\n> TOPLEVEL_LANG = verilog\n> ```\n>\n> - 项目 `X`\n"
+        body, _ = mod.convert(probe_md)
+        check("blockquote preserves fenced code block",
+              "TOPLEVEL_LANG" in body and '<div class="code-block">' in body, body[:120])
+        check("blockquote emits no placeholder leak", "\x00" not in body)
+
         # 只允许一个 h1（hero），正文 h1 应被跳过
         check(f"{meta['out']} has exactly one h1", current.count("<h1") == 1,
               str(current.count("<h1")))

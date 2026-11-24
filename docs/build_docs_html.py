@@ -125,6 +125,29 @@ LANG_LABEL = {
 }
 
 
+def _render_fence(lines: list[str], start: int) -> tuple[str, int]:
+    """从 start 行（应为 ```lang 围栏）渲染代码块，返回 (html, 下一行索引)。
+
+    抽成独立函数是为了让 blockquote 内部也能复用：原先 blockquote 分支把
+    围栏当普通文本，导致代码内容整段丢失并泄漏 \\x00 占位符（实测踩坑 ——
+    文档里"引用块内嵌代码块"一出现，FEATURES.html 自检就报残留占位符）。
+    """
+    m = re.match(r"^```(\w*)\s*$", lines[start])
+    lang = m.group(1) if m else ""
+    i = start + 1
+    buf: list[str] = []
+    while i < len(lines) and not re.match(r"^```\s*$", lines[i]):
+        buf.append(lines[i])
+        i += 1
+    i += 1  # 跳过结束围栏
+    label = LANG_LABEL.get(lang, lang or "text")
+    code = "\n".join(buf)
+    return (
+        f'<div class="code-block"><div class="code-lang">{html.escape(label)}</div>'
+        f'<pre><code>{html.escape(code, quote=False)}</code></pre></div>'
+    ), i
+
+
 def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
     """返回 (body_html, toc)。toc 元素为 (层级, 锚点, 标题文本)。"""
     lines = md.splitlines()
@@ -141,19 +164,8 @@ def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
         # ---- 围栏代码块 ----
         m = re.match(r"^```(\w*)\s*$", line)
         if m:
-            lang = m.group(1)
-            i += 1
-            buf: list[str] = []
-            while i < n and not re.match(r"^```\s*$", lines[i]):
-                buf.append(lines[i])
-                i += 1
-            i += 1  # 跳过结束围栏
-            label = LANG_LABEL.get(lang, lang or "text")
-            code = "\n".join(buf)
-            out.append(
-                f'<div class="code-block"><div class="code-lang">{html.escape(label)}</div>'
-                f'<pre><code>{html.escape(code, quote=False)}</code></pre></div>'
-            )
+            block, i = _render_fence(lines, i)
+            out.append(block)
             continue
 
         # ---- 水平线 ----
@@ -203,28 +215,16 @@ def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
 
         # ---- 引用块（可能多行）----
         if re.match(r"^>\s?", line):
+            # 先抽出整段引用（剥掉行首 "> "），再递归走 convert 处理内部结构 ——
+            # 这样 blockquote 内可以安全嵌套围栏代码块、列表、嵌套引用，
+            # 而不会把 ``` 围栏当普通文本（旧实现导致代码丢失 + 占位符泄漏）。
             buf = []
             while i < n and re.match(r"^>\s?", lines[i]):
                 buf.append(re.sub(r"^>\s?", "", lines[i]))
                 i += 1
-            inner = "\n".join(buf)
-            # 引用内的列表/粗体简单处理：逐行转 <br>
-            paras = [p for p in inner.split("\n\n") if p.strip()]
-            html_parts = []
-            for p in paras:
-                if all(re.match(r"^\s*[-*]\s", x) or not x.strip() for x in p.splitlines()):
-                    # 注意：f-string 的表达式部分在 Python 3.12 之前不能含反斜杠，
-                    # 所以正则必须提到循环外/变量里，不能内联在 f"{...}" 中。
-                    items = []
-                    for x in p.splitlines():
-                        if not x.strip():
-                            continue
-                        content = re.sub(r"^\s*[-*]\s+", "", x)
-                        items.append(f"<li>{_inline(content)}</li>")
-                    html_parts.append("<ul>" + "".join(items) + "</ul>")
-                else:
-                    html_parts.append("<p>" + _inline(p.replace("\n", " ")) + "</p>")
-            out.append('<blockquote>' + "".join(html_parts) + "</blockquote>")
+            inner_md = "\n".join(buf).strip("\n")
+            inner_body, _ = convert(inner_md)
+            out.append('<blockquote>' + inner_body + '</blockquote>')
             continue
 
         # ---- 列表（含嵌套一层）----

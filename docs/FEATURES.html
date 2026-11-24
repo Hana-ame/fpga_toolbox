@@ -282,6 +282,17 @@ if not r["ok"]:
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
   --spec-path contract.yaml --out-dir /tmp/tb --rtl-file dut.sv</code></pre></div>
 <p>产出 4 个工件：<code>unit_isolation_wrapper</code> / <code>sva_protocol_checker</code> / <code>in_situ_bind_file</code> / <code>cocotb_testbench</code>。若 DUT 是双侧桥（AXI4-Lite + APB master）， 额外生成 <code>apb_slave_model</code> 并报 <code>dual_side: true</code>。</p>
+<blockquote><p><strong>跑路径 A 的 cocotb TB</strong> 需要额外依赖（<code>pip install cocotb cocotbext-axi</code>）， 且 Makefile 有 4 个反直觉的值（实测踩过，Verilator 5.054 + cocotb 2.1.0）：</p>
+<div class="code-block"><div class="code-lang">makefile</div><pre><code>TOPLEVEL_LANG = verilog     # 不是 "verilator"！否则静默跳过仿真
+SIM = verilator             # 默认 simulator 是 icarus，必须显式指定
+MODULE = test_reg_slave_axil
+TOPLEVEL = reg_slave_axil_wrap
+VERILOG_SOURCES = reg_slave_axil_wrap.sv reg_slave_axil_sva_checker.sv \
+                  reg_slave_axil_bind.sv dut.sv
+include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre></div>
+<ul><li><code>cocotb-config</code> 在 cocotb 2.x 里属于 <code>cocotb_tools</code>，不在 <code>cocotb</code>；</li><li>cocotb 要求 Verilator ≥ 5.036，系统自带 5.020 会被 <code>$(error)</code> 拦住，</li></ul>
+<p>需 <code>VERILATOR_BIN_DIR=/path/to/verilator/bin</code> 指向自建 5.040+；</p>
+<ul><li>想要波形：<code>VERILATOR_EXTRA_ARGS="--trace"</code> + 运行期 <code>+WAVE</code> plusarg。</li></ul></blockquote>
 <p><strong>路径 B：多协议直出</strong>（从 RTL 直接生成自检 SV TB）</p>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
   --rtl-file examples/multi_bus_ref/apb_slave.sv \
@@ -318,7 +329,8 @@ PASS: apb all 8 checks passed</code></pre></div>
 }</code></pre></div>
 <p><strong>三个输入源都有完整性信号</strong>——这是本工具最重要的设计：</p>
 <div class="table-wrap"><table><thead><tr><th>输入源</th><th>完整性信号</th><th>缺信号时的行为</th></tr></thead><tbody><tr><td>cocotb JSON</td><td><code>completed: true</code></td><td><code>completed=false</code> → <code>COCOTB_INCOMPLETE</code> FAIL</td></tr><tr><td>SVA 日志</td><td><code>[SVA:HBEAT]</code> 心跳</td><td>有心跳无违例 → PASS；无心跳无违例 → NO_RESULTS</td></tr><tr><td>Verilator 日志</td><td><code>PASS:</code>/<code>FAIL:</code> 汇总行计数</td><td>启动 N 套件需 ≥N 条汇总，不足 → <code>VERILATOR_NO_SUMMARY</code> FAIL</td></tr></tbody></table></div>
-<blockquote><p>为什么必须有这层：仿真日志天然容易被截断（被杀、超时、崩溃）。只统计 "我看到了什么"而不判断"我是否看完"，就会把残缺产物当成完整结论。</p><p>SVA 的特殊之处：断言通过时<strong>零输出</strong>，所以加了周期性心跳 <code>[SVA:HBEAT] rule=P_000 monitored_cycles=100 status=ACTIVE</code>， 让"全通过"与"引擎根本没跑"可区分。</p></blockquote>
+<blockquote><p>为什么必须有这层：仿真日志天然容易被截断（被杀、超时、崩溃）。只统计 "我看到了什么"而不判断"我是否看完"，就会把残缺产物当成完整结论。</p>
+<p>SVA 的特殊之处：断言通过时<strong>零输出</strong>，所以加了周期性心跳 <code>[SVA:HBEAT] rule=P_000 monitored_cycles=100 status=ACTIVE</code>， 让"全通过"与"引擎根本没跑"可区分。</p></blockquote>
 <h4 id="render_visual_report-svg-html-看板"><code>render_visual_report</code> — SVG + HTML 看板</h4>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox render_visual_report \
   --report-json /tmp/report.json --dep-graph-json /tmp/graph.json \

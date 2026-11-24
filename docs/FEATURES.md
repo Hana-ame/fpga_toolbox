@@ -239,6 +239,24 @@ python3 -m fpga_toolbox emit_testbench \
 `in_situ_bind_file` / `cocotb_testbench`。若 DUT 是双侧桥（AXI4-Lite + APB master），
 额外生成 `apb_slave_model` 并报 `dual_side: true`。
 
+> **跑路径 A 的 cocotb TB** 需要额外依赖（`pip install cocotb cocotbext-axi`），
+> 且 Makefile 有 4 个反直觉的值（实测踩过，Verilator 5.054 + cocotb 2.1.0）：
+>
+> ```makefile
+> TOPLEVEL_LANG = verilog     # 不是 "verilator"！否则静默跳过仿真
+> SIM = verilator             # 默认 simulator 是 icarus，必须显式指定
+> MODULE = test_reg_slave_axil
+> TOPLEVEL = reg_slave_axil_wrap
+> VERILOG_SOURCES = reg_slave_axil_wrap.sv reg_slave_axil_sva_checker.sv \
+>                   reg_slave_axil_bind.sv dut.sv
+> include $(shell cocotb-config --makefiles)/Makefile.sim
+> ```
+>
+> - `cocotb-config` 在 cocotb 2.x 里属于 `cocotb_tools`，不在 `cocotb`；
+> - cocotb 要求 Verilator ≥ 5.036，系统自带 5.020 会被 `$(error)` 拦住，
+>   需 `VERILATOR_BIN_DIR=/path/to/verilator/bin` 指向自建 5.040+；
+> - 想要波形：`VERILATOR_EXTRA_ARGS="--trace"` + 运行期 `+WAVE` plusarg。
+
 **路径 B：多协议直出**（从 RTL 直接生成自检 SV TB）
 
 ```bash
