@@ -110,10 +110,32 @@ def _check_layer2_adversarial_invariants() -> Tuple[bool, str]:
 
 
 def _check_layer3_static_hygiene() -> Tuple[bool, str]:
-    r_ruff = subprocess.run(["ruff", "check", "fpga_toolbox", "tests", "scripts"], cwd=ROOT, capture_output=True, text=True)
+    # ruff 可选：未安装时降级为"compileall-only"，而不是抛 FileNotFoundError
+    # 带完整堆栈崩溃（实测：裸环境无 ruff 时整个门禁崩溃，用户只看到
+    # FileNotFoundError: 'ruff'，不知道该装 ruff 还是可跳过）。
+    # compileall 仍独立验证全部语法，所以语法卫生不因 ruff 缺失而失去保障。
+    try:
+        r_ruff = subprocess.run(
+            ["ruff", "check", "fpga_toolbox", "tests", "scripts"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        r_comp = subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", "fpga_toolbox", "tests", "scripts"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        if r_comp.returncode != 0:
+            return False, f"compileall failed: {r_comp.stderr}"
+        return True, (
+            "ruff not installed — syntax verified via compileall only "
+            "(install ruff for full lint: pip install ruff)"
+        )
     if r_ruff.returncode != 0:
         return False, f"ruff failed:\n{r_ruff.stdout}\n{r_ruff.stderr}"
-    r_comp = subprocess.run([sys.executable, "-m", "compileall", "-q", "fpga_toolbox", "tests", "scripts"], cwd=ROOT, capture_output=True, text=True)
+    r_comp = subprocess.run(
+        [sys.executable, "-m", "compileall", "-q", "fpga_toolbox", "tests", "scripts"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
     if r_comp.returncode != 0:
         return False, f"compileall failed: {r_comp.stderr}"
     return True, "ruff 0 errors + compileall clean"

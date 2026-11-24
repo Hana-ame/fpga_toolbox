@@ -357,6 +357,40 @@ def test_bug_hunt_regressions() -> None:
         assert 'sv-cmt">// real cmt</span>' in ht
 
 
+def test_verify_invariants_layer3_tolerates_missing_ruff() -> None:
+    """verify_invariants Layer 3 在无 ruff 环境必须降级，而不是崩溃。
+
+    回归 91：`scripts/verify_invariants.py` 的 Layer 3 直接
+    `subprocess.run(["ruff", ...])`，无 ruff 时抛未捕获的 FileNotFoundError
+    带完整堆栈，整个门禁崩溃 —— 而本地开发者/裸 CI 常无 ruff。修复后应降级为
+    "compileall-only" 并返回 ok=True。
+    """
+    import importlib.util
+    import shutil
+
+    spec = importlib.util.spec_from_file_location(
+        "vi", Path(__file__).resolve().parents[1] / "scripts" / "verify_invariants.py"
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    fn = getattr(mod, "_check_layer3_static_hygiene", None)
+    assert fn is not None, "_check_layer3_static_hygiene missing"
+
+    # 用 PATH 里没有 ruff 的干净环境跑（把 PATH 置空再补最小集）
+    import os
+    saved = os.environ.get("PATH")
+    try:
+        os.environ["PATH"] = "/usr/bin:/bin"  # 无 ruff
+        ok, detail = fn()
+    finally:
+        if saved is not None:
+            os.environ["PATH"] = saved
+
+    assert ok is True, f"Layer 3 must pass (degrade to compileall) without ruff: {detail}"
+    assert "ruff not installed" in detail or "compileall" in detail, detail
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -366,6 +400,7 @@ def main() -> int:
     test_visual_renderer_rich_project_pages_and_highlight()
     test_all_11_protocol_classifiers_and_clean_pt_registry()
     test_bug_hunt_regressions()
+    test_verify_invariants_layer3_tolerates_missing_ruff()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
