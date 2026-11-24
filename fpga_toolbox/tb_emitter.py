@@ -495,6 +495,45 @@ def tool_validate_contract(spec_path: str, rtl_file: Optional[str] = None) -> Di
     )
 
 
+def _emit_cocotb_makefile(module: str, rtl_entries: str) -> str:
+    """生成契约路径 cocotb 测试台的 Makefile。
+
+    契约路径只产出 4 个源文件、没有运行入口；多协议路径（protocol_tb_emitter）
+    会生成可直接 `bash` 的 run_*.sh，这里补齐同等的可运行性。
+
+    cocotb 2.x 有 4 个反直觉的值（全部实测踩过，Verilator 5.054 + cocotb 2.1.0）：
+      * ``TOPLEVEL_LANG`` 必须是 ``verilog``，写成 ``verilator`` 会**静默跳过**
+        仿真并仍报 ``TESTS=1``（rc=0），极难发现；
+      * 默认 simulator 是 icarus，必须显式 ``SIM=verilator``；
+      * ``cocotb-config`` 在 cocotb 2.x 属于 ``cocotb_tools`` 包，不在 ``cocotb``；
+      * 波形要用 ``VERILATOR_TRACE=1``（不是 ``VERILATOR_EXTRA_ARGS=--trace``），
+        且 Verilator 必须 >= 5.036（系统 5.020 会被 ``$(error)`` 拦住）。
+
+    wrapper 里的 ``$dumpvars`` 由运行期 ``+WAVE`` plusarg 门控，所以这里固定传
+    ``COCOTB_PLUSARGS=+WAVE``，否则 ``--trace`` 编了也拿不到波形（又一个实测坑）。
+    注意 cocotb 2.x 里 ``PLUSARGS`` 已弃用（改用 ``COCOTB_PLUSARGS``）。
+    """
+    return f"""# 契约路径 cocotb 测试台 —— 由 fpga_toolbox emit_testbench 生成
+# 运行：make SIM=verilator
+# 波形：make SIM=verilator VERILATOR_TRACE=1   （wrapper 的 $dumpvars 由 +WAVE 触发）
+#
+# 依赖：pip install cocotb cocotbext-axi
+#       Verilator >= 5.036（系统自带 5.020 会被 cocotb $(error) 拦住；
+#       指向自建版本：make VERILATOR_BIN_DIR=/path/to/verilator/bin）
+
+TOPLEVEL_LANG = verilog
+SIM ?= verilator
+MODULE = test_{module}_axil
+TOPLEVEL = {module}_axil_wrap
+VERILOG_SOURCES = {module}_axil_wrap.sv {module}_axil_sva_checker.sv {module}_axil_bind.sv \\
+  {rtl_entries if rtl_entries else "$(error no RTL: regenerate with --rtl-file)"}
+COMPILE_ARGS += --timescale 1ns/1ps
+# +WAVE 触发 wrapper 里的 $dumpvars（不加则 --trace 编了也拿不到波形）
+COCOTB_PLUSARGS = +WAVE
+include $(shell cocotb-config --makefiles)/Makefile.sim
+"""
+
+
 def tool_emit_testbench(
     spec_path: str = "",
     out_dir: str = "",
@@ -558,6 +597,25 @@ def tool_emit_testbench(
     Path(artifacts["sva_protocol_checker"]).write_text(_emit_sva(unit), encoding="utf-8")
     Path(artifacts["in_situ_bind_file"]).write_text(_emit_bind(unit), encoding="utf-8")
     Path(artifacts["cocotb_testbench"]).write_text(_emit_cocotb(unit), encoding="utf-8")
+
+    # 契约路径只有 4 个源文件、没有运行入口。多协议路径（protocol_tb_emitter）
+    # 会生成可直接 `bash` 的 run_*.sh，而这里用户拿到产物后得自己手写 cocotb
+    # Makefile —— 且 cocotb 2.x 有 4 个反直觉的值（实测踩坑：TOPLEVEL_LANG 必须是
+    # verilog 而非 verilator 否则静默跳过、默认 simulator 是 icarus、
+    # cocotb-config 属 cocotb_tools、需 Verilator>=5.036 且用 VERILATOR_TRACE=1
+    # 才会加 --trace）。生成一个可直接 `make` 的 Makefile，缺依赖时把要装什么
+    # 说清楚。
+    mk_path = od / "Makefile"
+    # Makefile 需要真实 RTL 文件名（相对路径 → 只取文件名，并复制进 out_dir
+    # 让产物自包含；否则 cocotb 在 out_dir 里找不到 RTL）。
+    rtl_entries = ""
+    if rtl_file:
+        rtl_src = Path(rtl_file)
+        if rtl_src.is_file():
+            (od / rtl_src.name).write_text(rtl_src.read_text(encoding="utf-8"))
+            rtl_entries = rtl_src.name
+    mk_path.write_text(_emit_cocotb_makefile(mod, rtl_entries), encoding="utf-8")
+    artifacts["makefile"] = str(mk_path.resolve())
     return ok_result(
         "emit_testbench",
         {"module": mod, "dual_side": dual_apb, "output_dir": str(od.resolve()), "artifacts": artifacts},

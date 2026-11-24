@@ -1109,6 +1109,33 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
     # `$value$plusargs` 的目标变量必须声明（否则 Verilator 报未定义直接拒绝编译）
     check("contract wrapper declares wave_path variable", "string wave_path;" in src)
 
+    # —— 缺陷 80：契约路径必须有运行入口（Makefile）——
+    # 旧实现只产出 4 个源文件，用户拿到后得自己手写 cocotb Makefile，且 cocotb
+    # 2.x 有 4 个反直觉的值。实测踩坑（Verilator 5.054 + cocotb 2.1.0）：
+    #   * TOPLEVEL_LANG 写成 "verilator" 会静默跳过仿真，仍报 TESTS=1 / rc=0
+    #   * 默认 simulator 是 icarus，必须显式 SIM=verilator
+    #   * 波形要用 VERILATOR_TRACE=1（不是 VERILATOR_EXTRA_ARGS=--trace）
+    #   * PLUSARGS=+WAVE 必须显式传，否则 --trace 编了也拿不到波形
+    mk = Path(r["data"]["artifacts"]["makefile"])
+    check("contract path emits a Makefile", mk.is_file(), str(mk))
+    if mk.is_file():
+        mtext = mk.read_text(encoding="utf-8")
+        check("Makefile sets TOPLEVEL_LANG=verilog (not verilator)",
+              "TOPLEVEL_LANG = verilog" in mtext, mtext[:120])
+        check("Makefile defaults SIM to verilator", "SIM ?= verilator" in mtext)
+        check("Makefile mentions VERILATOR_TRACE for waveform",
+              "VERILATOR_TRACE" in mtext)
+        # cocotb 2.x 已弃用 PLUSARGS，正确变量是 COCOTB_PLUSARGS（实测有效）
+        check("Makefile passes +WAVE plusarg by default (COCOTB_PLUSARGS)",
+              "COCOTB_PLUSARGS = +WAVE" in mtext)
+        check("Makefile names the cocotb test module",
+              f"MODULE = test_{r['data']['module']}_axil" in mtext)
+        check("Makefile includes cocotb Makefile.sim",
+              "cocotb-config --makefiles)/Makefile.sim" in mtext)
+        # RTL 已复制进 out_dir，产物自包含（cocotb 在 out_dir 里找不到外部 RTL）
+        check("RTL copied into out_dir so Makefile is self-contained",
+              (mk.parent / "dut.sv").is_file())
+
     # —— 缺陷 C：run_sim waveform=True 但无波形 → W014 警告（ok 仍为 True）——
     # 需要真跑一次脚本，而 run_sim 在跑之前会检查 Verilator >= 5.040（E020），
     # 所以无 verilator 的环境（裸容器）必须跳过，否则把"环境缺失"当"功能失效"。
