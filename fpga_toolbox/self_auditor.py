@@ -406,11 +406,6 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
         # 之后 printf "$want_tag" 报 unbound variable、rc=1，【首次构建 100% 失败】；
         # 第二次运行 binary 已存在走 else 分支反而正常，把缺陷完全掩盖。
         # 这里对两个 shell 生成器的产物做：(1) bash -n；(2) bash -u -n（set -u 语法层）。
-        import subprocess as _sub
-
-        from .eda_campaign import generate_remote_run_script
-        from .protocol_tb_emitter import _emit_run_script
-
         # A14 在非 POSIX 环境（Windows）直接 skip：stub 脚本依赖 Unix 路径语义
         # （mkdir -p "/x/obj_apb"、"$out" 等），Windows 的 Git Bash 对这些的
         # 处理与 Linux 不同，强行跑会产生不可靠结果（实测 CI windows job 失败，
@@ -418,6 +413,10 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
         # 反静默通过原则：skip 会明确标注（skipped=True + 平台），而非产生
         # 不可靠的通过/失败。Linux 上仍完整校验。
         import platform as _platform
+        import subprocess as _sub
+
+        from .eda_campaign import generate_remote_run_script
+        from .protocol_tb_emitter import _emit_run_script
         _a14_platform_skip = _platform.system() != "Linux"
 
         def _run_bash(args: list, cwd: str = None) -> tuple[int, str, bool]:
