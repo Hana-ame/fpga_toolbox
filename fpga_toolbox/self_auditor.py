@@ -411,7 +411,7 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
         from .eda_campaign import generate_remote_run_script
         from .protocol_tb_emitter import _emit_run_script
 
-        def _run_bash(args: list, cwd: str = None) -> Tuple[int, str, bool]:
+        def _run_bash(args: list, cwd: str = None) -> tuple[int, str, bool]:
             """跑 bash，bash 不存在（Windows 常见）时返回 (0, "", True) 表示跳过。
 
             Windows runner 上 bash 可能不在 PATH（Git Bash 未装/未加 PATH）。
