@@ -1231,7 +1231,11 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
     # changelog 21）。实测 RTL 名含 $(...) 时 make 报 "No rule to make target
     # 'd+chr(116)...'" 并停止，行为不可预测。SV 源文件名实际只会是
     # [A-Za-z0-9_.-]。
-    bad_names = ["d$ut.sv", "my dut.sv", 'd"ut.sv', "d;ut.sv", "d'ut.sv"]
+    # 注意：只挑 **Windows 也允许** 的文件名（Windows 禁止 " < > | : * ? \），
+    # 否则测试自身在 Windows 上写文件就抛 OSError（实测 d"ut.sv →
+    # OSError [Errno 22] Invalid argument）。$ 空格 ; ' 在 Windows 合法，
+    # 且都是会破坏 make 语法的元字符。
+    bad_names = ["d$ut.sv", "my dut.sv", "d;ut.sv", "d'ut.sv", "d ut#1.sv"]
     for bn in bad_names:
         bn_path = tmp / "tb_badname" / bn
         bn_path.parent.mkdir(parents=True, exist_ok=True)
