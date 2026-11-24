@@ -489,6 +489,23 @@ def test_cli(tmp: Path) -> None:
               "--extracted-interfaces", f"@{ifaces}", "--out-html-path", str(out))
     check("@file.json objects", res.returncode == 0 and out.is_file(), res.stdout[-300:] + res.stderr[-300:])
 
+    # —— 缺陷 86：@file.json 非 UTF-8 → 结构化错误 + 退出码 1，不冒泡堆栈 ——
+    # 实测：用户拿到别的工具导出的 GBK/latin-1 JSON，@file 读取时
+    # UnicodeDecodeError 带完整 Python 堆栈直接冒泡，没有一句指向编码。
+    bad_json = tmp / "cli" / "bad.json"
+    bad_json.write_bytes(b'{\n  "k": "v\xe9"\n}')
+    res = run("-m", "fpga_toolbox", "render_visual_report",
+              "--report", f"@{bad_json}", "--dep-graph", f"@{deps}",
+              "--extracted-interfaces", f"@{ifaces}", "--out-html-path", str(out))
+    check("@file non-UTF-8 exits 1 (not a traceback)", res.returncode == 1,
+          f"rc={res.returncode}")
+    check("@file non-UTF-8 error points at encoding",
+          "not valid UTF-8" in res.stdout and "re-export it as UTF-8" in res.stdout,
+          res.stdout[-220:] + res.stderr[-220:])
+    check("@file non-UTF-8 error is structured (no traceback)",
+          '"error"' in res.stdout and "Traceback" not in res.stdout
+          and "UnicodeDecodeError" not in res.stdout, res.stdout[-200:])
+
     print("cli: boolean flags and failure exit code")
     sb = tmp / "cli_sb"
     res = run("-m", "fpga_toolbox", "copy_sandbox", "--project-root", str(proj),

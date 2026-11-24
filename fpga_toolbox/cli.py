@@ -19,9 +19,22 @@ from .registry import TOOL_REGISTRY, call_tool, list_tool_schemas
 
 
 def _parse_json_or_file(raw: str) -> Any:
-    """支持 `@path.json` 从文件读取 JSON，或直接解析行内 JSON 字符串。"""
+    """支持 `@path.json` 从文件读取 JSON，或直接解析行内 JSON 字符串。
+
+    `@file` 非法 UTF-8 时给出可读错误而不是堆栈冒泡：用户可能拿到别的工具
+    导出的 GBK/latin-1 JSON。这里捕获解码异常，抛 ``ValueError`` —— 与
+    ``json.JSONDecodeError``（也是 ``ValueError`` 子类）同族，调用方/CLI 的
+    既有错误路径能一致处理。
+    """
     if raw.startswith("@"):
-        return json.loads(Path(raw[1:]).read_text(encoding="utf-8"))
+        path = raw[1:]
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"@{path} is not valid UTF-8 ({exc}); re-export it as UTF-8 "
+                "before passing it via @file."
+            ) from exc
     return json.loads(raw)
 
 
@@ -134,7 +147,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     meta = TOOL_REGISTRY[ns.cmd]
-    params = _extract_params(ns, meta["inputSchema"])
+    # 参数抽取（含 @file 读取/JSON 解析）可能失败（非 UTF-8 文件、JSON 语法错）。
+    # 这里包一层，让它输出与工具信封同构的结构化错误 + 退出码 1，
+    # 而不是让 Python 堆栈直接冒泡给用户（实测 @file 非 UTF-8 会冒泡堆栈）。
+    try:
+        params = _extract_params(ns, meta["inputSchema"])
+    except ValueError as exc:
+        print(json.dumps({
+            "ok": False, "tool": ns.cmd, "data": {}, "diagnostics": [],
+            "error": f"Invalid argument: {exc}",
+        }, indent=2, ensure_ascii=False))
+        return 1
     res = call_tool(ns.cmd, params)
     print(json.dumps(res, indent=2, ensure_ascii=False))
     return 0 if res["ok"] else 1
