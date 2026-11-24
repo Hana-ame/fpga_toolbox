@@ -42,6 +42,27 @@ def _to_int(val: Any, default: int = 0) -> int:
     return val if isinstance(val, int) else int(str(val), 0)
 
 
+def _to_int_or_none(val: Any) -> Optional[int]:
+    """把用户手写 spec 里的整数字段解析成 int；解析不出返回 None 而不抛。
+
+    背景（真实踩坑）：spec 由用户/AI 手写，``offset`` 可能写成非数字字符串
+    （``"abc"``）或浮点（``4.5``）。旧实现 ``_to_int`` 里 ``int(str(val), 0)``
+    直接抛 ``ValueError`` 冒泡 —— 用户只看到一句 ``invalid literal for int()``
+    堆栈，完全没指向是哪个字段的 offset 写错了，也没落进诊断码体系。返回
+    None 让调用方按既有 E005（offset 非法）路径给出可定位的诊断。
+    """
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, int):
+        return val
+    try:
+        return int(str(val), 0)
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_bits(bits_raw: Any) -> Optional[Tuple[int, int]]:
     s = str(bits_raw).strip()
     if ":" in s:
@@ -242,7 +263,14 @@ def build_and_validate_ir(
     seen_off: Dict[int, str] = {}
     regs: List[RegisterRuleIR] = []
     for idx, r in enumerate(t_raw.get("register_rules", [])):
-        off = _to_int(r.get("offset"), -1)
+        off = _to_int_or_none(r.get("offset"))
+        if off is None:
+            # offset 写成非数字（"abc" / 4.5）——按 E005 报可定位诊断而非让
+            # int() 的 ValueError 冒泡成堆栈（缺陷 103）。用 continue 跳过对齐/
+            # 重复判定，避免多个非法 offset 都落成 -1 而级联出假 E004 重复。
+            diags.append(Diagnostic("ERROR", "E005", f"test_plan.register_rules[{idx}].offset",
+                                    f"Offset must be an integer, got {r.get('offset')!r}."))
+            continue
         acc = str(r.get("access", "RW")).upper()
         rname = str(r.get("name", f"reg_{idx}"))
         if off < 0 or off >= max_addr:
@@ -297,7 +325,13 @@ def build_and_validate_ir(
 
     ills: List[IllegalAddrRuleIR] = []
     for idx, ill in enumerate(t_raw.get("illegal_addr_rules", [])):
-        off = _to_int(ill.get("offset"), -1)
+        # 缺陷 103：非法 addr 的 offset 同样可能是非数字，用 _to_int_or_none
+        # 而非 _to_int，避免 int() ValueError 冒泡成堆栈。
+        off = _to_int_or_none(ill.get("offset"))
+        if off is None:
+            diags.append(Diagnostic("ERROR", "E008", f"test_plan.illegal_addr_rules[{idx}].offset",
+                                    f"Offset must be an integer, got {ill.get('offset')!r}."))
+            continue
         resp = str(ill.get("expected_resp", "SLVERR")).upper()
         if off in seen_off:
             diags.append(Diagnostic("ERROR", "E008", f"test_plan.illegal_addr_rules[{idx}].offset", f"Collides with '{seen_off[off]}'."))

@@ -612,6 +612,62 @@ def test_resolve_deps_path_prefixed_include() -> None:
         assert r2["data"]["header_files"] == []
 
 
+def test_validator_bad_offset_no_crash() -> None:
+    """Defect 103: 非数字 offset（"abc" / 4.5 / "0xZZ"）让 int() ValueError 冒泡。
+
+    spec 由用户/AI 手写，offset 可能写成非数字。旧实现 _to_int 里
+    int(str(val), 0) 直接抛 ValueError，用户只看到 invalid literal for int()
+    堆栈，没指向是哪个字段，也没落进诊断码体系。改用 _to_int_or_none，按既有
+    E005（register_rules）/ E008（illegal_addr_rules）给可定位诊断。
+    """
+    print("coverage: validator non-numeric offset -> E005/E008 (no crash)")
+    import yaml
+
+    from fpga_toolbox.core.validator import build_and_validate_ir, load_raw_spec
+
+    for bad in ["abc", 4.5, "0xZZ"]:
+        with tempfile.TemporaryDirectory() as td:
+            spec = {
+                "boundary": {"module_name": "m"},
+                "test_plan": {
+                    "protocol_rules": {"max_resp_cycles": 16},
+                    "register_rules": [
+                        {"rule_id": "R1", "name": "CTRL", "offset": bad,
+                         "reset_value": 0, "access": "RW"}],
+                    "illegal_addr_rules": [
+                        {"rule_id": "I1", "offset": bad,
+                         "expected_resp": "SLVERR"}],
+                },
+            }
+            spec_p = Path(td) / "s.yaml"
+            spec_p.write_text(yaml.safe_dump(spec), encoding="utf-8")
+            # 修复前这里抛 ValueError；修复后应产出诊断码而非崩溃
+            _ir, diags = build_and_validate_ir(load_raw_spec(spec_p))
+            codes = [d.code for d in diags]
+            assert "E005" in codes, (bad, codes)  # register_rules offset
+            assert "E008" in codes, (bad, codes)  # illegal_addr_rules offset
+            e005 = next(d for d in diags if d.code == "E005")
+            assert "must be an integer" in e005.message, e005.message
+
+    # 合法数字 offset（含 hex 字符串）不应报 E005/E008 offset 错
+    with tempfile.TemporaryDirectory() as td:
+        spec = {
+            "boundary": {"module_name": "m"},
+            "test_plan": {
+                "protocol_rules": {"max_resp_cycles": 16},
+                "register_rules": [
+                    {"rule_id": "R1", "name": "CTRL", "offset": "0x4",
+                     "reset_value": 0, "access": "RW"}],
+                "illegal_addr_rules": [],
+            },
+        }
+        spec_p = Path(td) / "ok.yaml"
+        spec_p.write_text(yaml.safe_dump(spec), encoding="utf-8")
+        _ir, diags = build_and_validate_ir(load_raw_spec(spec_p))
+        e005 = [d for d in diags if d.code == "E005"]
+        assert not e005, e005  # 合法 hex offset 不误报
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -627,6 +683,7 @@ def main() -> int:
     test_remote_work_dir_injection_blocked()
     test_cli_atfile_errors_structured()
     test_resolve_deps_path_prefixed_include()
+    test_validator_bad_offset_no_crash()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
