@@ -1225,6 +1225,28 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
     check("pre-existing RTL not overwritten by generated wrapper",
           b"module reg_slave(" in (tmp / "tb_coll" / "reg_slave_axil_wrap.sv").read_bytes())
 
+    # —— 缺陷 89：RTL 名为 Makefile → Makefile 模板覆盖 RTL，产物损坏 ——
+    # 实测：RTL 文件名就叫 Makefile 时，先复制 RTL 为 out_dir/Makefile，
+    # 随后 Makefile 模板写同一路径把 RTL 内容覆盖掉 —— RTL 丢失，且
+    # VERILOG_SOURCES 引用一个含模板的文件。旧冲突检测漏了 Makefile 本身。
+    mk_coll = tmp / "tb_mkcoll"
+    mk_coll.mkdir(parents=True, exist_ok=True)
+    (mk_coll / "Makefile").write_bytes((tmp / "tb" / "dut.sv").read_bytes())
+    r_mk_coll = call_tool("emit_testbench", {
+        "spec_path": str(contract), "out_dir": str(mk_coll),
+        "rtl_file": str(mk_coll / "Makefile"),
+    })
+    check("RTL named Makefile fails fast", not r_mk_coll["ok"], str(r_mk_coll.get("error")))
+    check("collision error mentions Makefile",
+          "Makefile" in str(r_mk_coll.get("error")), str(r_mk_coll.get("error"))[:120])
+    # 关键：Makefile 模板未被写出（否则覆盖 RTL）
+    check("Makefile template not written over RTL on collision",
+          not (mk_coll / "Makefile").exists() or
+          b"module reg_slave(" in (mk_coll / "Makefile").read_bytes(),
+          "Makefile template overwrote the RTL")
+    check("cocotb testbench not written on Makefile collision",
+          not (mk_coll / "test_reg_slave_axil.py").exists())
+
     # —— 缺陷 84：非 UTF-8 契约 YAML 同样会崩（用户手写 YAML 注释带本地编码）——
     raw_contract = Path(contract).read_bytes()
     nonutf_contract = tmp / "contract_nonutf8.yaml"

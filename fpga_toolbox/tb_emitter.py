@@ -601,12 +601,17 @@ def tool_emit_testbench(
     # 注意比较 artifacts **value 的文件名**，不是 key（key 是别名，比不中）。
     if rtl_file:
         _rtl_name = Path(rtl_file).name
-        _collisions = [a for a in artifacts.values() if Path(a).name == _rtl_name]
+        # 产物名 + Makefile 本身都是不能被 RTL 覆盖的。漏了 Makefile 会导致：
+        # RTL 复制为 out_dir/Makefile，随后 Makefile 模板再写同一路径把 RTL
+        # 内容覆盖掉 —— RTL 丢失且 VERILOG_SOURCES 引用一个含模板的文件
+        # （实测：--rtl-file .../Makefile 时 module dut 内容 0 命中）。
+        _reserved = [Path(a).name for a in artifacts.values()] + ["Makefile"]
+        _collisions = [n for n in _reserved if n == _rtl_name]
         if _collisions:
             return err_result(
                 "emit_testbench",
                 f"--rtl-file {_rtl_name!r} has the same name as a generated artifact "
-                f"({', '.join(Path(c).name for c in _collisions)}); copying it into "
+                f"({', '.join(_collisions)}); copying it into "
                 f"{od} would overwrite the generated wrapper. Rename the RTL file or "
                 "choose a different --out-dir.",
                 diagnostics=dd,
