@@ -73,6 +73,10 @@
 - [48-generated-shell-syntax-audit.md](48-generated-shell-syntax-audit.md) — 自审计新增 **A14**：生成的 shell 脚本语法/`set -u` 运行期校验（真跑 stub 脚本抓 unbound variable）。含 runtime 检查的「假验证」陷阱教训（BIN echo 0 次 = 没跑到 run_one）
 
 
+## 变异测试沙箱安全
+
+- [49-mutation-target-containment.md](49-mutation-target-containment.md) — `run_mutation` 变异目标无沙箱约束，绝对路径 / `..` / 指向外部的符号链接会被 `write_bytes` 改写工作目录之外的文件（`try/finally` 还原只在正常走到时生效，crash 落在 write 与 restore 之间就永久破坏外部文件）。加 `_resolve_mutation_target`：越界目标跳过不改写，合法目标照常变异并还原
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

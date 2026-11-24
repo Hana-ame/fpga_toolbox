@@ -54,8 +54,10 @@ def check_residual_mutations(workdir: Path, mutations: List[Dict[str, str]]) -> 
     """Detect whether any target file already has `new` without `old` (unrestored mutation)."""
     residuals: List[Dict[str, Any]] = []
     for m in mutations:
-        fp = workdir / m["file"]
-        if not fp.is_file():
+        # 与变异主循环同一套沙箱约束：越界目标不参与残留检查（既不该读外部文件，
+        # 也避免外部文件恰好匹配 old/new 而误报残留）。越界会在主循环里被拒。
+        fp = _resolve_mutation_target(workdir, m["file"])
+        if fp is None or not fp.is_file():
             continue
         txt = fp.read_text(encoding="utf-8", errors="replace")
         if m["old"] not in txt and m["new"] in txt:
@@ -66,6 +68,29 @@ def check_residual_mutations(workdir: Path, mutations: List[Dict[str, str]]) -> 
                 "message": f"Residual unrestored mutation detected for {m['id']} ({m['desc']}).",
             })
     return residuals
+
+
+def _resolve_mutation_target(wd: Path, file_str: str) -> Optional[Path]:
+    """把 spec 里的 ``file`` 解析成沙箱内的绝对路径；越界返回 None。
+
+    背景（真实踩坑）：mutation spec 由用户 / AI 手写，``file`` 可能写成绝对路径
+    或 ``../xxx`` 相对路径，也可能是沙箱内指向外部的符号链接。旧实现直接
+    ``wd / m["file"]`` 就 ``read_bytes`` / ``write_bytes``，于是变异测试会去
+    **改写工作目录之外的文件**——finally 的还原只在「正常走到」时才生效，任何
+    一次 crash / kill -9 / 断电落在 write 与 restore 之间，外部文件就被永久
+    破坏。这与 copy_sandbox 的「沙箱不得越界」是同一类防护：变异目标必须落在
+    workdir 之内。
+    """
+    rel = Path(file_str)
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    target = (wd / rel).resolve()
+    try:
+        target.relative_to(wd.resolve())
+    except ValueError:
+        # 沙箱内符号链接指向外部 —— 同样拒绝
+        return None
+    return target
 
 
 def tool_run_mutation(
@@ -116,8 +141,17 @@ def tool_run_mutation(
 
     results: List[Dict[str, Any]] = []
     killed = 0
+    wd_resolved = wd.resolve()
     for m in mutations:
-        fp = wd / m["file"]
+        # 越界防护：拒绝绝对路径 / ".." / 指向外部的符号链接（见 _resolve_mutation_target）
+        fp = _resolve_mutation_target(wd, m["file"])
+        if fp is None:
+            results.append({
+                "id": m["id"], "status": "ERROR",
+                "detail": (f"Refusing to mutate '{m['file']}': mutation target must be a "
+                           f"relative path inside the working directory ({wd_resolved})."),
+            })
+            continue
         if not fp.is_file():
             results.append({"id": m["id"], "status": "ERROR", "detail": f"Missing file {m['file']}"})
             continue

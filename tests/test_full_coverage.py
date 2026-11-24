@@ -432,6 +432,70 @@ def test_install_git_hook_uses_git_toplevel() -> None:
         assert "Not a git repository" in r.stderr, r.stderr[:200]
 
 
+def test_mutation_target_containment() -> None:
+    """Defect 99: run_mutation must not write to files outside the workdir.
+
+    旧实现 ``wd / m["file"]`` 不做沙箱约束，绝对路径 / ``..`` / 指向外部的符号
+    链接都会被 write_bytes 改写。finally 还原只在正常执行时生效，任何 crash
+    落在 write 与 restore 之间就永久破坏外部文件。
+    """
+    print("coverage: mutation target containment (abs / ../ / symlink escape)")
+    import os as _os
+
+    from fpga_toolbox.mutation_runner import tool_run_mutation
+
+    with tempfile.TemporaryDirectory() as td:
+        wd = Path(td)
+        (wd / "a.sv").write_text("module a; endmodule\n", encoding="utf-8")
+        outside = wd.parent / "ext_target.sv"
+        outside.write_text("EXT_ORIG\n", encoding="utf-8")
+
+        # 绝对路径越界
+        spec_abs = wd / "m_abs.yaml"
+        spec_abs.write_text(
+            f'mutations:\n  - id: M01\n    file: "{outside}"\n    old: "EXT_ORIG"\n    new: "MUT"\n',
+            encoding="utf-8")
+        r_abs = tool_run_mutation(str(wd), str(spec_abs), ["false"], min_score=0.0)
+        assert r_abs["ok"], r_abs.get("error")
+        assert any(x["status"] == "ERROR" for x in r_abs["data"]["results"]), r_abs["data"]["results"]
+        assert outside.read_text(encoding="utf-8") == "EXT_ORIG\n"
+
+        # ../ 相对路径越界
+        spec_rel = wd / "m_rel.yaml"
+        spec_rel.write_text(
+            'mutations:\n  - id: M01\n    file: "../ext_target.sv"\n    old: "EXT_ORIG"\n    new: "MUT"\n',
+            encoding="utf-8")
+        r_rel = tool_run_mutation(str(wd), str(spec_rel), ["false"], min_score=0.0)
+        assert r_rel["ok"]
+        assert any(x["status"] == "ERROR" for x in r_rel["data"]["results"])
+        assert outside.read_text(encoding="utf-8") == "EXT_ORIG\n"
+
+        # 沙箱内符号链接指向外部
+        outside2 = wd.parent / "ext_target2.sv"
+        outside2.write_text("EXT2_ORIG\n", encoding="utf-8")
+        _os.symlink(outside2, wd / "link.sv")
+        spec_link = wd / "m_link.yaml"
+        spec_link.write_text(
+            'mutations:\n  - id: M01\n    file: "link.sv"\n    old: "EXT2_ORIG"\n    new: "MUT"\n',
+            encoding="utf-8")
+        r_link = tool_run_mutation(str(wd), str(spec_link), ["false"], min_score=0.0)
+        assert r_link["ok"]
+        assert any(x["status"] == "ERROR" and "inside the working directory" in x["detail"]
+                   for x in r_link["data"]["results"]), r_link["data"]["results"]
+        assert outside2.read_text(encoding="utf-8") == "EXT2_ORIG\n"
+
+        # 合法目标仍正常变异并还原
+        spec_ok = wd / "m_ok.yaml"
+        (wd / "good.sv").write_text("assign y = 1;\n", encoding="utf-8")
+        spec_ok.write_text(
+            'mutations:\n  - id: M01\n    file: "good.sv"\n    old: "assign y = 1;"\n    new: "assign y = 0;"\n',
+            encoding="utf-8")
+        r_ok = tool_run_mutation(str(wd), str(spec_ok), ["false"], min_score=100.0)
+        assert r_ok["ok"], r_ok.get("error")
+        assert r_ok["data"]["killed"] == 1
+        assert "assign y = 1;" in (wd / "good.sv").read_text(encoding="utf-8")  # 已还原
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -443,6 +507,7 @@ def main() -> int:
     test_bug_hunt_regressions()
     test_verify_invariants_layer3_tolerates_missing_ruff()
     test_install_git_hook_uses_git_toplevel()
+    test_mutation_target_containment()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
