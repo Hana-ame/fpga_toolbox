@@ -81,6 +81,7 @@
 - [52-resolve-deps-prefixed-include.md](52-resolve-deps-prefixed-include.md) — `resolve_deps` 对带路径前缀的 `` `include "inc/defs.svh"``（headers 按 basename 索引）直接 `hdrs[inc]` 查不到 -> 真实存在的 header 被误报 W101 not-found 并排除在 `all_files` 之外，`copy_sandbox` 拿这份清单就漏拷 header、沙箱 RTL 编译报 Cannot find include file。加 `_resolve_include` 按 basename 两级查找
 - [53-validator-bad-offset.md](53-validator-bad-offset.md) — 契约 spec 由用户/AI 手写，`offset` 写成非数字（`"abc"` / `4.5` / `"0xZZ"`）时 `_to_int` 里 `int(str(val), 0)` 直接抛 `ValueError` 冒泡成裸堆栈，而同一字段越界输入走的是 E005 诊断 —— 同一字段非法输入一条给诊断一条给崩溃，不一致且无定位。加 `_to_int_or_none`，解析不出按 E005（register）/ E008（illegal_addr）报可定位诊断并 `continue` 避免级联假 E004
 - [54-handshake-while-case-insensitive-ready.md](54-handshake-while-case-insensitive-ready.md) — `lint_tb` while 分支的 READY 映射用 `sig.replace("axi.", "")` 不做大小写归一（wait 分支用 `.split(".")[-1].upper()`）。实测同一份代码 `while (!axi.BVALID)` 报 R1 而 `while (!axi.bvalid)` 报 R3 假错误 —— 纯大小写差异，真实的第三方 TB 大量用小写全中。改用与 wait 分支一致的归一
+- [55-handshake-r2-r4-case-insensitive.md](55-handshake-r2-r4-case-insensitive.md) — `lint_tb` 的 R4（等 VALID 后立刻拉低 READY）/ R2（if(VALID) 分支内拉低 READY）正则只认大写 `axi\.([A-Z_]+VALID)`，且 drop 检测 `\b{READY}\b` 大小写敏感。实测同一握手 bug `axi.BVALID` 报 R4/R2 而 `axi.bvalid` **静默漏报** —— 真实第三方 TB 大量用小写，死锁风险被 lint 说「没问题」。与缺陷 104 同根（假阴性方向）。加 `re.IGNORECASE` + `.upper()` 映射
 
 ## 文档交付
 

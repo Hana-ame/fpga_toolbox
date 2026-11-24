@@ -696,6 +696,47 @@ def test_handshake_while_case_insensitive_ready() -> None:
         assert "R3" not in _scan("while (!SIG) @(posedge clk);", sig), ("while-false-R3", sig)
 
 
+def test_handshake_r2_r4_case_insensitive() -> None:
+    """Defect 105: R2/R4 规则正则只认大写，小写 TB 静默漏报。
+
+    R4（等 VALID 后立刻拉低 READY）与 R2（if(VALID) 分支内拉低 READY）用
+    axi\.([A-Z_]+VALID) 且 \b{READY}\b 大小写敏感 —— 真实第三方 TB 大量用小写
+    （axi.bvalid / bready），这些握手 bug 被静默漏报。与缺陷 104（R1/R3）同根。
+    """
+    print("coverage: R2/R4 rules case-insensitive (lowercase TB no longer missed)")
+    from fpga_toolbox.tb_linter import scan_handshake
+
+    def _scan(src: str) -> list:
+        with tempfile.TemporaryDirectory() as td:
+            tb = Path(td) / "tb.sv"
+            tb.write_text(src, encoding="utf-8")
+            return [i["code"] for i in scan_handshake(tb)]
+
+    # R4：等 VALID 后立刻拉低 READY —— upper 与 lower 必须都报 R4
+    r4_upper = _scan("module tb;\ninitial begin\n"
+                     "while (!axi.BVALID) @(posedge clk);\n"
+                     "axi.BREADY <= 1'b0;\nend\nendmodule\n")
+    r4_lower = _scan("module tb;\ninitial begin\n"
+                     "while (!axi.bvalid) @(posedge clk);\n"
+                     "axi.bready <= 1'b0;\nend\nendmodule\n")
+    assert "R4" in r4_upper, r4_upper
+    assert "R4" in r4_lower, r4_lower  # 修复前漏报
+
+    # R2：if(VALID) 分支内立刻拉低 READY —— upper 与 lower 必须都报 R2
+    r2_upper = _scan("module tb;\nalways @(posedge clk) begin\n"
+                     "if (axi.BVALID) begin\naxi.BREADY <= 1'b0;\nend\nend\nendmodule\n")
+    r2_lower = _scan("module tb;\nalways @(posedge clk) begin\n"
+                     "if (axi.bvalid) begin\naxi.bready <= 1'b0;\nend\nend\nendmodule\n")
+    assert "R2" in r2_upper, r2_upper
+    assert "R2" in r2_lower, r2_lower  # 修复前漏报
+
+    # 不误伤：子串 valid/already、非 axi. 前缀不应触发 R2/R4
+    fp = _scan("module tb;\ninitial begin\n"
+               "x = invalid; y = already; while(!axi.bvalid) @(posedge clk);\n"
+               "end\nendmodule\n")
+    assert "R2" not in fp and "R4" not in fp, fp
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -713,6 +754,7 @@ def main() -> int:
     test_resolve_deps_path_prefixed_include()
     test_validator_bad_offset_no_crash()
     test_handshake_while_case_insensitive_ready()
+    test_handshake_r2_r4_case_insensitive()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

@@ -198,10 +198,13 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                     "message": f"while loop waits only on {sig} without checking READY.",
                     "context": raw.strip(),
                 })
-        m4 = re.search(r"while\s*\(\s*!\s*(?:\()?\s*axi\.([A-Z_]+VALID)", ln)
+        # R4：等 VALID 后立刻拉低 READY。大小写不敏感（与 R1/R3 分支一致，缺陷 104）：
+        # 真实第三方 TB 大量用小写（axi.bvalid / bready），旧正则 [A-Z_]+ 只认大写，
+        # 小写 TB 静默漏报 R4。
+        m4 = re.search(r"while\s*\(\s*!\s*(?:\()?\s*axi\.([A-Za-z_]+VALID)", ln, re.IGNORECASE)
         if m4:
             sig4 = m4.group(1)
-            ready4 = _READY_OF.get(sig4)
+            ready4 = _READY_OF.get(sig4.upper())
             if ready4:
                 k = i
                 if "begin" in ln:
@@ -218,7 +221,9 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                     nxt = _strip_comment(lines[j])
                     if re.search(r"@\s*\(|#\s*\d", nxt):
                         break
-                    if re.search(rf"\b{ready4}\b\s*(<=|=)\s*1'b0", nxt):
+                    # 源码里 READY 可能是小写（bready），而 ready4 是规范大写 BREADY
+                    # —— 加 re.IGNORECASE 才能匹配到小写拉低。
+                    if re.search(rf"\b{ready4}\b\s*(<=|=)\s*1'b0", nxt, re.IGNORECASE):
                         issues.append({
                             "severity": "ERROR",
                             "code": "R4",
@@ -227,17 +232,19 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                             "context": raw.strip(),
                         })
                         break
-        mif = re.search(r"if\s*\(\s*axi\.([A-Z_]+VALID)\s*\)", ln)
+        # R2：if(VALID) 分支内立刻拉低 READY。大小写不敏感（与 R1/R3/R4 一致，
+        # 缺陷 104 同根）：真实第三方 TB 大量用小写，旧正则只认大写，静默漏报 R2。
+        mif = re.search(r"if\s*\(\s*axi\.([A-Za-z_]+VALID)\s*\)", ln, re.IGNORECASE)
         if mif:
             sig = mif.group(1)
-            ready = _READY_OF.get(sig)
+            ready = _READY_OF.get(sig.upper())
             if ready:
                 danger = False
                 for k in range(i, min(i + 6, len(lines))):
                     nxt = _strip_comment(lines[k])
                     if k > i and re.search(r"@\s*\(|repeat\s*\(|#\s*\d", nxt):
                         break
-                    if re.search(rf"\b{ready}\b\s*(<=|=)\s*1'b0", nxt):
+                    if re.search(rf"\b{ready}\b\s*(<=|=)\s*1'b0", nxt, re.IGNORECASE):
                         danger = True
                         break
                 if danger:
