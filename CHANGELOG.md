@@ -2,6 +2,11 @@
 
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
+> **完整变更清单见 [`changelog/INDEX.md`](changelog/INDEX.md)** —— 本文件只保留早期（v0.4→v0.5 合并期）的精选摘要。
+> 后续迭代（changelog 20–48：eda_campaign 三轮审计、集成层修复、跨工具/输入/输出侧一致性、
+> 波形与日志、文档 HTML 派生、契约路径 Makefile 运行入口、文件名注入面、门禁健壮性等）
+> 按主题归档在 [`changelog/`](changelog/INDEX.md)，每条含「现象 / 根因 / 修复 / 验证」四要素。
+
 ## [Unreleased] — `.*` 通配改显式连接
 
 ### Fixed

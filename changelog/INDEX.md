@@ -44,10 +44,34 @@
 
 ## 观测能力（波形 / 日志）
 
+- [32-waveform-and-log-capture.md](32-waveform-and-log-capture.md) — 工具箱原先没有波形与日志持久化（只返回 4000 字符 tail）；新增 `run_sim --log-dir/--waveform/--require-waveform` 与 TB 内 `$dumpfile/$dumpvars`。修 4 个「说抓到了其实没有」的缺陷：`wave_path` 未声明编译失败、矛盾组合静默通过、**旧波形冒充本次证据**、**FST 缺 lz4 头时产出后缀 .fst 内容是 VCD 的假文件**；新增诊断码 `E024`/`E025` 与自审计 `A12`
 - [33-contract-path-waveform.md](33-contract-path-waveform.md) — **契约路径（文档示例 1）完全没有波形支持**：`--spec-path` 走 tb_emitter 而非 protocol_tb_emitter，产出的 wrapper 一个 `$dumpfile` 都没有。修时连踩 3 个坑：兜底文件名裸输出导致契约 TB **编译不过**、编译期 `` `ifdef WAVE_DUMP `` 是没人 define 的**死宏**（静默失效）、`waveform=True` 脚本不响应 `WAVE=1` 时无声返回空。新增 `W014` 与自审计 `A13`
 - [34-blockquote-code-block.md](34-blockquote-code-block.md) — `convert()` 的 blockquote 分支不认 ```` ``` ```` 围栏，引用块内的代码被平铺成一段、整段内容丢失并泄漏 `\x00` 占位符（自检当场报）。围栏解析抽成 `_render_fence`，blockquote 递归调 `convert()`；附确认契约路径 cocotb TB 能真跑通 + cocotb 2.x 的 4 个反直觉配置点
 
-- [32-waveform-and-log-capture.md](32-waveform-and-log-capture.md) — 工具箱原先没有波形与日志持久化（只返回 4000 字符 tail）；新增 `run_sim --log-dir/--waveform/--require-waveform` 与 TB 内 `$dumpfile/$dumpvars`。修 4 个「说抓到了其实没有」的缺陷：`wave_path` 未声明编译失败、矛盾组合静默通过、**旧波形冒充本次证据**、**FST 缺 lz4 头时产出后缀 .fst 内容是 VCD 的假文件**；新增诊断码 `E024`/`E025` 与自审计 `A12`
+## 契约路径 Makefile 与运行入口
+
+- [35-contract-path-makefile.md](35-contract-path-makefile.md) — 契约路径 cocotb TB **没有运行入口**（只产 4 个源文件，多协议路径却有 run_*.sh）。实测踩坑 cocotb 2.x 的 4 个反直觉配置：`TOPLEVEL_LANG=verilog`（写成 verilator 会**静默跳过**仍报 TESTS=1）、默认 simulator=icarus、`cocotb-config` 属 cocotb_tools、波形须 `VERILATOR_TRACE=1`。生成可直接 `make` 的 Makefile
+- [40-run-sim-makefile.md](40-run-sim-makefile.md) — `run_sim` 把契约路径的 Makefile 当 shell 脚本执行（code 127）。加 Makefile 类型检测，返回可操作指引（用 `make -C ...`、波形加 `VERILATOR_TRACE=1`）
+- [44-makefile-cocotb-missing.md](44-makefile-cocotb-missing.md) — 契约路径 Makefile **无 cocotb 时报晦涩的路径错误**（`$(shell cocotb-config ...)` 展开成空串 → `include /Makefile.sim`）。加 cocotb 前置检查报明确安装指引
+- [45-contract-makefile-incdir.md](45-contract-makefile-incdir.md) — 契约路径 Makefile **不支持 RTL 的 `include 依赖**（make_project 生成的 RTL 首行就是 `include "defs.svh"`）。复制 inc 目录 + Makefile 加条件 `-I$(INCDIR)`
+
+## 文件名与命令注入面
+
+- [39-makefile-name-collision.md](39-makefile-name-collision.md) — RTL 与生成产物**同名时覆盖 wrapper、产物销毁**（`--rtl-file .../reg_slave_axil_wrap.sv`）。修两层：加冲突检测 + 把检测提到写产物之前（旧实现只拦 RTL 复制，拦不住产物已写入）
+- [41-makefile-name-collision-rtl.md](41-makefile-name-collision-rtl.md) — RTL 文件名就叫 **`Makefile`**：模板覆盖 RTL，产物损坏（`grep "module dut"` 0 命中）。冲突检测的 `_reserved` 列表漏了 Makefile 本身，补上
+- [42-rtl-filename-makefile-injection.md](42-rtl-filename-makefile-injection.md) — `--rtl-file` 文件名含 make 元字符（`$`/空格/引号/分号）**损坏 Makefile 语法 / 命令注入面**（与 eda_campaign 的 SSH/SCP 注入同类）。加文件名白名单 `^[A-Za-z0-9_.-]+$`
+
+## 文档与门禁健壮性
+
+- [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
+- [36-non-utf8-rtl.md](36-non-utf8-rtl.md) — **非 UTF-8 RTL 报误导性诊断**：latin-1 注释让 `read_text(utf-8)` 抛 UnicodeDecodeError → 整份 RTL 变空 → 误报 **19 个 E011 端口缺失**（真错因是编码）。新增 `_read_rtl` 容错解码
+- [37-mutation-non-utf8-rtl.md](37-mutation-non-utf8-rtl.md) — **变异测试的非 UTF-8 RTL：崩溃 + try/finally 永久破坏风险**。`errors="replace"` 会让 finally 把含 U+FFFD 的文本写回（实测 2 个 0xe9 全丢）—— 变异测试测完把被测 RTL 改坏。改按字节读写
+- [38-cli-atfile-non-utf8.md](38-cli-atfile-non-utf8.md) — CLI `@file.json` 非 UTF-8：未捕获 `UnicodeDecodeError` 带完整堆栈直接冒泡给用户。捕获转 `ValueError` + `main()` 输出结构化错误
+- [43-git-hook-repo-root.md](43-git-hook-repo-root.md) — `install_git_hook.sh` 从非 scripts/ 目录运行时**误报 Not a git repository**（REPO_ROOT 依赖脚本自身位置）。改用 `git rev-parse --show-toplevel`
+- [46-tb-linter-comment-strip-hardening.md](46-tb-linter-comment-strip-hardening.md) — tb_linter 9 处朴素 `split("//")[0]` 加固为 `_strip_comment`（跳过字符串内 `//`）。**诚实标注**：2590 行真实 SV 验证行为等价 0 差异，未证实造成实际错误判定，故非缺陷修复
+- [47-boolean-string-coercion.md](47-boolean-string-coercion.md) — **boolean 参数不接受字符串**（`waveform="true"` 被 Invalid type 拒，而 `timeout_sec="300"` 接受）。加字符串兼容（只接受明确布尔字面量，**绝不静默转 False**）
+- [48-generated-shell-syntax-audit.md](48-generated-shell-syntax-audit.md) — 自审计新增 **A14**：生成的 shell 脚本语法/`set -u` 运行期校验（真跑 stub 脚本抓 unbound variable）。含 runtime 检查的「假验证」陷阱教训（BIN echo 0 次 = 没跑到 run_one）
+
 
 ## 文档交付
 
