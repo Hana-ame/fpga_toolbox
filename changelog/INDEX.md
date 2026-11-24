@@ -79,6 +79,7 @@
 - [50-remote-work-dir-injection.md](50-remote-work-dir-injection.md) — `generate_remote_run_script` 的 `remote_work_dir` 参数被原文插进**远端执行**的脚本，却没有任何白名单（host/tag/local_script_name 都有校验）。实测 `remote_work_dir='x; touch /tmp/PWNED; #'` 让远端 bash 真的执行 touch，使三道白名单形同虚设。加 `_REMOTE_WORK_DIR_RE`（允许目录分隔符与 `~`，拒绝 shell 元字符）
 - [51-cli-atfile-structured-error.md](51-cli-atfile-structured-error.md) — CLI 的 `@file` 参数指向不存在的路径时，`read_text` 抛 `FileNotFoundError`（`OSError` 子类）而非 `ValueError`，`main()` 的 `except ValueError` 接不住，堆栈直接冒泡。`_parse_json_or_file` 加 `except OSError` 归一成 `ValueError`，与「非法 UTF-8」「JSON 语法错」同构处理
 - [52-resolve-deps-prefixed-include.md](52-resolve-deps-prefixed-include.md) — `resolve_deps` 对带路径前缀的 `` `include "inc/defs.svh"``（headers 按 basename 索引）直接 `hdrs[inc]` 查不到 -> 真实存在的 header 被误报 W101 not-found 并排除在 `all_files` 之外，`copy_sandbox` 拿这份清单就漏拷 header、沙箱 RTL 编译报 Cannot find include file。加 `_resolve_include` 按 basename 两级查找
+- [53-validator-bad-offset.md](53-validator-bad-offset.md) — 契约 spec 由用户/AI 手写，`offset` 写成非数字（`"abc"` / `4.5` / `"0xZZ"`）时 `_to_int` 里 `int(str(val), 0)` 直接抛 `ValueError` 冒泡成裸堆栈，而同一字段越界输入走的是 E005 诊断 —— 同一字段非法输入一条给诊断一条给崩溃，不一致且无定位。加 `_to_int_or_none`，解析不出按 E005（register）/ E008（illegal_addr）报可定位诊断并 `continue` 避免级联假 E004
 
 ## 文档交付
 
