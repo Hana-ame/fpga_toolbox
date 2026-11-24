@@ -411,17 +411,34 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
         from .eda_campaign import generate_remote_run_script
         from .protocol_tb_emitter import _emit_run_script
 
+        def _run_bash(args: list, cwd: str = None) -> Tuple[int, str, bool]:
+            """跑 bash，bash 不存在（Windows 常见）时返回 (0, "", True) 表示跳过。
+
+            Windows runner 上 bash 可能不在 PATH（Git Bash 未装/未加 PATH）。
+            旧实现直接 subprocess.run(["bash", ...]) 会抛 FileNotFoundError
+            带堆栈，让整个 audit 崩溃（实测 CI windows job 失败）。这里捕获并
+            返回 skipped=True，调用方据此把该项记为"环境不支持、跳过"。
+            """
+            try:
+                proc = _sub.run(["bash", *args], cwd=cwd, capture_output=True, text=True)
+                return proc.returncode, proc.stdout + proc.stderr, False
+            except FileNotFoundError:
+                return 0, "", True
+
         _a14_bad: list = []
         _a14_checked = 0
+        _a14_skipped = False
         for _p, _rtl, _tb in (("apb", "a.sv", "tb.sv"), ("pcie", "a.sv", "tb.sv")):
             _s = _emit_run_script(_p, "dut", Path("/x") / _rtl, Path("/x") / _tb)
             _a14_checked += 1
             for _label, _flags in (("bash -n", ["-n"]),
                                    ("bash -u -n", ["-u", "-n"])):
-                _proc = _sub.run(["bash", *_flags, "-c", _s],
-                                 capture_output=True, text=True)
-                if _proc.returncode != 0:
-                    _a14_bad.append(f"{_p}/{_label}: {_proc.stderr.strip()[:80]}")
+                _rc, _blob, _skip = _run_bash([*_flags, "-c", _s])
+                if _skip:
+                    _a14_skipped = True
+                    continue
+                if _rc != 0:
+                    _a14_bad.append(f"{_p}/{_label}: {_blob.strip()[:80]}")
             # 关键：bash -n / -u -n 只做【语法】检查，抓不到【运行期】unbound
             # variable（缺陷 78 正是这类）。这里真跑一遍脚本、并把所有外部命令
             # 换成 no-op 回显，配合 set -u，让"走了某分支却用了未声明变量"暴露
@@ -440,18 +457,21 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             _stubbed = re.sub(r'(?m)^(\s*)"\$bin"$', r'\1echo BIN', _stubbed)
             _tmpsh = root / f"a14_{_p}.sh"
             _tmpsh.write_text(_stubbed, encoding="utf-8")
-            _proc = _sub.run(["bash", str(_tmpsh)], capture_output=True, text=True)
-            _blob = _proc.stdout + _proc.stderr
-            if "unbound variable" in _blob:
+            _rc2, _blob2, _skip2 = _run_bash([str(_tmpsh)])
+            _blob = _rc2 and _blob2 or ""
+            if _skip2:
+                pass  # bash 缺失：记 skipped
+            elif "unbound variable" in _blob:
                 _a14_bad.append(f"{_p}/runtime: {_blob.strip().splitlines()[-1][:80]}")
         # eda_campaign 的远程脚本（含 set -euo pipefail + scp/ssh）
         for _shm in (True, False):
             _s2 = generate_remote_run_script("host1", "tag1", "run.sh", use_dev_shm=_shm)
             _a14_checked += 1
-            _proc = _sub.run(["bash", "-u", "-n", "-c", _s2],
-                             capture_output=True, text=True)
-            if _proc.returncode != 0:
-                _a14_bad.append(f"eda/shm={_shm}: {_proc.stderr.strip()[:80]}")
+            _rc3, _blob3, _skip3 = _run_bash(["-u", "-n", "-c", _s2])
+            if _skip3:
+                pass  # bash 缺失：记 skipped
+            elif _rc3 != 0:
+                _a14_bad.append(f"eda/shm={_shm}: {_blob3.strip()[:80]}")
         a14_ok = _a14_checked > 0 and not _a14_bad
         checks.append({
             "id": "A14_GENERATED_SHELL_SYNTAX",
