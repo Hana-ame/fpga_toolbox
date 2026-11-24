@@ -255,16 +255,23 @@ def parse_dc_pt_qor(report_text: str, raw_log_text: str = "") -> Dict[str, Any]:
     noncomb_area = _first_float(_QOR_NONCOMB_RE, report_text)
     total_area = round(comb_area + noncomb_area, 6) if (comb_area is not None and noncomb_area is not None) else None
 
+    all_slacks = [v for v in (_to_float(x) for x in _QOR_SLACK_RE.findall(report_text)) if v is not None]
+    all_tns = [v for v in (_to_float(x) for x in _QOR_TNS_RE.findall(report_text)) if v is not None]
+    all_viols = [v for v in (_to_int(x) for x in _QOR_VIOL_RE.findall(report_text)) if v is not None]
+    worst_wns = min(all_slacks) if all_slacks else None
+    total_tns = round(sum(all_tns), 6) if all_tns else None
+    total_viols = sum(all_viols) if all_viols else None
+
     data = {
-        "wns": _first_float(_QOR_SLACK_RE, report_text),
-        "tns": _first_float(_QOR_TNS_RE, report_text),
-        "violating_paths": _first_int(_QOR_VIOL_RE, report_text),
+        "wns": worst_wns,
+        "tns": total_tns,
+        "violating_paths": total_viols,
         "leaf_cell_count": _first_int(_QOR_LEAF_RE, report_text),
         "combinational_area": comb_area,
         "noncombinational_area": noncomb_area,
         "total_cell_area": total_area,
         "async_default": async_sec,
-        "timing_clean": (_first_float(_QOR_SLACK_RE, report_text) is not None and _first_float(_QOR_SLACK_RE, report_text) >= 0.0 and _first_int(_QOR_VIOL_RE, report_text) == 0),
+        "timing_clean": (worst_wns is not None and worst_wns >= 0.0 and total_viols == 0),
     }
     if diags:
         return err_result(
@@ -347,7 +354,7 @@ def clean_netlist_for_pt(
         # 用 `(?<![\w.$])` 保证只在标识符边界起匹配，不误伤 `my_RDBUS_x` 之类。
         rf"(?<![\w.$])(?:{bb_alt})\b"
         rf"(?:\s*#\s*\(\s*{_nested}\s*\))?"
-        rf"\s+[A-Za-z0-9_\$]+\s*\(\s*({_nested}\s*)\)\s*;",
+        rf"\s+(?:\\\S+|[A-Za-z0-9_\$]+)\s*\(\s*({_nested}\s*)\)\s*;",
         re.M | re.S,
     )
     port_re = re.compile(r"\.([A-Za-z0-9_]+)\s*\((" + _nested + r")\)")

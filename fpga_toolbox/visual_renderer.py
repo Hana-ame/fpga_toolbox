@@ -87,8 +87,23 @@ def _highlight_sv(code: str) -> str:
     out_lines: List[str] = []
     for lineno, raw in enumerate(code.splitlines(), 1):
         # Split line comment first so keywords inside comments stay green
-        if "//" in raw:
-            code_part, cmt_part = raw.split("//", 1)
+        cmt_idx = -1
+        in_str = False
+        esc_ch = False
+        for i, ch in enumerate(raw):
+            if esc_ch:
+                esc_ch = False
+                continue
+            if ch == "\\" and in_str:
+                esc_ch = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str and ch == "/" and i + 1 < len(raw) and raw[i + 1] == "/":
+                cmt_idx = i
+                break
+        if cmt_idx >= 0:
+            code_part, cmt_part = raw[:cmt_idx], raw[cmt_idx + 2:]
             cmt_html = f'<span class="sv-cmt">//{html.escape(cmt_part)}</span>'
         else:
             code_part, cmt_html = raw, ""

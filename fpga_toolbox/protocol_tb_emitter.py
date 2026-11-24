@@ -962,6 +962,12 @@ def emit_protocol_testbench(
     else:
         return err_result("emit_testbench", f"Unsupported protocol: {proto}")
 
+    # Honor detected reset polarity: active-high resets assert 1 then release 0
+    rst_active_low = bool((m.get("reset") or {}).get("active_low", True))
+    if not rst_active_low:
+        tb_src = tb_src.replace(f", {rst} = 0", f", {rst} = 1", 1)
+        tb_src = tb_src.replace(f"    {rst} = 1;", f"    {rst} = 0;", 1)
+
     # 给生成的 TB 插入 PINMISSING lint_off：DUT 常有 TB 不关心的额外端口
     # （调试/测试/scan 模式），`.*` 通配覆盖不到，Verilator 会报 PINMISSING
     # 并以 "Exiting due to N warning(s)" 阻断构建，而工具已报 ok=True。

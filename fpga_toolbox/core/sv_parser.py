@@ -191,8 +191,8 @@ class SVModuleParser:
             groups.append(cur)
         return groups
 
-    def _parse_params(self, toks: List[SVToken]) -> Dict[str, int]:
-        params: Dict[str, int] = {}
+    def _parse_params(self, toks: List[SVToken], seed: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+        params: Dict[str, int] = dict(seed) if seed else {}
         for item in self._split_top(toks):
             eq = next((i for i, t in enumerate(item) if t.value == "="), None)
             if eq and eq > 0:
@@ -301,7 +301,7 @@ class SVModuleParser:
                 while self.i < self.n and self._peek().value != ";":
                     stmt.append(self._adv())
                 self._match(";")
-                params.update(self._parse_params(stmt))
+                params.update(self._parse_params(stmt, seed=params))
             elif val in self._DIRS:
                 direction = self._adv().value
                 stmt = []
