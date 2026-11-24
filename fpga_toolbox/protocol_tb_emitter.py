@@ -775,6 +775,19 @@ run_one() {{
   local top="$1"; shift
   local out="$HERE/obj_$name"
   local bin="$out/V$top"
+  # 波形开关变化必须重建：带 --trace / --trace-fst 与不带是三套二进制。
+  # 复用旧 binary 会造成两种假成功：
+  #   * 加了 WAVE=1 却没有波形（旧 binary 无 trace）
+  #   * WAVE_FORMAT=fst 却产出 VCD 内容（旧 binary 是 --trace 编的）
+  # 所以标记文件里记下**格式**，不只是"开没开"。
+  #
+  # want_tag 必须在 if/else **之外**声明：若放在某一支里，另一支根本不执行
+  # 声明，而脚本用 `set -u`，之后 `printf '%s' "$want_tag"` 报
+  # `unbound variable` 并以 rc=1 失败。实测踩坑：全新目录**首次**构建
+  # （走 then 分支，binary 不存在）100% 失败；第二次运行 binary 已存在、
+  # 走 else 分支反而正常 —— 这个反差把缺陷完全掩盖住了。
+  local want_tag="off"
+  if [ "$WAVE" = "1" ]; then want_tag="$WAVE_FORMAT"; fi
   local need_build=0
   if [ ! -x "$bin" ]; then
     need_build=1
@@ -784,13 +797,6 @@ run_one() {{
         need_build=1
       fi
     done
-    # 波形开关变化必须重建：带 --trace / --trace-fst 与不带是三套二进制。
-    # 复用旧 binary 会造成两种假成功：
-    #   * 加了 WAVE=1 却没有波形（旧 binary 无 trace）
-    #   * WAVE_FORMAT=fst 却产出 VCD 内容（旧 binary 是 --trace 编的）
-    # 所以标记文件里记下**格式**，不只是"开没开"。
-    local want_tag="off"
-    if [ "$WAVE" = "1" ]; then want_tag="$WAVE_FORMAT"; fi
     local have_tag=""
     if [ -f "$out/.wave_mode" ]; then have_tag="$(cat "$out/.wave_mode" 2>/dev/null || true)"; fi
     if [ "$want_tag" != "$have_tag" ]; then

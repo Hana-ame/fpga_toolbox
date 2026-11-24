@@ -956,6 +956,37 @@ def test_waveform_dump_injected_into_tb(tmp: Path) -> None:
     # 否则从 vcd 切到 fst 时会复用 VCD 二进制，产出后缀 .fst、内容是 VCD 的假文件。
     check("sim script records wave mode (format, not just on/off)",
           ".wave_mode" in sim and "want_tag" in sim, sim[:200])
+    # 回归 78：`local want_tag` 曾写在 `if/else` 的 else 分支里，而脚本用
+    # `set -u`。全新目录**首次**构建走 then 分支（binary 不存在）时
+    # want_tag 从未定义，之后 `printf '%s' "$want_tag"` 报 unbound variable、
+    # rc=1 —— 首次构建 100% 失败。第二次运行 binary 已存在、走 else 分支
+    # 反而正常，把缺陷完全掩盖。
+    # 用 bash 语法树（nameref 检查）+ 静态定位来锁死：want_tag 的声明必须
+    # 出现在 run_one 函数体内、且不在 if/then 或 if/else 的分支里。
+    m = re.search(r"^run_one\(\)\s*\{(.*?)^\}", sim, re.M | re.S)
+    check("run_one function block found", bool(m), "run_one not matched")
+    if m:
+        body = m.group(1)
+        lines = body.splitlines()
+        # 找到 declare 行（含 `local want_tag`）与它所在的 if/then/else 深度
+        dec_idx = next((i for i, ln in enumerate(lines)
+                        if re.search(r"^\s*local\s+want_tag=", ln)), None)
+        check("want_tag declared inside run_one", dec_idx is not None)
+        if dec_idx is not None:
+            # 统计声明行之前未闭合的 if 数量：>0 说明声明在某个 if 的分支内
+            depth = 0
+            for ln in lines[:dec_idx]:
+                s = ln.strip()
+                if re.match(r"^if\b", s):
+                    depth += 1
+                elif s == "fi" or s.startswith("fi;"):
+                    depth -= 1
+            check("want_tag declared at run_one top scope (not inside if/else)",
+                  depth == 0, f"depth={depth}")
+            # 声明之后同一函数体内必须用到 want_tag
+            used = any("want_tag" in ln and not re.match(r"^\s*local\s+want_tag=", ln.strip())
+                       for ln in lines[dec_idx + 1:])
+            check("want_tag actually used after declaration", used)
 
 
 def test_docs_html_markdown_sync(tmp: Path) -> None:
