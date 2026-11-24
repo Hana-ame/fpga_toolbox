@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -601,6 +602,19 @@ def tool_emit_testbench(
     # 注意比较 artifacts **value 的文件名**，不是 key（key 是别名，比不中）。
     if rtl_file:
         _rtl_name = Path(rtl_file).name
+        # RTL 文件名会被写进 Makefile 的 VERILOG_SOURCES。若含 make 元字符
+        # （$、空格、引号、; 等），会破坏 Makefile 语法甚至命令注入 —— 与
+        # eda_campaign 的 SSH/SCP 参数注入同类（changelog 21，那里用白名单）。
+        # 实测：RTL 名含 $(...) 时 make 报 "No rule to make target 'd+chr(116)...'"
+        # 并停止，行为不可预测。SV 源文件名实际只会是 [A-Za-z0-9_.-]。
+        if not re.match(r"^[A-Za-z0-9_.\-]+$", _rtl_name):
+            return err_result(
+                "emit_testbench",
+                f"--rtl-file {_rtl_name!r}: filename contains characters that would "
+                "corrupt the generated Makefile (make metacharacters like $, spaces, "
+                "quotes, semicolons). Allowed: [A-Za-z0-9_.-]. Rename the RTL file.",
+                diagnostics=dd,
+            )
         # 产物名 + Makefile 本身都是不能被 RTL 覆盖的。漏了 Makefile 会导致：
         # RTL 复制为 out_dir/Makefile，随后 Makefile 模板再写同一路径把 RTL
         # 内容覆盖掉 —— RTL 丢失且 VERILOG_SOURCES 引用一个含模板的文件

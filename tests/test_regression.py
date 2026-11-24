@@ -1225,6 +1225,33 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
     check("pre-existing RTL not overwritten by generated wrapper",
           b"module reg_slave(" in (tmp / "tb_coll" / "reg_slave_axil_wrap.sv").read_bytes())
 
+    # —— 缺陷 90：RTL 文件名含 make 元字符 → 损坏 Makefile 语法/命令注入 ——
+    # RTL 名被写进 Makefile 的 VERILOG_SOURCES。含 $、空格、引号、; 时会破坏
+    # make 语法甚至命令注入（与 eda_campaign 的 SSH/SCP 参数注入同类，
+    # changelog 21）。实测 RTL 名含 $(...) 时 make 报 "No rule to make target
+    # 'd+chr(116)...'" 并停止，行为不可预测。SV 源文件名实际只会是
+    # [A-Za-z0-9_.-]。
+    bad_names = ["d$ut.sv", "my dut.sv", 'd"ut.sv', "d;ut.sv", "d'ut.sv"]
+    for bn in bad_names:
+        bn_path = tmp / "tb_badname" / bn
+        bn_path.parent.mkdir(parents=True, exist_ok=True)
+        bn_path.write_bytes((tmp / "tb" / "dut.sv").read_bytes())
+        r_bn = call_tool("emit_testbench", {
+            "spec_path": str(contract), "out_dir": str(tmp / "tb_badname"),
+            "rtl_file": str(bn_path),
+        })
+        check(f"make-metachar RTL name rejected: {bn!r}", not r_bn["ok"],
+              str(r_bn.get("error")))
+        check(f"reject error explains Makefile corruption ({bn!r})",
+              "corrupt the generated Makefile" in str(r_bn.get("error")),
+              str(r_bn.get("error"))[:120])
+    # 正常名不受影响
+    r_okname = call_tool("emit_testbench", {
+        "spec_path": str(contract), "out_dir": str(tmp / "tb_okname"),
+        "rtl_file": str(tmp / "tb" / "dut.sv"),
+    })
+    check("normal RTL name still accepted", r_okname["ok"], str(r_okname.get("error")))
+
     # —— 缺陷 89：RTL 名为 Makefile → Makefile 模板覆盖 RTL，产物损坏 ——
     # 实测：RTL 文件名就叫 Makefile 时，先复制 RTL 为 out_dir/Makefile，
     # 随后 Makefile 模板写同一路径把 RTL 内容覆盖掉 —— RTL 丢失，且
