@@ -585,6 +585,27 @@ def test_call_tool_enum_and_type_validation(tmp: Path) -> None:
     check("non-numeric string rejected downstream",
           r_bad_num["ok"] is False and "integer" in str(r_bad_num.get("error")).lower(),
           str(r_bad_num.get("error"))[:90])
+
+    # —— 缺陷 96：boolean 参数也要接受字符串（MCP/LLM 客户端常把 bool 传成 str）——
+    # 数字类参数已接受字符串（timeout_sec="1700"），但 boolean 参数被
+    # Invalid type 拒绝 —— 同一调用方的两种参数待遇不一致。修复后只接受
+    # 明确的布尔字面量（true/false/1/0/yes/no，大小写不敏感），其他字符串
+    # 仍拒绝（绝不静默转成 False，那会静默关掉 waveform 等功能）。
+    for bv in ("true", "false", "TRUE", "False", "1", "0", "yes", "no"):
+        r_bool = call_tool("run_sim", {"sim_script": str(tmp / "nope.sh"),
+                                       "suite": "x", "waveform": bv})
+        check(f"boolean string accepted: {bv!r}",
+              r_bool["ok"] is False and "Invalid value" not in str(r_bool.get("error")),
+              f"{bv!r}: {str(r_bool.get('error'))[:80]}")
+    # 非布尔字符串仍应被明确拒绝（不静默转成 False）
+    for bv in ("yes please", "enabled", ""):
+        r_bad_bool = call_tool("run_sim", {"sim_script": str(tmp / "nope.sh"),
+                                           "suite": "x", "waveform": bv})
+        check(f"non-boolean string rejected: {bv!r}",
+              r_bad_bool["ok"] is False and "Invalid value for boolean" in str(r_bad_bool.get("error")),
+              f"{bv!r}: {str(r_bad_bool.get('error'))[:80]}")
+
+
 def test_sva_heartbeat_distinguishes_pass_from_notrun(tmp: Path) -> None:
     """SVA 日志的「全部通过」与「checker 根本没跑」必须可区分。
 

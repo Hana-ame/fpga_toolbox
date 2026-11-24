@@ -253,6 +253,25 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
             # 因此只对「非数字类型」严格，数字类放行给下游自行解析。
             if ptype in ("integer", "number") and isinstance(val, str):
                 continue
+            # boolean 同理：MCP/JSON 客户端常把 bool 序列化成字符串。
+            # 实测 run_sim(waveform="true") 曾被 Invalid type 拒绝，而
+            # timeout_sec="300"（数字字符串）是接受的 —— 同一调用方的两种参数
+            # 待遇不一致。这里只接受**明确的布尔字面量**（大小写不敏感），
+            # 其他字符串仍拒绝（绝不静默转成 False，那会静默关掉波形等功能）。
+            if ptype == "boolean" and isinstance(val, str):
+                _low = val.strip().lower()
+                if _low in ("true", "1", "yes"):
+                    params[pname] = True
+                    continue
+                if _low in ("false", "0", "no"):
+                    params[pname] = False
+                    continue
+                return err_result(
+                    tool_name,
+                    f"Invalid value for boolean parameter '{pname}' of tool "
+                    f"'{tool_name}': got {val!r}. Expected a boolean or one of "
+                    "'true'/'false'/'1'/'0'/'yes'/'no'.",
+                )
             return err_result(
                 tool_name,
                 f"Invalid type for parameter '{pname}' of tool '{tool_name}': "
