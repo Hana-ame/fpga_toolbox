@@ -178,6 +178,28 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
     }, diagnostics=diags)
 
 
+def _resolve_include(inc: str, hdrs: Dict[str, str]) -> Optional[str]:
+    """把 ``include 字符串解析成 header 的仓库相对路径；找不到返回 None。
+
+    背景（真实踩坑）：``headers`` 按**文件名 basename** 建索引（``defs.svh`` ->
+    ``inc/defs.svh``），但 RTL 里的 ``include 常带**路径前缀**（``inc/defs.svh``、
+    ``rtl/a/defs.svh``）。旧实现直接 ``hdrs[inc]``，带前缀的 include 查不到 ->
+    误报 W101「Header not found」并把真实存在的 header 排除在
+    ``header_files`` / ``all_files`` 之外。调用方（如 copy_sandbox）拿这份清单
+    去复制，就漏掉 header，沙箱 RTL 编译报「Cannot find include file」。
+
+    这里两级查找：先按 include 的 basename 查 headers 的 key，再退回完整
+    include 字符串查 headers 的 value（覆盖 headers 恰好按带前缀相对路径键入
+    的索引）。命中任一即返回仓库相对路径。
+    """
+    basename = inc.replace("\\", "/").rsplit("/", 1)[-1]
+    if basename in hdrs:
+        return hdrs[basename]
+    if inc in hdrs:
+        return hdrs[inc]
+    return None
+
+
 def tool_resolve_deps(
     target_module: str,
     repo_index: Optional[Dict[str, Any]] = None,
@@ -207,7 +229,10 @@ def tool_resolve_deps(
         info = mods[cur]
         rtl_set.add(info["file_path"])
         for inc in info.get("includes", []):
-            (hdr_set.add(hdrs[inc]) if inc in hdrs else missing_inc.append(inc))
+            # 带路径前缀的 include（inc/defs.svh）也要按 basename 解析到 headers，
+            # 否则真实存在的 header 被误报 W101 并漏出 staged 清单（缺陷 102）。
+            resolved = _resolve_include(inc, hdrs)
+            (hdr_set.add(resolved) if resolved is not None else missing_inc.append(inc))
         for child in info.get("instantiated_modules", []):
             edges.append({"from": cur, "to": child})
             if child not in seen and child in mods:

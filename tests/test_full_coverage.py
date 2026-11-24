@@ -571,6 +571,47 @@ def test_cli_atfile_errors_structured() -> None:
         assert rc == 1, rc
 
 
+def test_resolve_deps_path_prefixed_include() -> None:
+    """Defect 102: 带路径前缀的 include 被误报 W101 并漏出 staged 清单。
+
+    headers 按 basename 建索引（defs.svh -> inc/defs.svh），但 RTL 里的
+    ``include 常带路径前缀（inc/defs.svh）。旧实现直接 hdrs[inc] 查不到 ->
+    真实存在的 header 被误报 W101 not-found 并排除在 header_files / all_files
+    之外，copy_sandbox 拿这份清单去复制就漏掉 header，沙箱 RTL 编译报
+    「Cannot find include file」。
+    """
+    print("coverage: resolve_deps path-prefixed include (inc/defs.svh)")
+    from fpga_toolbox.repo_indexer import tool_index_repo, tool_resolve_deps
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "inc").mkdir()
+        (root / "inc" / "defs.svh").write_text("parameter W = 8;\n", encoding="utf-8")
+        (root / "top.sv").write_text(
+            'module top;\n`include "inc/defs.svh"\nendmodule\n', encoding="utf-8")
+        idx = tool_index_repo(str(root))
+        assert idx["ok"], idx.get("error")
+        r = tool_resolve_deps("top", repo_index=idx["data"])
+        assert r["ok"], r.get("error")
+        # 真实存在的 header 必须进 staged 清单
+        assert "inc/defs.svh" in r["data"]["header_files"], r["data"]["header_files"]
+        assert "inc/defs.svh" in r["data"]["all_files"], r["data"]["all_files"]
+        # 不应再误报 W101 not-found
+        w101 = [d for d in r.get("diagnostics", []) if d.get("code") == "W101"]
+        assert not w101, w101
+
+        # 真正缺失的 header（basename 形式与带前缀形式）仍报 W101
+        (root / "top2.sv").write_text(
+            'module top2;\n`include "nowhere.svh"\n`include "sub/missing.svh"\nendmodule\n',
+            encoding="utf-8")
+        idx2 = tool_index_repo(str(root))
+        r2 = tool_resolve_deps("top2", repo_index=idx2["data"])
+        assert r2["ok"]
+        w101_2 = sorted(d["path"] for d in r2.get("diagnostics", []) if d.get("code") == "W101")
+        assert w101_2 == ["nowhere.svh", "sub/missing.svh"], w101_2
+        assert r2["data"]["header_files"] == []
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -585,6 +626,7 @@ def main() -> int:
     test_mutation_target_containment()
     test_remote_work_dir_injection_blocked()
     test_cli_atfile_errors_structured()
+    test_resolve_deps_path_prefixed_include()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
