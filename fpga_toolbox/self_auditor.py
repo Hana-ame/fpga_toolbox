@@ -7,6 +7,7 @@ and copy_sandbox all reject invalid/broken inputs with ok=False.
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -397,6 +398,66 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "id": "A13_CONTRACT_PATH_WAVEFORM_GUARD",
             "passed": _a13_ok,
             "detail": "emit ok={ok} ".format(ok=_r_ct.get("ok")) + " ".join(_a13_parts),
+        })
+
+        # A14: 所有生成的 shell 脚本必须 bash -n 语法通过 + set -u 下无未声明变量。
+        # 背景（缺陷 78）：_emit_run_script 曾把 `local want_tag` 写进 if/else 的
+        # else 分支，而脚本用 set -u —— 全新目录首次构建走 then 分支时变量未定义，
+        # 之后 printf "$want_tag" 报 unbound variable、rc=1，【首次构建 100% 失败】；
+        # 第二次运行 binary 已存在走 else 分支反而正常，把缺陷完全掩盖。
+        # 这里对两个 shell 生成器的产物做：(1) bash -n；(2) bash -u -n（set -u 语法层）。
+        import subprocess as _sub
+
+        from .eda_campaign import generate_remote_run_script
+        from .protocol_tb_emitter import _emit_run_script
+
+        _a14_bad: list = []
+        _a14_checked = 0
+        for _p, _rtl, _tb in (("apb", "a.sv", "tb.sv"), ("pcie", "a.sv", "tb.sv")):
+            _s = _emit_run_script(_p, "dut", Path("/x") / _rtl, Path("/x") / _tb)
+            _a14_checked += 1
+            for _label, _flags in (("bash -n", ["-n"]),
+                                   ("bash -u -n", ["-u", "-n"])):
+                _proc = _sub.run(["bash", *_flags, "-c", _s],
+                                 capture_output=True, text=True)
+                if _proc.returncode != 0:
+                    _a14_bad.append(f"{_p}/{_label}: {_proc.stderr.strip()[:80]}")
+            # 关键：bash -n / -u -n 只做【语法】检查，抓不到【运行期】unbound
+            # variable（缺陷 78 正是这类）。这里真跑一遍脚本、并把所有外部命令
+            # 换成 no-op 回显，配合 set -u，让"走了某分支却用了未声明变量"暴露
+            # 成 unbound variable / command not found。脚本自身对未定义变量也
+            # 会因 set -u 而中止。
+            _stubbed = _s
+            # 必须让脚本【真正走到 run_one 内部】，否则只执行到 build 失败就
+            # set -e 退出，run_one 里的变量引用从未被执行 —— 检查形同虚设
+            # （实测：第一版 runtime 检查 BIN echo 0 次，因为 obj/.wave_mode
+            # 目录不存在导致 line 58 重定向失败早退）。所以把 verilator、rm、
+            # mkdir 全 stub 成 no-op，并预建 obj 目录。
+            _stubbed = re.sub(r'(?m)^VERILATOR=', r'VERILATOR=echo ', _stubbed)
+            _stubbed = re.sub(r'(?m)^(\s*)"?\$VLT"? --binary.*$', r'\1echo VLT_STUB; mkdir -p "$out"', _stubbed)
+            _stubbed = re.sub(r'(?m)^(\s*)rm -rf "\$out"$', r'\1mkdir -p "$out"', _stubbed)
+            _stubbed = re.sub(r'(?m)^(\s*)"\$bin" \+', r'\1echo BIN +', _stubbed)
+            _stubbed = re.sub(r'(?m)^(\s*)"\$bin"$', r'\1echo BIN', _stubbed)
+            _tmpsh = root / f"a14_{_p}.sh"
+            _tmpsh.write_text(_stubbed, encoding="utf-8")
+            _proc = _sub.run(["bash", str(_tmpsh)], capture_output=True, text=True)
+            _blob = _proc.stdout + _proc.stderr
+            if "unbound variable" in _blob:
+                _a14_bad.append(f"{_p}/runtime: {_blob.strip().splitlines()[-1][:80]}")
+        # eda_campaign 的远程脚本（含 set -euo pipefail + scp/ssh）
+        for _shm in (True, False):
+            _s2 = generate_remote_run_script("host1", "tag1", "run.sh", use_dev_shm=_shm)
+            _a14_checked += 1
+            _proc = _sub.run(["bash", "-u", "-n", "-c", _s2],
+                             capture_output=True, text=True)
+            if _proc.returncode != 0:
+                _a14_bad.append(f"eda/shm={_shm}: {_proc.stderr.strip()[:80]}")
+        a14_ok = _a14_checked > 0 and not _a14_bad
+        checks.append({
+            "id": "A14_GENERATED_SHELL_SYNTAX",
+            "passed": a14_ok,
+            "detail": f"checked={_a14_checked} bad={len(_a14_bad)} "
+                      f"{_a14_bad[:2]}",
         })
 
     failed = [c for c in checks if not c["passed"]]
