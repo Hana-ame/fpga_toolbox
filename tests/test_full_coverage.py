@@ -366,7 +366,6 @@ def test_verify_invariants_layer3_tolerates_missing_ruff() -> None:
     "compileall-only" 并返回 ok=True。
     """
     import importlib.util
-    import shutil
 
     spec = importlib.util.spec_from_file_location(
         "vi", Path(__file__).resolve().parents[1] / "scripts" / "verify_invariants.py"
