@@ -989,6 +989,159 @@ def test_waveform_dump_injected_into_tb(tmp: Path) -> None:
             check("want_tag actually used after declaration", used)
 
 
+def test_contract_path_waveform_and_w014(tmp: Path) -> None:
+    """契约路径（文档示例 1 用的那条）也必须有波形支持，且不能静默失效。
+
+    回归 79：`emit_testbench --spec-path` 走 `tb_emitter.py`（不是
+    protocol_tb_emitter.py），原先**完全没有**波形支持；同时
+    `run_sim --waveform` 在脚本不响应 WAVE=1 时静默返回空 files。
+
+    锁死写它时踩到的三个真实缺陷：
+      A. 兜底文件名 `{mod}.vcd` 以裸标识符输出 → Verilator 把 `.vcd` 当层次
+         引用，报 `Can't find definition of 'vcd'`，**契约路径 TB 根本编译不过**。
+      B. 第一版用编译期 `` `ifdef WAVE_DUMP ``，但全仓库没有任何调用方 define
+         它 → 死宏，等于永远不注入波形（静默失效）。
+      C. `run_sim(waveform=True)` 在脚本不响应 WAVE=1 时返回 ok=True + 空 files，
+         "波形开了只是没人看" → 现在给 W014 警告。
+    """
+    from fpga_toolbox import call_tool
+
+    contract = tmp / "contract.yaml"
+    contract.write_text(
+        "boundary:\n"
+        "  module_name: reg_slave\n"
+        "  rtl_files: [dut.sv]\n"
+        "  parameters: {}\n"
+        "  clock: {port: aclk, freq_mhz: 100.0}\n"
+        "  reset: {port: aresetn, active_low: true, sync: true}\n"
+        "  out_of_scope_ports: []\n"
+        "  axi4_lite:\n"
+        "    addr_width: 12\n"
+        "    data_width: 32\n"
+        "    role: slave\n"
+        "    port_map:\n"
+        "      awaddr: s_axi_awaddr\n"
+        "      awprot: s_axi_awprot\n"
+        "      awvalid: s_axi_awvalid\n"
+        "      awready: s_axi_awready\n"
+        "      wdata: s_axi_wdata\n"
+        "      wstrb: s_axi_wstrb\n"
+        "      wvalid: s_axi_wvalid\n"
+        "      wready: s_axi_wready\n"
+        "      bresp: s_axi_bresp\n"
+        "      bvalid: s_axi_bvalid\n"
+        "      bready: s_axi_bready\n"
+        "      araddr: s_axi_araddr\n"
+        "      arprot: s_axi_arprot\n"
+        "      arvalid: s_axi_arvalid\n"
+        "      arready: s_axi_arready\n"
+        "      rdata: s_axi_rdata\n"
+        "      rresp: s_axi_rresp\n"
+        "      rvalid: s_axi_rvalid\n"
+        "      rready: s_axi_rready\n"
+        "test_plan:\n"
+        "  protocol_rules:\n"
+        "    check_valid_stability: true\n"
+        "    check_reset_outputs: true\n"
+        "    max_resp_cycles: 16\n"
+        "    allow_unaligned_addr: false\n"
+        "  register_rules:\n"
+        "  - {rule_id: REG_001, name: CTRL_REG, offset: 0, reset_value: 0,\n"
+        "     access: RW, write_mask: 0xffffffff, read_mask: 0xffffffff}\n"
+        "  illegal_addr_rules: []\n"
+        "  stress_profile: {random_backpressure: true, iterations: 8, seed: 1}\n",
+        encoding="utf-8",
+    )
+    (tmp / "dut.sv").write_text(
+        "`timescale 1ns/1ps\n"
+        "module reg_slave(input logic aclk, input logic aresetn,\n"
+        "  input logic [11:0] s_axi_awaddr, input logic [2:0] s_axi_awprot,\n"
+        "  input logic s_axi_awvalid, output logic s_axi_awready,\n"
+        "  input logic [31:0] s_axi_wdata, input logic [3:0] s_axi_wstrb,\n"
+        "  input logic s_axi_wvalid, output logic s_axi_wready,\n"
+        "  output logic [1:0] s_axi_bresp, output logic s_axi_bvalid,\n"
+        "  input logic s_axi_bready,\n"
+        "  input logic [11:0] s_axi_araddr, input logic [2:0] s_axi_arprot,\n"
+        "  input logic s_axi_arvalid, output logic s_axi_arready,\n"
+        "  output logic [31:0] s_axi_rdata, output logic [1:0] s_axi_rresp,\n"
+        "  output logic s_axi_rvalid, input logic s_axi_rready);\n"
+        "  logic [31:0] rw_reg;\n"
+        "  always_ff @(posedge aclk) begin\n"
+        "    if (!aresetn) rw_reg <= '0;\n"
+        "    else if (s_axi_awvalid && s_axi_wvalid) rw_reg <= s_axi_wdata;\n"
+        "  end\n"
+        "  assign s_axi_awready = 1'b1; assign s_axi_wready = 1'b1;\n"
+        "  assign s_axi_bresp = 2'b00; assign s_axi_bvalid = s_axi_awvalid && s_axi_wvalid;\n"
+        "  assign s_axi_arready = 1'b1; assign s_axi_rdata = rw_reg;\n"
+        "  assign s_axi_rresp = 2'b00; assign s_axi_rvalid = s_axi_arvalid;\n"
+        "endmodule\n",
+        encoding="utf-8",
+    )
+
+    r = call_tool("emit_testbench", {
+        "spec_path": str(contract), "out_dir": str(tmp / "tb"),
+        "rtl_file": str(tmp / "dut.sv"),
+    })
+    check("emit contract-path tb", r["ok"], str(r.get("error")))
+    if not r["ok"]:
+        return
+
+    wrap = Path(r["data"]["artifacts"]["unit_isolation_wrapper"])
+    src = wrap.read_text(encoding="utf-8")
+
+    # —— 缺陷 A：兜底文件名必须是**带引号的字符串字面量** ——
+    # 裸 `reg_slave.vcd` 会被 Verilator 当层次引用报错，契约 TB 编译不过。
+    dumpfiles = re.findall(r'\$dumpfile\(([^)]+)\)', src)
+    check("contract wrapper has $dumpfile", bool(dumpfiles))
+    for arg in dumpfiles:
+        arg = arg.strip()
+        if not arg.startswith('"'):
+            # wave_path 来自 $value$plusargs，是变量，不是字面量 —— 跳过
+            continue
+        check(f"dumpfile literal arg is a quoted string: {arg}",
+              re.fullmatch(r'"[^"]+"', arg) is not None, arg)
+
+    # —— 缺陷 B：必须用运行期 plusarg，不能用死宏 ——
+    check("contract wrapper gates dump on +WAVE plusarg",
+          '$test$plusargs("WAVE")' in src)
+    check("contract wrapper has no dead `ifdef WAVE_DUMP", "`ifdef WAVE_DUMP" not in src)
+    check("contract wrapper has $dumpvars", "$dumpvars" in src)
+    # `$value$plusargs` 的目标变量必须声明（否则 Verilator 报未定义直接拒绝编译）
+    check("contract wrapper declares wave_path variable", "string wave_path;" in src)
+
+    # —— 缺陷 C：run_sim waveform=True 但无波形 → W014 警告（ok 仍为 True）——
+    # 需要真跑一次脚本，而 run_sim 在跑之前会检查 Verilator >= 5.040（E020），
+    # 所以无 verilator 的环境（裸容器）必须跳过，否则把"环境缺失"当"功能失效"。
+    def _vlt_usable() -> bool:
+        try:
+            from fpga_toolbox.eda_env import probe_eda_env
+            return bool(probe_eda_env()["verilator"]["meets_min_version"])
+        except Exception:  # noqa: BLE001
+            return False
+
+    if not _vlt_usable():
+        print("  skip run_sim waveform W014  (no Verilator >= 5.040 in this environment)")
+        return
+
+    fake = tmp / "run_plain.sh"
+    fake.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho \"PASS: fake\"\n",
+                    encoding="utf-8")
+    import os
+    import stat as _stat
+    os.chmod(fake, os.stat(fake).st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
+    r2 = call_tool("run_sim", {
+        "sim_script": str(fake), "suite": "x", "waveform": True,
+    })
+    check("run_sim with waveform=True still ok", r2["ok"], str(r2.get("error")))
+    warns = r2.get("data", {}).get("waveform_warnings", [])
+    check("W014 emitted when no waveform produced despite waveform=True",
+          any(w.get("code") == "W014" for w in warns), str(warns))
+    # 诊断里也要可见（不只埋在 data 里）
+    all_codes = {d.get("code") for d in r2.get("diagnostics", [])}
+    check("W014 surfaced in diagnostics", "W014" in all_codes, str(sorted(all_codes)))
+
+
+
 def test_docs_html_markdown_sync(tmp: Path) -> None:
     """HTML 文档必须与 markdown 同步，且产物结构/链接/锚点自检通过。
 
@@ -1129,6 +1282,7 @@ def main() -> int:
         test_all_scripts_parse_under_py310()
         test_waveform_and_log_capture(tmp)
         test_waveform_dump_injected_into_tb(tmp)
+        test_contract_path_waveform_and_w014(tmp)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))

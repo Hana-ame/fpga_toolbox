@@ -398,7 +398,22 @@ def tool_run_sim(
                 diagnostics=[{"severity": "ERROR", "code": "E024", "path": "waveform",
                               "message": "Waveform file(s) exist but are all zero-length."}],
             )
-    return ok_result("run_sim", data)
+    # waveform=True 但 require_waveform=False 时也要给信号：最常见成因是脚本
+    # 不响应 WAVE=1（用户手写的 sim.sh 不知道 WAVE 这个变量）。波形静默没开，
+    # 仿真 PASS、files 为空，调用方容易误以为"波形开了只是没人看"。降级为
+    # WARNING（W014）不阻塞 ok=True —— 毕竟没要求硬性保证 —— 但必须进
+    # diagnostics（调用方读的就是这个字段，埋在 data 里等于没说）。
+    w014: List[Dict[str, Any]] = []
+    if waveform and not waves:
+        w014 = [{"severity": "WARNING", "code": "W014", "path": "waveform",
+                 "message": (
+                     "waveform=true but no waveform file was produced. The sim script "
+                     "may not honour WAVE=1 / --trace (hand-written scripts need to add "
+                     "--trace themselves). Use require_waveform=true to make this a hard "
+                     "error."
+                 )}]
+        data["waveform_warnings"] = w014
+    return ok_result("run_sim", data, diagnostics=w014)
 
 
 if __name__ == "__main__":

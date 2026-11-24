@@ -537,6 +537,7 @@ python3 -m fpga_toolbox audit_harness
 | `W011` | `extract_interfaces` | 未检测到复位，用默认值 |
 | `W012` | `extract_interfaces` | builtin 解析到 SV interface 端口，建议装 slang |
 | `W013` | `extract_interfaces` | slang 回退对调用方可见 |
+| `W014` | `run_sim` | `waveform=true` 却没产出波形文件（脚本可能不响应 `WAVE=1` / 缺 `--trace`）；`require_waveform=true` 会把它升级成 `E024` 硬错误 |
 | `W050` | `render_visual_report` | HTML 标签不平衡 |
 | `W051` | `render_visual_report` | 规则行数不一致 |
 | `W101` | `copy_sandbox` | 被 include 的文件未进沙箱 |

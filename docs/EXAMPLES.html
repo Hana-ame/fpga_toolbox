@@ -134,9 +134,10 @@ blockquote ul { margin:8px 0; }
     <a class="lv2" href="#示例-10-安全边界符号链接不越界">示例 10 — 安全边界：符号链接不越界</a>
     <a class="lv2" href="#示例-11-抓波形与完整日志">示例 11 — 抓波形与完整日志</a>
     <a class="lv3" href="#111-一条命令同时抓两者">11.1 一条命令同时抓两者</a>
-    <a class="lv3" href="#112-生成-tb-时已内置波形支持">11.2 生成 TB 时已内置波形支持</a>
-    <a class="lv3" href="#113-两个真实陷阱工具已经把它们变成显式错误">11.3 两个真实陷阱（工具已经把它们变成显式错误）</a>
-    <a class="lv3" href="#114-自审计-a12">11.4 自审计 A12</a>
+    <a class="lv3" href="#112-契约路径同样支持--spec-path">11.2 契约路径同样支持（--spec-path）</a>
+    <a class="lv3" href="#113-生成-tb-时已内置波形支持多协议路径">11.3 生成 TB 时已内置波形支持（多协议路径）</a>
+    <a class="lv3" href="#114-两个真实陷阱工具已经把它们变成显式错误">11.4 两个真实陷阱（工具已经把它们变成显式错误）</a>
+    <a class="lv3" href="#115-自审计-a12a13">11.5 自审计 A12/A13</a>
     <a class="lv2" href="#完整流水线串联">完整流水线串联</a>
     <a class="lv2" href="#相关文档">相关文档</a>
   </nav>
@@ -636,7 +637,26 @@ $timescale 1ps $end
   $var wire 1 " presetn $end
   $var wire 1 # psel $end</code></pre></div>
 <p>实测这份 VCD 有 <strong>30 个信号声明、78 个时间点</strong>，包含 DUT 与 TB 两层 scope。</p>
-<h3 id="112-生成-tb-时已内置波形支持">11.2 生成 TB 时已内置波形支持</h3>
+<h3 id="112-契约路径同样支持--spec-path">11.2 契约路径同样支持（<code>--spec-path</code>）</h3>
+<p>上一节用的是<strong>多协议直出</strong>路径（<code>--rtl-file --protocol</code>）。<strong>示例 1 那条契约路径</strong> （<code>--spec-path</code>，走 <code>emit_testbench</code> 的另一条代码分支）产出的 <code>*_axil_wrap.sv</code> 现在也内置波形 dump：</p>
+<div class="code-block"><div class="code-lang">systemverilog</div><pre><code>// ---- waveform dump (optional) ----
+string wave_path;
+initial begin
+  if ($test$plusargs("WAVE")) begin
+    if ($value$plusargs("WAVE_FILE=%s", wave_path)) begin
+      $dumpfile(wave_path);
+    end else begin
+      $dumpfile("reg_slave_axil_wrap.vcd");
+    end
+    $dumpvars(0, reg_slave_axil_wrap);
+  end
+end</code></pre></div>
+<p>开关同样是 <code>+WAVE</code>：verilator 编译时加 <code>--trace</code>，运行时加 <code>+WAVE</code> 即产出波形。 真编译验证过（Verilator 5.054）：</p>
+<div class="code-block"><div class="code-lang">text</div><pre><code>verilator --binary --trace ... tb_top.sv reg_slave_axil_wrap.sv ...
+BUILD OK
+./obj/sim +WAVE "+WAVE_FILE=wrap.vcd"  → wrap.vcd（145 信号）
+./obj/sim                              → 无 wrap.vcd（+WAVE 是真开关）</code></pre></div>
+<h3 id="113-生成-tb-时已内置波形支持多协议路径">11.3 生成 TB 时已内置波形支持（多协议路径）</h3>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
   --rtl-file examples/multi_bus_ref/apb_slave.sv \
   --out-dir /tmp/ex11/tb --protocol apb</code></pre></div>
@@ -657,7 +677,7 @@ $ WAVE=1 bash /tmp/ex11/tb/run_apb_slave_apb.sh apb     # 抓 wave_apb.vcd
 $ WAVE=1 WAVE_FORMAT=fst bash .../run_apb_slave_apb.sh apb   # FST（需 lz4 头）
 $ WAVE_DIR=/tmp/waves bash .../run_apb_slave_apb.sh apb # 指定落盘目录</code></pre></div>
 <p>脚本会检查 <code>obj_*/.wave_enabled</code> 标记：带 <code>--trace</code> 与不带是两套二进制， 开关变化时强制重建，避免复用旧二进制导致「设了 WAVE=1 却没有波形」。</p>
-<h3 id="113-两个真实陷阱工具已经把它们变成显式错误">11.3 两个真实陷阱（工具已经把它们变成显式错误）</h3>
+<h3 id="114-两个真实陷阱工具已经把它们变成显式错误">11.4 两个真实陷阱（工具已经把它们变成显式错误）</h3>
 <p><strong>陷阱 A —— Verilator 静默忽略 <code>$dumpvars</code></strong></p>
 <p><code>$dumpvars</code> 写在 TB 里只是必要条件。没有 <code>--trace</code> 时 Verilator 只打一条：</p>
 <div class="code-block"><div class="code-lang">text</div><pre><code>-Info: tb.sv:8: $dumpvar ignored, as Verilated without --trace</code></pre></div>
@@ -684,13 +704,18 @@ ok: False
 diagnostics: E025  waveform_format  verilator --trace-fst needs the lz4
              development headers (lz4.h) at build time.
              Install liblz4-dev / lz4-devel, or use waveform_format='vcd'.</code></pre></div>
-<h3 id="114-自审计-a12">11.4 自审计 A12</h3>
+<h3 id="115-自审计-a12a13">11.5 自审计 A12/A13</h3>
 <p>这三条护栏被纳入自审计，防止回退：</p>
 <div class="code-block"><div class="code-lang">text</div><pre><code>A12_WAVEFORM_LOG_ARTIFACT_GUARD
   contradictory ok=False codes=['E024']
   stale ok=False files=0 codes=['E024']
   log_saved=True</code></pre></div>
 <p>反向验证过：把 <code>run_sim</code> 里两道波形断言都换成 <code>if False</code>，A12 立刻 FAIL， 整体 12/12 → 11/12。</p>
+<p>契约路径的波形支持由 <strong>A13_CONTRACT_PATH_WAVEFORM_GUARD</strong> 监视：</p>
+<div class="code-block"><div class="code-lang">text</div><pre><code>A13_CONTRACT_PATH_WAVEFORM_GUARD
+  emit ok=True dumpfile=True plusarg=True decl=True no_dead_ifdef=True</code></pre></div>
+<p>它走一遍 <code>emit_testbench --spec-path</code>，断言 wrapper 里有 <code>$dumpfile</code> / <code>$dumpvars</code> / <code>+WAVE</code> plusarg / <code>wave_path</code> 声明，且<strong>没有</strong> `<code> </code>ifdef WAVE_DUMP ``（死宏 = 静默失效）。 这条<strong>不依赖 Verilator</strong>（纯产物文本断言），裸容器里也能持续监视。</p>
+<p>反向验证过：把 `<code> </code>ifdef WAVE_DUMP `` 重新注入 → A13 立刻 FAIL，13/13 → 12/13。</p>
 <hr>
 <h2 id="完整流水线串联">完整流水线串联</h2>
 <p>把前几个示例串成一条可执行的验证链：</p>

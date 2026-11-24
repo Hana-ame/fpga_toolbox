@@ -790,7 +790,38 @@ $timescale 1ps $end
 
 实测这份 VCD 有 **30 个信号声明、78 个时间点**，包含 DUT 与 TB 两层 scope。
 
-### 11.2 生成 TB 时已内置波形支持
+### 11.2 契约路径同样支持（`--spec-path`）
+
+上一节用的是**多协议直出**路径（`--rtl-file --protocol`）。**示例 1 那条契约路径**
+（`--spec-path`，走 `emit_testbench` 的另一条代码分支）产出的
+`*_axil_wrap.sv` 现在也内置波形 dump：
+
+```verilog
+// ---- waveform dump (optional) ----
+string wave_path;
+initial begin
+  if ($test$plusargs("WAVE")) begin
+    if ($value$plusargs("WAVE_FILE=%s", wave_path)) begin
+      $dumpfile(wave_path);
+    end else begin
+      $dumpfile("reg_slave_axil_wrap.vcd");
+    end
+    $dumpvars(0, reg_slave_axil_wrap);
+  end
+end
+```
+
+开关同样是 `+WAVE`：verilator 编译时加 `--trace`，运行时加 `+WAVE` 即产出波形。
+真编译验证过（Verilator 5.054）：
+
+```
+verilator --binary --trace ... tb_top.sv reg_slave_axil_wrap.sv ...
+BUILD OK
+./obj/sim +WAVE "+WAVE_FILE=wrap.vcd"  → wrap.vcd（145 信号）
+./obj/sim                              → 无 wrap.vcd（+WAVE 是真开关）
+```
+
+### 11.3 生成 TB 时已内置波形支持（多协议路径）
 
 ```bash
 python3 -m fpga_toolbox emit_testbench \
@@ -828,7 +859,7 @@ $ WAVE_DIR=/tmp/waves bash .../run_apb_slave_apb.sh apb # 指定落盘目录
 脚本会检查 `obj_*/.wave_enabled` 标记：带 `--trace` 与不带是两套二进制，
 开关变化时强制重建，避免复用旧二进制导致「设了 WAVE=1 却没有波形」。
 
-### 11.3 两个真实陷阱（工具已经把它们变成显式错误）
+### 11.4 两个真实陷阱（工具已经把它们变成显式错误）
 
 **陷阱 A —— Verilator 静默忽略 `$dumpvars`**
 
@@ -886,7 +917,7 @@ diagnostics: E025  waveform_format  verilator --trace-fst needs the lz4
              Install liblz4-dev / lz4-devel, or use waveform_format='vcd'.
 ```
 
-### 11.4 自审计 A12
+### 11.5 自审计 A12/A13
 
 这三条护栏被纳入自审计，防止回退：
 
@@ -899,6 +930,19 @@ A12_WAVEFORM_LOG_ARTIFACT_GUARD
 
 反向验证过：把 `run_sim` 里两道波形断言都换成 `if False`，A12 立刻 FAIL，
 整体 12/12 → 11/12。
+
+契约路径的波形支持由 **A13_CONTRACT_PATH_WAVEFORM_GUARD** 监视：
+
+```
+A13_CONTRACT_PATH_WAVEFORM_GUARD
+  emit ok=True dumpfile=True plusarg=True decl=True no_dead_ifdef=True
+```
+
+它走一遍 `emit_testbench --spec-path`，断言 wrapper 里有 `$dumpfile` / `$dumpvars` /
+`+WAVE` plusarg / `wave_path` 声明，且**没有** `` `ifdef WAVE_DUMP ``（死宏 = 静默失效）。
+这条**不依赖 Verilator**（纯产物文本断言），裸容器里也能持续监视。
+
+反向验证过：把 `` `ifdef WAVE_DUMP `` 重新注入 → A13 立刻 FAIL，13/13 → 12/13。
 
 ---
 

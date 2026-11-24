@@ -305,6 +305,100 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "detail": _a12_detail,
         })
 
+        # A13: 契约路径（--spec-path）生成的 wrapper 也必须有波形支持，且不能
+        # 用编译期死宏（曾用 `ifdef WAVE_DUMP，但没有任何调用方 define 它 =
+        # 静默不生效）。这条**不依赖 Verilator**：只做产物文本断言，所以即使
+        # 在裸容器里也能持续监视。
+        _cw = root / "contract"
+        _cw.mkdir(exist_ok=True)
+        (_cw / "dut.sv").write_text(
+            "`timescale 1ns/1ps\n"
+            "module reg_slave(input logic aclk, input logic aresetn,\n"
+            "  input logic [11:0] s_axi_awaddr, input logic [2:0] s_axi_awprot,\n"
+            "  input logic s_axi_awvalid, output logic s_axi_awready,\n"
+            "  input logic [31:0] s_axi_wdata, input logic [3:0] s_axi_wstrb,\n"
+            "  input logic s_axi_wvalid, output logic s_axi_wready,\n"
+            "  output logic [1:0] s_axi_bresp, output logic s_axi_bvalid,\n"
+            "  input logic s_axi_bready,\n"
+            "  input logic [11:0] s_axi_araddr, input logic [2:0] s_axi_arprot,\n"
+            "  input logic s_axi_arvalid, output logic s_axi_arready,\n"
+            "  output logic [31:0] s_axi_rdata, output logic [1:0] s_axi_rresp,\n"
+            "  output logic s_axi_rvalid, input logic s_axi_rready);\n"
+            "  logic [31:0] rw_reg;\n"
+            "  always_ff @(posedge aclk) begin\n"
+            "    if (!aresetn) rw_reg <= '0;\n"
+            "    else if (s_axi_awvalid && s_axi_wvalid) rw_reg <= s_axi_wdata;\n"
+            "  end\n"
+            "  assign s_axi_awready = 1'b1; assign s_axi_wready = 1'b1;\n"
+            "  assign s_axi_bresp = 2'b00; assign s_axi_bvalid = s_axi_awvalid && s_axi_wvalid;\n"
+            "  assign s_axi_arready = 1'b1; assign s_axi_rdata = rw_reg;\n"
+            "  assign s_axi_rresp = 2'b00; assign s_axi_rvalid = s_axi_arvalid;\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        (_cw / "contract.yaml").write_text(
+            "boundary:\n"
+            "  module_name: reg_slave\n"
+            "  rtl_files: [dut.sv]\n"
+            "  parameters: {}\n"
+            "  clock: {port: aclk, freq_mhz: 100.0}\n"
+            "  reset: {port: aresetn, active_low: true, sync: true}\n"
+            "  out_of_scope_ports: []\n"
+            "  axi4_lite:\n"
+            "    addr_width: 12\n"
+            "    data_width: 32\n"
+            "    role: slave\n"
+            "    port_map:\n"
+            "      awaddr: s_axi_awaddr\n      awprot: s_axi_awprot\n"
+            "      awvalid: s_axi_awvalid\n      awready: s_axi_awready\n"
+            "      wdata: s_axi_wdata\n      wstrb: s_axi_wstrb\n"
+            "      wvalid: s_axi_wvalid\n      wready: s_axi_wready\n"
+            "      bresp: s_axi_bresp\n      bvalid: s_axi_bvalid\n"
+            "      bready: s_axi_bready\n      araddr: s_axi_araddr\n"
+            "      arprot: s_axi_arprot\n      arvalid: s_axi_arvalid\n"
+            "      arready: s_axi_arready\n      rdata: s_axi_rdata\n"
+            "      rresp: s_axi_rresp\n      rvalid: s_axi_rvalid\n"
+            "      rready: s_axi_rready\n"
+            "test_plan:\n"
+            "  protocol_rules:\n"
+            "    check_valid_stability: true\n    check_reset_outputs: true\n"
+            "    max_resp_cycles: 16\n    allow_unaligned_addr: false\n"
+            "  register_rules:\n"
+            "  - {rule_id: REG_001, name: CTRL_REG, offset: 0, reset_value: 0,\n"
+            "     access: RW, write_mask: 0xffffffff, read_mask: 0xffffffff}\n"
+            "  illegal_addr_rules: []\n"
+            "  stress_profile: {random_backpressure: true, iterations: 8, seed: 1}\n",
+            encoding="utf-8",
+        )
+        _r_ct = tool_emit_testbench(str(_cw / "contract.yaml"), str(_cw / "tb"),
+                                    rtl_file=str(_cw / "dut.sv"))
+        _a13_ok = False
+        if _r_ct.get("ok"):
+            _wsrc = Path(_r_ct["data"]["artifacts"]["unit_isolation_wrapper"]).read_text(encoding="utf-8")
+            _a13_ok = (
+                "$dumpfile(" in _wsrc
+                and "$dumpvars" in _wsrc
+                and '$test$plusargs("WAVE")' in _wsrc
+                and "string wave_path;" in _wsrc
+                and "`ifdef WAVE_DUMP" not in _wsrc  # 死宏 = 静默失效
+            )
+        # detail 用变量承载布尔值，避免在 f-string 表达式里写转义引号：
+        # py3.10/3.11 不允许 f-string 表达式含反斜杠（缺陷 72 的检查器已锁死）。
+        _a13_parts = []
+        if _r_ct.get("ok"):
+            _has_dump = "$dumpfile(" in _wsrc
+            _has_plusarg = '$test$plusargs("WAVE")' in _wsrc
+            _has_decl = "string wave_path;" in _wsrc
+            _no_dead_ifdef = "`ifdef WAVE_DUMP" not in _wsrc
+            _a13_ok = _has_dump and _has_plusarg and _has_decl and _no_dead_ifdef
+            _a13_parts = [f"dumpfile={_has_dump}", f"plusarg={_has_plusarg}",
+                          f"decl={_has_decl}", f"no_dead_ifdef={_no_dead_ifdef}"]
+        checks.append({
+            "id": "A13_CONTRACT_PATH_WAVEFORM_GUARD",
+            "passed": _a13_ok,
+            "detail": "emit ok={ok} ".format(ok=_r_ct.get("ok")) + " ".join(_a13_parts),
+        })
+
     failed = [c for c in checks if not c["passed"]]
     data = {"total": len(checks), "passed": len(checks) - len(failed), "failed": len(failed), "checks": checks}
     if failed and strict:

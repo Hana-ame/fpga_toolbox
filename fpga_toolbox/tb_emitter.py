@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -265,6 +266,8 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
                 conns.append(f"    .{rport}({tie})")
 
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
+    # 波形落盘路径：优先 WAVE_FILE（若外部 export 了就用），否则模块名兜底。
+    wave_file = os.environ.get("WAVE_FILE") or f"{b.module_name}_axil_wrap.vcd"
     conn_s = ",\n".join(conns)
     return f"""`timescale 1ns/1ps
 module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W={ax.data_width}, STRB_W={ax.strb_width}) (
@@ -286,6 +289,23 @@ module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W=
     .araddr(s_axil_araddr), .arvalid(s_axil_arvalid), .arready(s_axil_arready),
     .rdata(s_axil_rdata), .rresp(s_axil_rresp), .rvalid(s_axil_rvalid), .rready(s_axil_rready)
   );
+  // ---- waveform dump (optional) ----
+  // 与 protocol_tb_emitter 保持一致：用**运行期 plusarg +WAVE** 开关，
+  // 不用编译期 `ifdef —— `ifdef 必须有人 define 才生效，而没有任何调用方
+  // 会 define，等于**静默不生效**（实测踩坑）。这里 $value$plusargs 读
+  // +WAVE / +WAVE_FILE，verilator 同时要 --trace 编译（缺 --trace 只打一条
+  // -Info 就静默忽略 $dumpvars，仿真 PASS 但无波形）。
+  string wave_path;
+  initial begin
+    if ($test$plusargs("WAVE")) begin
+      if ($value$plusargs("WAVE_FILE=%s", wave_path)) begin
+        $dumpfile(wave_path);
+      end else begin
+        $dumpfile("{wave_file}");
+      end
+      $dumpvars(0, {b.module_name}_axil_wrap);
+    end
+  end
 endmodule
 """
 
