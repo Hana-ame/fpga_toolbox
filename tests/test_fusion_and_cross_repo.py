@@ -13,6 +13,7 @@ Verifies:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -146,6 +147,56 @@ def test_mutation_runner() -> None:
         dut.write_text("value = 0\n", encoding="utf-8")
         r_res = call_tool("run_mutation", {"workdir": str(wd), "mutation_spec": str(spec), "test_cmd": cmd})
         check(not r_res["ok"] and any(d["code"] == "E030" for d in r_res["diagnostics"]), "residual mutation rejected (E030)")
+
+
+def test_mutation_non_utf8_rtl() -> None:
+    """非 UTF-8 RTL 变异必须按字节读写，且 try/finally 不能破坏原文件。
+
+    回归 85：`run_mutation` 的变异目标按 text 读写时，非 UTF-8 RTL（工业界
+    GBK/Shift-JIS/latin-1 注释常见）有两条失败路径：
+      * read_text(utf-8) 直接抛 UnicodeDecodeError 冒泡（旧实现，实测）；
+      * 若退而用 errors="replace"，非法字节变 U+FFFD，而 finally 的
+        write_text(original, utf-8) 会把含 U+FFFD 的文本写回 —— 实测 latin-1
+        RTL 的 2 个 0xe9 全部丢失，RTL 被 try/finally 强还原【永久破坏】。
+    修复：按字节读写，old/new 编成 UTF-8 字节匹配，非 ASCII 原样保留。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        wd = Path(td)
+        dut = wd / "dut.sv"
+        # latin-1 RTL：注释含 0xE9（é），非合法 UTF-8
+        orig = (b"module dut(input logic a,b, output logic y);\n"
+                b"  // capacit\xe9  // commentaire latin-1\n"
+                b"  assign y = a & b; // \xe9\xe8\nendmodule\n")
+        dut.write_bytes(orig)
+        orig_sha = hashlib.sha256(dut.read_bytes()).hexdigest()
+
+        spec = wd / "muts.yaml"
+        spec.write_text(
+            "mutations:\n"
+            '- id: M01\n  file: dut.sv\n  old: "a & b"\n  new: "a | b"\n'
+            "# capacit\xe9  (latin-1 comment in the SPEC too)\n",
+            encoding="utf-8",
+        )
+
+        # test_cmd 模拟"正确的 dut 应通过"：原 RTL 是 a & b（AND），
+        # 变异成 a | b（OR）后 y 的真值表变了 → 一个能区分 AND/OR 的检查会失败
+        # → 变异被 KILLED。这里用 grep 找 AND（变异后找不到 → rc=1 → KILLED）。
+        cmd = ["bash", "-c", "grep -q 'a & b' dut.sv"]
+        r = call_tool("run_mutation", {"workdir": str(wd), "mutation_spec": str(spec),
+                                       "test_cmd": cmd})
+        check(r["ok"], f"mutation on latin-1 RTL runs without decode error "
+              f"(got {(r.get('error') or 'ok')[:100]})")
+        if r["ok"]:
+            # 变异 a&b → a|b 后，grep 'a & b' 找不到 → rc=1 → KILLED（正确：
+            # 说明变异真的被应用到了 RTL）
+            check(r["data"]["results"][0]["status"] == "KILLED",
+                  f"mutation applied (M01 KILLED = a&b→a|b took effect); got {r['data']['results']}")
+        # try/finally 强还原必须**按字节**还原，不能把 U+FFFD 写回
+        check(dut.read_bytes() == orig,
+              "latin-1 RTL restored byte-for-byte (no U+FFFD corruption); bytes differ")
+        check(hashlib.sha256(dut.read_bytes()).hexdigest() == orig_sha,
+              "original SHA-256 preserved")
+        check(dut.read_bytes().count(b"\xe9") == 2, "non-ASCII byte 0xe9 preserved")
 
 
 def test_verilator_log_normalizer_and_visual() -> None:
@@ -716,6 +767,7 @@ def main() -> int:
     test_lint_tb()
     test_lint_wait_form()
     test_mutation_runner()
+    test_mutation_non_utf8_rtl()
     test_verilator_log_normalizer_and_visual()
     test_suite_identity_real_format()
     test_audit_and_registry()

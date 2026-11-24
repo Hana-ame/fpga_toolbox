@@ -26,7 +26,12 @@ from .core.types import err_result, ok_result
 
 
 def load_mutations(spec_path: Path) -> List[Dict[str, str]]:
-    text = spec_path.read_text(encoding="utf-8")
+    # 变异 spec 是用户手写的（YAML/JSON），注释里可能带 GBK/Shift-JIS/latin-1
+    # 字节（实测 latin-1 注释 0xE9 让 utf-8 解码抛 UnicodeDecodeError）。旧实现
+    # 让它冒泡，外层包成 "Invalid mutation spec: 'utf-8' codec can't decode ..."
+    # —— 用户会以为是 spec **格式**错，真正的错因是**编码**，方向完全误导。
+    # errors="replace" 让注释乱码不影响 id/file/old/new 结构解析。
+    text = spec_path.read_text(encoding="utf-8", errors="replace")
     raw = json.loads(text) if spec_path.suffix.lower() == ".json" else yaml.safe_load(text)
     items = raw.get("mutations", raw) if isinstance(raw, dict) else raw
     if not isinstance(items, list):
@@ -116,13 +121,23 @@ def tool_run_mutation(
         if not fp.is_file():
             results.append({"id": m["id"], "status": "ERROR", "detail": f"Missing file {m['file']}"})
             continue
-        original = fp.read_text(encoding="utf-8")
-        if m["old"] not in original:
+        # 变异目标按**字节**读写，而不是 text。
+        # 原因（实测）：RTL 可能是 GBK/Shift-JIS/latin-1 编码（注释里 0xE9 等字节）。
+        # 若用 read_text(utf-8)：非 UTF-8 文件直接抛 UnicodeDecodeError 冒泡。
+        # 若退而用 errors="replace"：非法字节变 U+FFFD，而下面 finally 的
+        # write_text(original, utf-8) 会把**含 U+FFFD 的文本写回**——实测 latin-1
+        # RTL 的 2 个 0xe9 全部丢失、字节不再一致，RTL 被 try/finally 强还原
+        # **永久破坏**（这正是变异测试最不能接受的：测完把被测代码改坏了）。
+        # 按字节读写则 old/new 编成 UTF-8 字节去匹配，非 ASCII 字节原样保留。
+        original_bytes = fp.read_bytes()
+        old_b = m["old"].encode("utf-8")
+        new_b = m["new"].encode("utf-8")
+        if old_b not in original_bytes:
             results.append({"id": m["id"], "status": "SKIP_UNMATCHED", "detail": "Pattern 'old' not found."})
             continue
-        mutated = original.replace(m["old"], m["new"], 1)
+        mutated_bytes = original_bytes.replace(old_b, new_b, 1)
         try:
-            fp.write_text(mutated, encoding="utf-8")
+            fp.write_bytes(mutated_bytes)
             proc = subprocess.run(test_cmd, cwd=str(wd), capture_output=True, text=True, timeout=timeout_sec, check=False)
             if proc.returncode != 0:
                 killed += 1
@@ -133,7 +148,7 @@ def tool_run_mutation(
             killed += 1
             results.append({"id": m["id"], "status": "KILLED_TIMEOUT", "desc": m["desc"]})
         finally:
-            fp.write_text(original, encoding="utf-8")
+            fp.write_bytes(original_bytes)
 
     total = len(mutations)
     score = round((killed / total) * 100.0, 2) if total else 0.0
