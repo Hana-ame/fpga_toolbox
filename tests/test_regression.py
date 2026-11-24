@@ -1180,6 +1180,37 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
             check("no spurious E011 port-missing from encoding issue", not e011,
                   str([d.get("message") for d in e011][:2]))
 
+    # —— 缺陷 87：RTL 文件名与生成产物同名 → fail-fast，不覆盖产物 ——
+    # 实测：--rtl-file .../reg_slave_axil_wrap.sv 时，复制进 out_dir 会覆盖刚
+    # 生成的 wrapper（dumpvars 2→0，wrapper 内容丢失）却返回 ok=True。
+    # 旧实现检测放在写产物之后，只拦住 RTL 复制却拦不住"产物已写入"。
+    # RTL **内容**必须合法匹配契约（否则先在 E011 失败，到不了冲突检测），
+    # 只是**文件名**与产物冲突。直接复用上面写好的合法 dut.sv 内容。
+    coll_dir = tmp / "tb_coll"
+    coll_dir.mkdir(parents=True, exist_ok=True)
+    coll_rtl = coll_dir / "reg_slave_axil_wrap.sv"
+    coll_rtl.write_bytes((tmp / "tb" / "dut.sv").read_bytes())
+    r_coll = call_tool("emit_testbench", {
+        "spec_path": str(contract), "out_dir": str(tmp / "tb_coll"),
+        "rtl_file": str(coll_rtl),
+    })
+    check("name collision fails fast", not r_coll["ok"], str(r_coll.get("error")))
+    check("collision error names the offending artifact",
+          "same name as a generated artifact" in str(r_coll.get("error"))
+          and "reg_slave_axil_wrap.sv" in str(r_coll.get("error")),
+          str(r_coll.get("error"))[:120])
+    # 关键：fail-fast 发生在写**任何产物**之前。tb_coll 目录和 RTL 是测试自己
+    # 预先放的，但工具不应写入 wrapper/Makefile（否则 wrapper 会被 RTL 覆盖）。
+    check("Makefile not written on collision",
+          not (tmp / "tb_coll" / "Makefile").exists(),
+          "Makefile was written despite collision")
+    check("cocotb testbench not written on collision",
+          not (tmp / "tb_coll" / "test_reg_slave_axil.py").exists(),
+          "cocotb tb was written despite collision")
+    # wrap.sv 仍是测试预放的 RTL 内容（未被工具的 wrapper 覆盖）
+    check("pre-existing RTL not overwritten by generated wrapper",
+          b"module reg_slave(" in (tmp / "tb_coll" / "reg_slave_axil_wrap.sv").read_bytes())
+
     # —— 缺陷 84：非 UTF-8 契约 YAML 同样会崩（用户手写 YAML 注释带本地编码）——
     raw_contract = Path(contract).read_bytes()
     nonutf_contract = tmp / "contract_nonutf8.yaml"

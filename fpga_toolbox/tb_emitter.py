@@ -593,6 +593,25 @@ def tool_emit_testbench(
         artifacts["apb_slave_model"] = apb_model_path
         Path(apb_model_path).write_text(_emit_apb_slave_model(unit), encoding="utf-8")
 
+    # 冲突检测必须**在写任何产物之前**：RTL 文件名若与任一生成产物同名，复制
+    # 进 out_dir 会覆盖刚生成的 wrapper/checker/bind —— 产物被销毁而返回 ok=True
+    # （实测：--rtl-file .../reg_slave_axil_wrap.sv 时 wrapper 被原始 RTL 覆盖，
+    # dumpvars 2→0）。旧实现把检测放在写文件之后，届时 wrapper 已生成，只能
+    # 拦住 RTL 复制却拦不住"产物已写入"，out_dir 仍被污染。
+    # 注意比较 artifacts **value 的文件名**，不是 key（key 是别名，比不中）。
+    if rtl_file:
+        _rtl_name = Path(rtl_file).name
+        _collisions = [a for a in artifacts.values() if Path(a).name == _rtl_name]
+        if _collisions:
+            return err_result(
+                "emit_testbench",
+                f"--rtl-file {_rtl_name!r} has the same name as a generated artifact "
+                f"({', '.join(Path(c).name for c in _collisions)}); copying it into "
+                f"{od} would overwrite the generated wrapper. Rename the RTL file or "
+                "choose a different --out-dir.",
+                diagnostics=dd,
+            )
+
     Path(artifacts["unit_isolation_wrapper"]).write_text(_emit_wrap(unit), encoding="utf-8")
     Path(artifacts["sva_protocol_checker"]).write_text(_emit_sva(unit), encoding="utf-8")
     Path(artifacts["in_situ_bind_file"]).write_text(_emit_bind(unit), encoding="utf-8")
@@ -608,6 +627,7 @@ def tool_emit_testbench(
     mk_path = od / "Makefile"
     # Makefile 需要真实 RTL 文件名（相对路径 → 只取文件名，并复制进 out_dir
     # 让产物自包含；否则 cocotb 在 out_dir 里找不到 RTL）。
+    # 注意：与生成产物的同名冲突已在**写产物之前** fail-fast（见上方冲突检测）。
     rtl_entries = ""
     if rtl_file:
         rtl_src = Path(rtl_file)
