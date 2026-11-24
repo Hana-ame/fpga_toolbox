@@ -390,6 +390,48 @@ def test_verify_invariants_layer3_tolerates_missing_ruff() -> None:
     assert "ruff not installed" in detail or "compileall" in detail, detail
 
 
+def test_install_git_hook_uses_git_toplevel() -> None:
+    """install_git_hook.sh 必须用 git rev-parse 定位仓库根，而非脚本自身位置。
+
+    回归 92：旧实现 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    假设脚本总在 <repo>/scripts/ 下。用户把脚本复制到别处（仓库根、/tmp）运行时，
+    REPO_ROOT 指向错误位置，误报 "Not a git repository" —— 即使 cwd 在真实仓库里。
+    修复后用 git rev-parse --show-toplevel 基于【当前工作目录】定位。
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "install_git_hook.sh"
+    assert script.is_file(), str(script)
+
+    # 语法检查
+    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0, "bash -n failed"
+    # 必须用 git rev-parse 定位仓库根（而非仅依赖脚本自身位置）
+    body = script.read_text(encoding="utf-8")
+    assert "git rev-parse --show-toplevel" in body, "should locate repo via git rev-parse"
+
+    # 端到端：在临时 git 仓库的【子目录】运行，应成功装上 hook
+    with tempfile.TemporaryDirectory() as td:
+        wd = Path(td)
+        subprocess.run(["git", "init", "-q"], cwd=str(wd), check=True)
+        sub = wd / "deep" / "nested"
+        sub.mkdir(parents=True, exist_ok=True)
+        # 把脚本复制到子目录运行（模拟用户从别处执行）
+        (sub / "install_git_hook.sh").write_bytes(script.read_bytes())
+        r = subprocess.run(["bash", "install_git_hook.sh"], cwd=str(sub),
+                           capture_output=True, text=True)
+        assert r.returncode == 0, f"rc={r.returncode} {r.stderr[:200]}"
+        hook = wd / ".git" / "hooks" / "pre-commit"
+        assert hook.is_file(), "pre-commit hook not installed"
+        assert "verify_invariants.py --fast" in hook.read_text(encoding="utf-8")
+
+    # 非 git 目录 → 退出码 1 + 可读提示
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run(["bash", str(script)], cwd=td, capture_output=True, text=True)
+        assert r.returncode == 1, f"rc={r.returncode}"
+        assert "Not a git repository" in r.stderr, r.stderr[:200]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -400,6 +442,7 @@ def main() -> int:
     test_all_11_protocol_classifiers_and_clean_pt_registry()
     test_bug_hunt_regressions()
     test_verify_invariants_layer3_tolerates_missing_ruff()
+    test_install_git_hook_uses_git_toplevel()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
