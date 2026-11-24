@@ -559,6 +559,32 @@ def _parse_with_slang(
     return (list(mods) or None), diags
 
 
+def _read_rtl(rtl_path: Path, diagnostics: Optional[List[str]] = None) -> str:
+    """读 RTL 文本，非 UTF-8 编码时容错降级而不是让整份文件变空。
+
+    实测踩坑：工业界 RTL 常含 GBK / Shift-JIS / latin-1 注释（0xE9 等字节）。
+    `read_text(encoding="utf-8")` 遇到这些字节会抛 UnicodeDecodeError，而调用方
+    把"解析出 0 个端口"当成"文件里没有端口"，于是报出一长串 E011 Port ... missing
+    —— **真正的错因是编码无法解码**，报成的却是"端口不存在"，把用户引向完全
+    错误的排查方向（实测：一份端口完全正确的 latin-1 RTL 报了 19 个 E011）。
+
+    这里改用 errors="replace"：非法字节变 U+FFFD，注释里的乱码不影响模块/端口
+    结构解析，工具照常工作。同时在 diagnostics 里留一条可见信号，说明文件不是
+    合法 UTF-8、有字节被替换（与 slang 回退可见性同一设计原则）。
+    """
+    raw = rtl_path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"{rtl_path.name} is not valid UTF-8; decoded with errors=replace "
+                "(likely GBK/Shift-JIS/latin-1 comments). Non-ASCII bytes in comments "
+                "may appear as U+FFFD, but module/port structure is parsed normally."
+            )
+        return raw.decode("utf-8", errors="replace")
+
+
 def parse_sv_file(
     rtl_path: Path,
     backend: str = "auto",
@@ -595,7 +621,7 @@ def parse_sv_file(
             diagnostics.append("slang not found on PATH; using builtin parser")
         if backend == "slang":
             raise RuntimeError("Requested parser backend 'slang' is unavailable or failed to parse.")
-    return SVModuleParser(sv_tokenize(rtl_path.read_text(encoding="utf-8")), str(rtl_path)).parse_all()
+    return SVModuleParser(sv_tokenize(_read_rtl(rtl_path, diagnostics)), str(rtl_path)).parse_all()
 
 
 def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
@@ -606,7 +632,7 @@ def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
     """
     try:
         builtin_mods = SVModuleParser(
-            sv_tokenize(rtl_path.read_text(encoding="utf-8")), str(rtl_path)
+            sv_tokenize(_read_rtl(rtl_path)), str(rtl_path)
         ).parse_all()
     except Exception:
         return

@@ -1135,6 +1135,33 @@ def test_contract_path_waveform_and_w014(tmp: Path) -> None:
         # RTL 已复制进 out_dir，产物自包含（cocotb 在 out_dir 里找不到外部 RTL）
         check("RTL copied into out_dir so Makefile is self-contained",
               (mk.parent / "dut.sv").is_file())
+        # 缺陷 83：非 UTF-8 RTL（工业界 GBK/Shift-JIS/latin-1 注释常见）必须容错，
+        # 而不是抛未捕获的 UnicodeDecodeError 冒泡成 ok=false + 一句原始异常。
+        # 且复制必须按字节（write_bytes），保留原始编码。
+        # 用本测试自己写的那份 inline dut（不要用 src —— 那是 wrapper 的内容）
+        nonutf = mk.parent / "dut_nonutf8.sv"
+        dut_bytes = (mk.parent / "dut.sv").read_bytes()
+        nonutf.write_bytes(
+            dut_bytes.replace(
+                b"module reg_slave(",
+                b"// commentaire latin-1: \xe9\xe8 pr\xe9c\xe9dent\nmodule reg_slave(",
+                1,
+            )
+        )
+        r2 = call_tool("emit_testbench", {
+            "spec_path": str(contract), "out_dir": str(tmp / "tb_nonutf8"),
+            "rtl_file": str(nonutf),
+        })
+        check("non-UTF-8 RTL still emits ok (tolerant decode)", r2["ok"],
+              str(r2.get("error")))
+        if r2["ok"]:
+            copied = Path(r2["data"]["artifacts"]["unit_isolation_wrapper"]).parent / nonutf.name
+            check("non-UTF-8 RTL copied byte-for-byte",
+                  copied.is_file() and copied.read_bytes() == nonutf.read_bytes())
+            # 不应把编码问题误报成"端口缺失"（实测旧版报 19 个 E011）
+            e011 = [d for d in r2.get("diagnostics", []) if d.get("code") == "E011"]
+            check("no spurious E011 port-missing from encoding issue", not e011,
+                  str([d.get("message") for d in e011][:2]))
 
     # —— 缺陷 C：run_sim waveform=True 但无波形 → W014 警告（ok 仍为 True）——
     # 需要真跑一次脚本，而 run_sim 在跑之前会检查 Verilator >= 5.040（E020），

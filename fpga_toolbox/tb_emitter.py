@@ -612,7 +612,11 @@ def tool_emit_testbench(
     if rtl_file:
         rtl_src = Path(rtl_file)
         if rtl_src.is_file():
-            (od / rtl_src.name).write_text(rtl_src.read_text(encoding="utf-8"))
+            # 按字节复制而不是 read_text/write_text：RTL 可能是 GBK/Shift-JIS/
+            # latin-1 编码（工业界注释很常见），utf-8 解码会抛未捕获的
+            # UnicodeDecodeError 直接冒泡（实测：ok=false + 一句原始异常，
+            # 完全没指向编码问题）。按字节复制保留原始编码，交由解析器容错。
+            (od / rtl_src.name).write_bytes(rtl_src.read_bytes())
             rtl_entries = rtl_src.name
     mk_path.write_text(_emit_cocotb_makefile(mod, rtl_entries), encoding="utf-8")
     artifacts["makefile"] = str(mk_path.resolve())
