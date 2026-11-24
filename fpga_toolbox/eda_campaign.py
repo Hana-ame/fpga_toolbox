@@ -434,6 +434,11 @@ def clean_netlist_for_pt(
 # 执行 touch）。这里做白名单校验，从源头挡住注入。
 _HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# remote_work_dir 允许目录分隔符（~/work、/tmp/foo），但绝不允许 shell 元字符：
+# 它会被原文插进**远端执行**的脚本里（use_dev_shm=False 路径的
+# `mkdir -p {remote_work_dir}/{tag}`）。漏校验它会让 host/tag/script 三道白名单
+# 形同虚设 —— 攻击面从另一条参数绕进来。
+_REMOTE_WORK_DIR_RE = re.compile(r"^[A-Za-z0-9_./~\-]+$")
 
 
 def generate_remote_run_script(
@@ -447,7 +452,9 @@ def generate_remote_run_script(
 
     参数会被写入待执行的 shell 脚本，因此做严格白名单校验：``host`` 只允许
     主机名/用户@主机/IPv6 括号形式，``tag`` 只允许 ``[A-Za-z0-9_.-]``，
-    ``local_script_name`` 必须是纯文件名（不含路径与 shell 元字符）。
+    ``local_script_name`` 必须是纯文件名（不含路径与 shell 元字符），
+    ``remote_work_dir`` 允许目录分隔符但同样拒绝 shell 元字符（它会被原文插进
+    远端执行的脚本）。
     非法输入抛 ``ValueError`` 而不是生成一个带注入的脚本。
     """
     if not _HOST_RE.match(host):
@@ -460,6 +467,13 @@ def generate_remote_run_script(
         raise ValueError(
             f"Invalid tag {tag!r}: allowed characters are [A-Za-z0-9_.-]. "
             "The tag is used as a /dev/shm directory name in the generated script."
+        )
+    if not _REMOTE_WORK_DIR_RE.match(remote_work_dir):
+        raise ValueError(
+            f"Invalid remote_work_dir {remote_work_dir!r}: allowed characters are "
+            "[A-Za-z0-9_./~-] (e.g. ~/work, /tmp/foo). Shell metacharacters are "
+            "rejected because remote_work_dir is interpolated verbatim into the "
+            "script executed on the remote side (use_dev_shm=False path)."
         )
     base = Path(local_script_name).name
     if base != local_script_name or not re.match(r"^[A-Za-z0-9_.-]+$", base):

@@ -496,6 +496,44 @@ def test_mutation_target_containment() -> None:
         assert "assign y = 1;" in (wd / "good.sv").read_text(encoding="utf-8")  # 已还原
 
 
+def test_remote_work_dir_injection_blocked() -> None:
+    """Defect 100: generate_remote_run_script 未校验 remote_work_dir。
+
+    host/tag/local_script_name 都有白名单，但 remote_work_dir 会被原文插进
+    **远端执行**的脚本（use_dev_shm=False 路径的
+    `mkdir -p {remote_work_dir}/{tag}`）。漏校验它让三道白名单形同虚设。
+    """
+    print("coverage: remote_work_dir shell-injection blocked")
+    from fpga_toolbox.eda_campaign import generate_remote_run_script
+
+    # 注入向量必须被拒
+    for bad in ["x; touch /tmp/PWNED; #", "$(reboot)", "`id`", "~/x && rm -rf /", "a|b"]:
+        try:
+            generate_remote_run_script("h", "t", "run.sh",
+                                       remote_work_dir=bad, use_dev_shm=False)
+            raise AssertionError(f"remote_work_dir injection NOT rejected: {bad!r}")
+        except ValueError:
+            pass
+
+    # 合法目录仍可用，且原样出现在脚本里（无元字符）
+    for good in ["~/work", "/tmp/eda", "/home/user/proj_run"]:
+        s = generate_remote_run_script("h", "t", "run.sh",
+                                       remote_work_dir=good, use_dev_shm=False)
+        assert f"mkdir -p {good}/t && cd {good}/t" in s, (good, s)
+
+    # dev_shm=True 路径不引用 remote_work_dir，但仍走校验且不受影响
+    s_shm = generate_remote_run_script("h", "t", "run.sh",
+                                       remote_work_dir="~/work", use_dev_shm=True)
+    assert "mkdir -p /dev/shm/t" in s_shm
+    # dev_shm=True 下非法 remote_work_dir 同样被拒（一致性）
+    try:
+        generate_remote_run_script("h", "t", "run.sh",
+                                   remote_work_dir="; bad", use_dev_shm=True)
+        raise AssertionError("dev_shm=True should still validate remote_work_dir")
+    except ValueError:
+        pass
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -508,6 +546,7 @@ def main() -> int:
     test_verify_invariants_layer3_tolerates_missing_ruff()
     test_install_git_hook_uses_git_toplevel()
     test_mutation_target_containment()
+    test_remote_work_dir_injection_blocked()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
