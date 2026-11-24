@@ -79,6 +79,8 @@
 
 - [50-remote-work-dir-injection.md](50-remote-work-dir-injection.md) — `generate_remote_run_script` 的 `remote_work_dir` 参数被原文插进**远端执行**的脚本，却没有任何白名单（host/tag/local_script_name 都有校验）。实测 `remote_work_dir='x; touch /tmp/PWNED; #'` 让远端 bash 真的执行 touch，使三道白名单形同虚设。加 `_REMOTE_WORK_DIR_RE`（允许目录分隔符与 `~`，拒绝 shell 元字符）
 
+- [51-cli-atfile-structured-error.md](51-cli-atfile-structured-error.md) — CLI 的 `@file` 参数指向不存在的路径时，`read_text` 抛 `FileNotFoundError`（`OSError` 子类）而非 `ValueError`，`main()` 的 `except ValueError` 接不住，堆栈直接冒泡。`_parse_json_or_file` 加 `except OSError` 归一成 `ValueError`，与「非法 UTF-8」「JSON 语法错」同构处理
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

@@ -534,6 +534,43 @@ def test_remote_work_dir_injection_blocked() -> None:
         pass
 
 
+def test_cli_atfile_errors_structured() -> None:
+    """Defect 101: @file 指向不存在的路径让 FileNotFoundError 冒泡成堆栈。
+
+    main() 只捕 ValueError，而 read_text 抛的是 FileNotFoundError（OSError
+    子类），不是 ValueError —— 于是「路径打错 / 文件被删」这类用户输入错误
+    直接变成 Python 堆栈，而不是与工具信封同构的结构化错误。
+    """
+    print("coverage: CLI @file missing-path / bad-JSON -> structured error")
+    import contextlib
+    import io
+
+    from fpga_toolbox.cli import main
+
+    missing = "/nonexistent/dir/does_not_exist.json"
+
+    def _run(argv):
+        # main() 会把结构化 JSON 打到 stdout；吞掉输出，只看返回码
+        with contextlib.redirect_stdout(io.StringIO()):
+            return main(argv)
+
+    # object 参数 @missing（normalize_sim_result 只需 --module-name）
+    assert _run(["normalize_sim_result", "--module-name", "m",
+                 "--coverage-summary", f"@{missing}"]) == 1
+    # 行内非法 JSON 同样结构化
+    assert _run(["normalize_sim_result", "--module-name", "m",
+                 "--coverage-summary", "{not valid json"]) == 1
+
+    # array 参数单个 @missing（提供真实必填文件，避免 argparse 先 SystemExit）
+    with tempfile.TemporaryDirectory() as td:
+        inv = Path(td) / "in.v"
+        inv.write_text("module m(output q); endmodule\n", encoding="utf-8")
+        rc = _run(["clean_pt_netlist", "--in-verilog", str(inv),
+                   "--out-verilog", str(Path(td) / "o.v"),
+                   "--blackbox-modules", f"@{missing}"])
+        assert rc == 1, rc
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -547,6 +584,7 @@ def main() -> int:
     test_install_git_hook_uses_git_toplevel()
     test_mutation_target_containment()
     test_remote_work_dir_injection_blocked()
+    test_cli_atfile_errors_structured()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

@@ -25,6 +25,11 @@ def _parse_json_or_file(raw: str) -> Any:
     导出的 GBK/latin-1 JSON。这里捕获解码异常，抛 ``ValueError`` —— 与
     ``json.JSONDecodeError``（也是 ``ValueError`` 子类）同族，调用方/CLI 的
     既有错误路径能一致处理。
+
+    `@file` 指向的路径不存在时，旧实现让 ``FileNotFoundError``（``OSError``
+    子类）直接冒泡成 Python 堆栈 —— 这与「非法 UTF-8」是同一类用户输入错误
+    （路径打错 / 文件被删 / 相对路径不对），理应得到同构的可读错误。这里一并
+    归一成 ``ValueError``，让 ``main()`` 的 ``except ValueError`` 能接住。
     """
     if raw.startswith("@"):
         path = raw[1:]
@@ -34,6 +39,11 @@ def _parse_json_or_file(raw: str) -> Any:
             raise ValueError(
                 f"@{path} is not valid UTF-8 ({exc}); re-export it as UTF-8 "
                 "before passing it via @file."
+            ) from exc
+        except OSError as exc:
+            raise ValueError(
+                f"@{path} could not be read ({exc}); check the path exists and "
+                "is a readable file."
             ) from exc
     return json.loads(raw)
 
