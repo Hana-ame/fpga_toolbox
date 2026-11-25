@@ -737,6 +737,48 @@ def test_handshake_r2_r4_case_insensitive() -> None:
     assert "R2" not in fp and "R4" not in fp, fp
 
 
+def test_ready_raised_before_case_insensitive() -> None:
+    """Defect 106: _ready_raised_before 大小写敏感，小写 READY 已拉高仍报假 R3。
+
+    _ready_raised_before 被 R1/R3/R2 共用，ready_sig 是规范大写（BREADY），但
+    源码里可能是小写（bready）。旧实现 \b{READY}\b 大小写敏感 —— 小写 TB 里
+    「READY 已拉高」识别不到，R1/R3/R2 全部误判成「READY 未拉高」而报假错误。
+    缺陷 104/105 同根（那两处改了映射与正则，漏了这个共用 helper）。
+    """
+    print("coverage: _ready_raised_before case-insensitive (lowercase READY=1 -> R1)")
+    from fpga_toolbox.tb_linter import scan_handshake
+
+    def _scan(ready_assign: str, sig: str) -> list:
+        with tempfile.TemporaryDirectory() as td:
+            tb = Path(td) / "tb.sv"
+            tb.write_text(
+                "module tb;\ninitial begin\n"
+                f"{ready_assign}\nwait ({sig});\nend\nendmodule\n",
+                encoding="utf-8")
+            return [i["code"] for i in scan_handshake(tb)]
+
+    # READY 已拉高（大写 / 小写 / 非阻塞赋值）-> 都应报 R1（safe），不得假 R3
+    assert "R1" in _scan("BREADY = 1;", "axi.BVALID")
+    assert "R1" in _scan("bready = 1;", "axi.bvalid")   # 修复前报 R3
+    assert "R1" in _scan("bready <= 1;", "axi.bvalid")  # 修复前报 R3
+    for sig in ("axi.bvalid", "bvalid"):
+        assert "R3" not in _scan("bready = 1;", sig), sig
+
+    # 真风险：READY 被拉低 / 根本没有 -> 仍必须报 R3（不得因 IGNORECASE 变假通过）
+    def _scan_src(src: str) -> list:
+        with tempfile.TemporaryDirectory() as td:
+            tb = Path(td) / "tb.sv"
+            tb.write_text(src, encoding="utf-8")
+            return [i["code"] for i in scan_handshake(tb)]
+
+    assert "R3" in _scan_src("module tb;\ninitial begin\n"
+                             "BREADY <= 1'b0;\nwait (axi.BVALID);\nend\nendmodule\n")
+    assert "R3" in _scan_src("module tb;\ninitial begin\n"
+                             "bready <= 1'b0;\nwait (axi.bvalid);\nend\nendmodule\n")
+    assert "R3" in _scan_src("module tb;\ninitial begin\n"
+                             "wait (axi.bvalid);\nend\nendmodule\n")
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -755,6 +797,7 @@ def main() -> int:
     test_validator_bad_offset_no_crash()
     test_handshake_while_case_insensitive_ready()
     test_handshake_r2_r4_case_insensitive()
+    test_ready_raised_before_case_insensitive()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

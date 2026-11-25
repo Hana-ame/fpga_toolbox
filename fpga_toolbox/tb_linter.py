@@ -136,11 +136,14 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
 
     def _ready_raised_before(idx: int, ready_sig: str, window: int = 40) -> bool:
+        # ready_sig 是规范大写（BREADY），但源码里可能是小写（bready）。加
+        # re.IGNORECASE 才能识别小写 TB 里「READY 已拉高」—— 否则 R1/R3/R2 全部
+        # 误判成「READY 未拉高」而报假错误（缺陷 106，与 104/105 同根）。
         for j in range(idx - 1, max(0, idx - window) - 1, -1):
             ln = _strip_comment(lines[j])
-            if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1'b0", ln):
+            if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1'b0", ln, re.IGNORECASE):
                 return False
-            if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1", ln):
+            if re.search(rf"\b{ready_sig}\b\s*(<=|=)\s*1", ln, re.IGNORECASE):
                 return True
         return False
 
