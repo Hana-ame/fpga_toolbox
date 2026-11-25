@@ -278,7 +278,23 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                     body.append(bk)
                 if re.search(r"\bendfunction\b", bk):
                     break
-            rets = [b for b in body if re.match(r"^return\s+[-]?\d+\s*;", b)]
+            # return 一个**常量字面量**（无 if/else/case/for/while）→ stub。
+            # 常量形态：纯整数（0 / -1）、SV 位宽字面量（1'b0 / 8'hFF）、
+            # 未位宽 '0/'1、实数（0.0）。旧正则只认 `^return [-]?\d+;`，漏掉
+            # SV 里最地道的常量 stub 写法（return 1'b0 / '0 / 8'hFF）——
+            # 这些语义上同样是「helper 永远返回固定值、不含任何真实判定」。
+            # 表达式（return a + 1; / return a == 0;）不匹配：字面量必须紧跟
+            # return 且后面直接是分号，不能含标识符/运算符。
+            _const_re = re.compile(
+                r"""^return\s+(?:
+                      [-+]?\d+                            # 纯整数
+                    | [-+]?\d*'[sS]?[bBdDhHoO][0-9a-fA-FxXzZ_]+  # 位宽字面量 1'b0 / 8'hFF
+                    | '[01xXzZ]                          # 未位宽 '0 / '1
+                    | [-+]?\d+\.\d+                      # 实数 0.0
+                    )\s*;$""",
+                re.VERBOSE,
+            )
+            rets = [b for b in body if _const_re.match(b.strip())]
             # function 体只有 return 常量语句（无 if/else/case/for/while）→ stub
             if rets and len(body) <= 4 and not any(
                     re.search(r"\b(if|else|case|for|while)\b", b) for b in body):

@@ -779,6 +779,48 @@ def test_ready_raised_before_case_insensitive() -> None:
                              "wait (axi.bvalid);\nend\nendmodule\n")
 
 
+def test_s1_sv_literal_constant_stub() -> None:
+    """Defect 107: S1 只认纯整数 return 常量，漏掉 SV 地道常量 stub。
+
+    旧正则 `^return [-]?\d+;` 只匹配 return 0 / -1。SV 里最地道的常量 stub
+    写法 return 1'b0 / '0 / 8'hFF / 0.0 语义上同样是「helper 永远返回固定值、
+    不含任何真实判定」，却全部漏报。扩成覆盖纯整数 / 位宽字面量 / 未位宽
+    '0/'1 / 实数，同时保持「含标识符/运算符的表达式」不误报。
+    """
+    print("coverage: S1 catches SV literal constant stubs (1'b0 / '0 / 8'hFF / 0.0)")
+    from fpga_toolbox.tb_linter import scan_handshake
+
+    def _scan(fn_body: str) -> list:
+        with tempfile.TemporaryDirectory() as td:
+            tb = Path(td) / "tb.sv"
+            tb.write_text("module tb;\n" + fn_body + "\nendmodule\n", encoding="utf-8")
+            return [i["code"] for i in scan_handshake(tb)]
+
+    stubs = [
+        ("function int chk();\nreturn 0;\nendfunction"),
+        ("function int chk();\nreturn -1;\nendfunction"),
+        ("function int chk();\nreturn 1;\nendfunction"),
+        ("function bit chk();\nreturn 1'b0;\nendfunction"),      # 修复前漏报
+        ("function logic chk();\nreturn '0;\nendfunction"),      # 修复前漏报
+        ("function [7:0] chk();\nreturn 8'hFF;\nendfunction"),  # 修复前漏报
+        ("function real chk();\nreturn 0.0;\nendfunction"),     # 修复前漏报
+    ]
+    for body in stubs:
+        codes = _scan(body)
+        assert "S1" in codes, (body, codes)
+
+    # 不误伤：含标识符/运算符的表达式、含分支的函数，不是常量 stub
+    legit = [
+        ("function int chk(input int a);\nreturn a + 1;\nendfunction"),
+        ("function bit chk(input [7:0] a);\nreturn a == 0;\nendfunction"),
+        ("function bit chk(input [7:0] a);\nif (a == 0) return 1'b1;"
+         "\nelse return 1'b0;\nendfunction"),
+    ]
+    for body in legit:
+        codes = _scan(body)
+        assert "S1" not in codes, (body, codes)
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -798,6 +840,7 @@ def main() -> int:
     test_handshake_while_case_insensitive_ready()
     test_handshake_r2_r4_case_insensitive()
     test_ready_raised_before_case_insensitive()
+    test_s1_sv_literal_constant_stub()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

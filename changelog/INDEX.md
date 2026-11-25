@@ -83,6 +83,7 @@
 - [54-handshake-while-case-insensitive-ready.md](54-handshake-while-case-insensitive-ready.md) — `lint_tb` while 分支的 READY 映射用 `sig.replace("axi.", "")` 不做大小写归一（wait 分支用 `.split(".")[-1].upper()`）。实测同一份代码 `while (!axi.BVALID)` 报 R1 而 `while (!axi.bvalid)` 报 R3 假错误 —— 纯大小写差异，真实的第三方 TB 大量用小写全中。改用与 wait 分支一致的归一
 - [55-handshake-r2-r4-case-insensitive.md](55-handshake-r2-r4-case-insensitive.md) — `lint_tb` 的 R4（等 VALID 后立刻拉低 READY）/ R2（if(VALID) 分支内拉低 READY）正则只认大写 `axi\.([A-Z_]+VALID)`，且 drop 检测 `\b{READY}\b` 大小写敏感。实测同一握手 bug `axi.BVALID` 报 R4/R2 而 `axi.bvalid` **静默漏报** —— 真实第三方 TB 大量用小写，死锁风险被 lint 说「没问题」。与缺陷 104 同根（假阴性方向）。加 `re.IGNORECASE` + `.upper()` 映射
 - [56-ready-raised-before-case-insensitive.md](56-ready-raised-before-case-insensitive.md) — `_ready_raised_before` 被 R1/R3/R2 三条规则共用，`ready_sig` 是规范大写但源码可能是小写，`\b{ready_sig}\b` 大小写敏感。实测 `bready = 1; wait(axi.bvalid);` 仍报假 R3（READY 已拉高却判「未拉高」）。缺陷 104/105 改了各自位置漏了这个共用 helper。两处搜索加 `re.IGNORECASE`，并验证拉低/无 READY 仍报 R3（不假通过）
+- [57-s1-sv-literal-constant-stub.md](57-s1-sv-literal-constant-stub.md) — `lint_tb` S1（验证 helper 只返回常量 = stub）旧正则 `^return [-]?\d+;` 只认纯整数，漏掉 SV 最地道的常量 stub `return 1'b0 / '0 / 8'hFF / 0.0` —— 语义与 `return 0;` 等价（helper 无任何真实判定，静默通过的根源）。假阴性，与 105 同向。扩成覆盖纯整数/位宽字面量/未位宽 '0/'1/实数，保留无分支守卫，表达式 `return a+1` 与含分支函数不误报
 
 ## 文档交付
 
