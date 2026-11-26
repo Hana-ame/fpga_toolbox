@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import asdict
@@ -392,12 +393,20 @@ def _emit_bind(u: CompiledUnitIR) -> str:
 
 def _emit_cocotb(u: CompiledUnitIR) -> str:
     b, ax, tp = u.boundary, u.boundary.axil, u.test_plan
-    # 用 repr() 而不是 json.loads(r"""...""")：寄存器/非法地址描述来自用户契约，
-    # 只要出现 `"""`（或结尾反斜杠）就会让生成的 Python 源码 SyntaxError ——
-    # 而工具已经报 ok=True，用户拿到的是一个根本跑不起来的 cocotb 测试台。
-    # repr() 产出的是合法的 Python 字符串字面量，任意内容都能安全往返。
-    regs = repr([asdict(r) for r in tp.register_rules])
-    ills = repr([asdict(i) for i in tp.illegal_addr_rules])
+    # 需要同时满足两个约束：
+    #   (1) 内容要能安全嵌进生成的 Python 源码 —— 契约描述里可能有 `"""` 或结尾
+    #       反斜杠，用 `r"""..."""` 会 SyntaxError；
+    #   (2) 嵌进去的东西必须是**合法 JSON** —— 生成代码是 `json.loads(...)`。
+    #
+    # 上一版只做了 (1)：直接 `repr(list)`，得到的是 Python repr（单引号），
+    # `json.loads("[{'rule_id': ...}]")` 直接抛
+    # `JSONDecodeError: Expecting property name enclosed in double quotes` ——
+    # 只要 spec 里有任何一个寄存器，生成的 cocotb 测试一导入就崩，而工具报 ok=True。
+    #
+    # 正确做法：**先 json.dumps 得到合法 JSON，再用 repr() 转义成 Python 字符串
+    # 字面量**。repr 只负责"安全嵌入"，JSON 合法性由 json.dumps 保证。
+    regs = repr(json.dumps([asdict(r) for r in tp.register_rules]))
+    ills = repr(json.dumps([asdict(i) for i in tp.illegal_addr_rules]))
     rst_assert = 0 if b.reset.active_low else 1
     rst_idle = 1 - rst_assert
     return f'''import json, random, cocotb
@@ -406,8 +415,8 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
 
-REGS = json.loads({regs!r})
-ILLS = json.loads({ills!r})
+REGS = json.loads({regs})
+ILLS = json.loads({ills})
 STRESS = {{"random_backpressure": {tp.stress_profile.random_backpressure}, "iterations": {tp.stress_profile.iterations}, "seed": {tp.stress_profile.seed}}}
 REPORT = {{"module": "{b.module_name}", "seed": {tp.stress_profile.seed},
           "completed": False, "checks": []}}
@@ -704,15 +713,30 @@ def tool_emit_testbench(
             # inc 可能在 RTL 同级、RTL 父目录、或项目根（实测三种布局都见过，
             # 旧实现只查 RTL 同级 → 漏掉项目根布局，复现 make_project fixture）。
             import shutil
-            _inc_dst = od / "inc"
-            if _inc_dst.exists():
-                shutil.rmtree(_inc_dst)
-            for _cand in (rtl_src.parent / "inc",
-                          rtl_src.parent.parent / "inc",
-                          Path(rtl_file).resolve().parent / "inc"):
-                if _cand.is_dir():
-                    shutil.copytree(_cand, _inc_dst)
-                    break
+
+            _inc_dst = (od / "inc").resolve()
+            _src_incs = [
+                (rtl_src.parent / "inc").resolve(),
+                (rtl_src.parent.parent / "inc").resolve(),
+                (Path(rtl_file).resolve().parent / "inc").resolve(),
+            ]
+            # **致命保护**：当 out_dir 恰好是 RTL 所在目录时，od/"inc" 就是
+            # 用户自己的源码 inc/ 目录。旧实现无条件 `shutil.rmtree(_inc_dst)`
+            # 再 copytree —— 实测 `--out-dir <rtl 目录> --rtl-file <rtl>` 会把用户
+            # 的 inc/defs.svh **永久删除**（工具还报 ok=True）。这是毁数据，不是
+            # 输出瑕疵，必须先判"目标与任一源是同一路径"并完全跳过该步骤。
+            _same_as_src = any(_inc_dst == _src for _src in _src_incs)
+            if _same_as_src:
+                # 源即目标：无需复制（本来就在原地），更不能先删。
+                pass
+            else:
+                if _inc_dst.exists():
+                    shutil.rmtree(_inc_dst)
+                for _cand in _src_incs:
+                    if _cand.is_dir():
+                        # copytree 目标是 od/"inc"；用已存在的 od 确保父目录在
+                        shutil.copytree(_cand, od / "inc")
+                        break
     mk_path.write_text(_emit_cocotb_makefile(mod, rtl_entries), encoding="utf-8")
     artifacts["makefile"] = str(mk_path.resolve())
     return ok_result(

@@ -2182,6 +2182,110 @@ endmodule
         assert "[1:0]" in cs_decl, cs_decl
 
 
+def test_no_user_data_destruction_and_valid_cocotb_json() -> None:
+    """Defect 126: 三处会毁用户数据 / 必崩的缺陷。
+
+    1. `_emit_cocotb` 曾把 Python `repr()`（单引号）塞进 `json.loads(...)`：
+       只要 spec 里有任何寄存器，生成的 cocotb 测试一导入就
+       `JSONDecodeError: Expecting property name enclosed in double quotes`。
+       （我上一轮为修「描述含三引号」把 `json.dumps` 改成了 `repr`，引入了这个
+       回归 —— 正确做法是 `repr(json.dumps(...))`：repr 只负责安全嵌入，
+       JSON 合法性由 json.dumps 保证。）
+    2. `tool_emit_testbench` 无条件 `shutil.rmtree(od / "inc")` 再拷贝。
+       当 `out_dir == rtl_src.parent` 时 `od/"inc"` 就是**用户自己的源码
+       inc/ 目录** —— 实测 `inc/defs.svh` 被永久删除，工具报 ok=True。
+    3. `emit_protocol_testbench` 没做输入/产物同名检查：用户把上次生成的
+       `tb_<mod>_<proto>.sv` 改名后当 RTL 传回、且 out_dir 同目录时，生成的 TB
+       直接覆盖用户 RTL，工具报 ok=True。
+    """
+    print("coverage: cocotb JSON validity + no rmtree/overwrite of user sources")
+    import ast as _ast
+
+    pm = {k: f"s_axil_{k}" for k in (
+        "awaddr", "awvalid", "awready", "wdata", "wstrb", "wvalid", "wready",
+        "bresp", "bvalid", "bready", "araddr", "arvalid", "arready",
+        "rdata", "rresp", "rvalid", "rready")}
+
+    # ---- 1) 生成的 REGS/ILLS 必须是合法 JSON（且源码本身是合法 Python）----
+    for name in ('evil """ desc', "ends with backslash \\", "plain"):
+        with tempfile.TemporaryDirectory() as td:
+            spec = {
+                "schema_version": "1.0",
+                "boundary": {"module_name": "m", "clock": {"port": "clk"},
+                             "reset": {"port": "rst_n"}, "axi4_lite": {"port_map": pm}},
+                "test_plan": {"register_rules": [
+                    {"rule_id": "R1", "name": name, "offset": 0,
+                     "access": "RW", "reset_value": 0}]},
+            }
+            sp = Path(td) / "s.json"
+            sp.write_text(json.dumps(spec), encoding="utf-8")
+            r = call_tool("emit_testbench", {"spec_path": str(sp), "out_dir": str(Path(td) / "out")})
+            assert r["ok"], (name, str(r.get("error"))[:200])
+            tb = Path(r["data"]["artifacts"]["cocotb_testbench"]).read_text(encoding="utf-8")
+            _ast.parse(tb)  # 必须仍是合法 Python
+            regs_line = next(ln for ln in tb.splitlines() if ln.startswith("REGS"))
+            ns = {"json": json}
+            exec(regs_line, ns)  # 必须真的是 json.loads 能解析的
+            assert ns["REGS"][0]["name"] == name, (name, ns["REGS"])
+
+    # ---- 2) out_dir == RTL 目录时，用户 inc/ 绝不能被删 ----
+    rtl_lines = ['`include "defs.svh"', "module dut (", "  input logic clk,",
+                 "  input logic rst_n,"]
+    for n in ("awaddr", "awvalid", "wdata", "wstrb", "wvalid", "araddr", "arvalid",
+              "bready", "rready"):
+        w = "[7:0] " if n in ("awaddr", "wdata") else ("[3:0] " if n == "wstrb" else "")
+        rtl_lines.append(f"  input  logic {w}s_axil_{n},")
+    outs = [("awready", ""), ("wready", ""), ("bvalid", ""), ("bresp", "[1:0] "),
+            ("arready", ""), ("rvalid", ""), ("rresp", "[1:0] "), ("rdata", "[7:0] ")]
+    for n, w in outs:
+        rtl_lines.append(f"  output logic {w}s_axil_{n},")
+    rtl_lines[-1] = rtl_lines[-1].rstrip(",")
+    rtl_lines += [");", "endmodule"]
+    rtl_src = "\n".join(rtl_lines) + "\n"
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "inc").mkdir()
+        header = root / "inc" / "defs.svh"
+        header.write_text("// USER PRECIOUS HEADER\n", encoding="utf-8")
+        dut = root / "dut.sv"
+        dut.write_text(rtl_src, encoding="utf-8")
+        spec = {
+            "schema_version": "1.0",
+            "boundary": {"module_name": "dut", "clock": {"port": "clk"},
+                         "reset": {"port": "rst_n"}, "axi4_lite": {"port_map": pm}},
+            "test_plan": {"register_rules": [
+                {"rule_id": "R1", "name": "C", "offset": 0, "access": "RW",
+                 "reset_value": 0}]},
+        }
+        sp = root / "spec.json"
+        sp.write_text(json.dumps(spec), encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "spec_path": str(sp), "out_dir": str(root), "rtl_file": str(dut)})
+        assert r["ok"], str(r.get("error"))[:300]
+        assert header.is_file(), "user's inc/defs.svh was DELETED by emit_testbench"
+        assert header.read_text(encoding="utf-8") == "// USER PRECIOUS HEADER\n"
+
+        # 正常路径（out_dir 不同于 RTL 目录）仍要把 inc 复制过去
+        out2 = root / "out2"
+        r2 = call_tool("emit_testbench", {
+            "spec_path": str(sp), "out_dir": str(out2), "rtl_file": str(dut)})
+        assert r2["ok"], str(r2.get("error"))[:300]
+        assert (out2 / "inc" / "defs.svh").is_file(), "inc not copied to a separate out_dir"
+
+    # ---- 3) 产物与输入 RTL 同名时必须拒绝，不能覆盖用户文件 ----
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = ROOT / "examples" / "multi_bus_ref" / "pcie_tlp_ep.sv"
+        target = root / "tb_pcie_tlp_ep_pcie.sv"
+        target.write_bytes(src.read_bytes())
+        before = target.read_bytes()
+        r = emit_protocol_testbench(str(target), str(root), "pcie")
+        assert r["ok"] is False, "must refuse to overwrite the input RTL"
+        assert "overwrite" in str(r["error"]).lower(), str(r["error"])[:200]
+        assert target.read_bytes() == before, "user RTL was overwritten"
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2219,6 +2323,7 @@ def main() -> int:
     test_strobe_width_follows_real_port()
     test_ahb_trans_size_resp_widths_follow_port()
     test_ddr_control_widths_follow_port()
+    test_no_user_data_destruction_and_valid_cocotb_json()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

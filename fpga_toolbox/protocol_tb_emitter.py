@@ -825,6 +825,24 @@ def _emit_pcie_tb(
     has_lanes = "LANES" in params
     has_dw = "DW" in params
     matrix = has_gen and has_lanes
+
+    # cfg_speed / cfg_lanes 的位宽必须能表示要断言的配置值。
+    #
+    # 旧实现的期望值是 `{sw}'(GEN)` / `{lw}'(LANES)` —— **先截断再比较**。
+    # 若 DUT 的 cfg_lanes 只有 5 位而 LANES=16，TB 期望 `5'(16) == 0`，DUT 内部
+    # 若是 `assign cfg_lanes = 5'(LANES)` 也得到 0，两边"一致"于是判 PASS：
+    # 声称验证了 x16，实际验的是 lanes=0。这是**假通过**，比编译失败隐蔽得多
+    # （实测 5 位 cfg_lanes 的 DUT 9 个 suite 全 PASS）。
+    #
+    # 正确做法：期望值用**真实配置值**、不截断（`{lns} !== {lw}'(LANES)` 改成
+    # 与整型 LANES 比较）。装不下时仿真会诚实地 FAIL，而不是自欺欺人地通过。
+    _cfg_overflow: List[str] = []
+    for _g in _PCIE_GENS:
+        if _g >= (1 << sw):
+            _cfg_overflow.append(f"Gen{_g} (cfg_speed is {sw}-bit)")
+    for _n in _PCIE_LANES:
+        if _n >= (1 << lw):
+            _cfg_overflow.append(f"x{_n} (cfg_lanes is {lw}-bit)")
     # DW 是否真的「参数化 tdata 位宽」：默认 LANES 推导值必须等于真实端口位宽。
     dw_is_live = has_dw and matrix and real_dw == _pcie_dw_for_lanes(int(params["LANES"]))
 
@@ -847,8 +865,24 @@ def _emit_pcie_tb(
                 else f"  localparam int DW = {real_dw};  // RTL 实际 tdata 位宽（不随 LANES 变）\n"
             )
         )
+        # 把**两端都零扩展**到同一宽度再比较，避免 NEQCASE 的宽度告警（旧版
+        # `$unsigned(port) !== 32 位整型` 会报 WIDTHEXPAND）。
+        # 语义：先判断 LANES 能否装进 cfg_lanes 的位宽；装不下就是"该配置在这颗
+        # DUT 上不可表示"——直接判 FAIL，而不是像旧实现那样两边同时截断成 0
+        # 互相印证成 PASS（实测 5 位 cfg_lanes 的 DUT 9 个 suite 全 PASS）。
+        _cmp_w = max(sw, lw, 32)
         link_expect = (
-            f"!pcie_link_up || {spd} !== {sw}'(GEN) || {lns} !== {lw}'(LANES)"
+            f"!pcie_link_up"
+            f" || ({sw} <= 31 && GEN >= (1 << {sw}))"
+            f" || ({lw} <= 31 && LANES >= (1 << {lw}))"
+            f" || {sw}'($unsigned({spd})) !== {sw}'(GEN % (1 << {sw}))"
+            f" || {lw}'($unsigned({lns})) !== {lw}'(LANES % (1 << {lw}))"
+        )
+        del _cmp_w
+        link_expect_note = (
+            f"  // NOTE: cfg_speed={sw}-bit, cfg_lanes={lw}-bit; comparisons use "
+            f"the TRUE GEN/LANES value (mod port range) so unrepresentable "
+            f"configs fail instead of silently matching a truncated value.\n"
         )
         link_exp_txt = 'up=1,Gen%0d,x%0d'
         link_got_fmt = "up=%0b,Gen=%0d,x%0d"  # 参数见下方 link_args
@@ -872,6 +906,7 @@ def _emit_pcie_tb(
             f"        || !({lns} == 1 || {lns} == 4 || {lns} == 16)"
         )
         link_exp_txt = "up=1,1<=Gen<=5,lanes in {1,4,16}"
+        link_expect_note = ""
         link_got_fmt = "up=%0b,Gen=%0d,x%0d"
         cid = "PCIE_LINK_001"
         proto_txt = "PCIe-fixed"
@@ -895,7 +930,8 @@ def _emit_pcie_tb(
         tlp_proto = "PCIe-fixed"
 
     link_check = (
-        f"    if ({link_expect}) begin\n"
+        link_expect_note
+        + f"    if ({link_expect}) begin\n"
         f'      $display("[CHECK] id={cid} | proto={proto_txt} | cat=link_cfg | '
         f'tx=LTSSM link_up + cfg check (DW=%0d) | exp={link_exp_txt} | got={link_got_fmt} | status=FAIL",\n'
         f"               {link_args});\n"
@@ -1346,12 +1382,29 @@ def emit_protocol_testbench(
     # 并以 "Exiting due to N warning(s)" 阻断构建，而工具已报 ok=True。
     top_module = f"tb_{mod_name}_{proto}"
     tb_path = od / f"{top_module}.sv"
+    sim_path = od / f"run_{mod_name}_{proto}.sh"
+
+    # **绝不能覆盖用户的输入文件**：当 out_dir 恰好是 rtl_file 所在目录、且
+    # 用户文件与某个产物同名时（例如用户把上一次生成的 tb_*.sv 改名后当 RTL
+    # 传回来），旧实现直接 write_text 覆盖 —— 实测用户 RTL 内容消失、工具报
+    # ok=True。这是毁数据。两个产物都要在写之前核对。
+    _rtl_resolved = rp.resolve()
+    for _out in (tb_path, sim_path):
+        if _out.resolve() == _rtl_resolved:
+            return err_result(
+                "emit_testbench",
+                f"Refusing to emit: generated artifact {_out.name!r} would overwrite "
+                f"the input RTL file {rp.name!r} (out_dir is the RTL's own directory "
+                "and the names collide). Choose a different out_dir or rename the "
+                "input file.",
+                data={"protocol": proto, "colliding_artifact": _out.name,
+                      "rtl_file": str(_rtl_resolved)},
+            )
     # 先注入波形 dump，再套 lint_off：dump 要落在 initial 块内，
     # 而 lint_off 改的是 module 头部之后的 pragma 区，两者互不干扰。
     tb_with_dump = add_waveform_dump(tb_src, top_module)
     tb_path.write_text(add_lint_off(tb_with_dump), encoding="utf-8")
 
-    sim_path = od / f"run_{mod_name}_{proto}.sh"
     sim_path.write_text(
         _emit_run_script(proto, mod_name, rp, tb_path, pcie_suites=pcie_suites, pcie_matrix=pcie_matrix),
         encoding="utf-8",

@@ -113,6 +113,8 @@
 
 - [71-ddr-control-widths.md](71-ddr-control-widths.md) — DDR3/DDR4 模板把整组控制信号塞进同一个 `logic` 标量声明（`ddr3_cke = 1, ddr3_cs_n = 1, ...`），但**多 rank 控制器用多位 CKE/CS_n**（每 rank 一位，JEDEC 标准做法）。DUT 用 2 位 `ddr3_cke` 时 TB 侧 2 条 WIDTHEXPAND → Verilator 警告即错误、构建失败而工具报 `ok=True`。修复：DDR3 的 cke/cs_n/ras_n/cas_n/we_n/rd_valid 与 DDR4 的 act_n/cs_n/odt/rd_valid 全部 `_pw()` 取真实位宽并独立声明；驱动改成按位赋值（多位信号无法用 `{ras,cas,we} = cmd` 拼接整体赋值，否则 WIDTHTRUNC）与 `'0`/`'1` 全位赋值。两台变体 TB 侧告警清零，6 参考 DUT 全绿
 
+- [72-data-destruction-and-cocotb-json.md](72-data-destruction-and-cocotb-json.md) — 三处**工具报 `ok=True` 的同时毁掉用户东西**的缺陷，优先级最高。① 生成的 cocotb 用 `json.loads(repr(...))`：repr 是 Python 字面量（单引号）不是合法 JSON，**只要 spec 里有任何寄存器，测试一导入就 JSONDecodeError 必崩**（这是我上一轮修「描述含三引号」时引入的回归 —— 修 A 引入 B；正解是 `repr(json.dumps(...))`，repr 只负责安全嵌入、JSON 合法性由 json.dumps 保证）；② `emit_testbench` 无条件 `rmtree(od/"inc")`：`out_dir` 恰为 RTL 目录时把**用户源码 inc/ 目录永久删除**（实测 `inc/defs.svh` 消失、工具仍报 ok）；③ `emit_protocol_testbench` 不检查产物与输入同名：用户把上次的 `tb_*.sv` 当 RTL 传回时**静默覆盖用户 RTL**。均已修复并加断言
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
