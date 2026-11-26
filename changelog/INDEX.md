@@ -121,6 +121,8 @@
 
 - [75-residual-and-rerun-gates.md](75-residual-and-rerun-gates.md) — 三处「判定信号选错」（用子串存在代替状态一致）。① `check_residual_mutations` 用 `m["new"] in txt` 判残留，**删除型变异（`new=""`）时 `"" in txt` 恒真** → 任何 old 已消失的文件都误报 E030，合法的删除型变异永远无法运行；② 变异主循环 `replace(...,1)` 只改第一处，old 多次出现时「第一处已改、第二处仍是 old」→ `old in txt` 为真 → **漏报真实混合态**（实测返回空残留列表）；③ `verify_suite_identities` 用 `setdefault`，同名 suite **重跑**不重置状态 → 第一次 PASS、第二次被截断时沿用旧 PASS 与 summaries，判 `all_verified=True`。修复：删除型跳过残留检查（与合法变异态不可区分，还原靠 try/finally）、增加「old 与 new 并存」混合态判据、suite 头每次重置并清空该 suite 汇总记录。真实 9-suite pcie 日志不误伤
 
+- [76-sv-parser-tokenizer-header.md](76-sv-parser-tokenizer-header.md) — review 第四类（SV 解析核心）确认 5 项，共同后果是 **builtin 后端（slang 不可用时的唯一后端）系统性给出错误位宽/参数**。① 分词器 `IDENT` 不允许 `$` 开头且 `$` 不在 `SYM` 里 → **`$clog2(DEPTH)` 被丢成 `clog2(DEPTH)`、宽度退化 1**（slang 正确给 4）；② `<<`/`>>` 被拆成单字符，`_parse_params` 用空格重拼成 `< <` → `parameter int W = 1 << 3` 解析失败、params 空、端口退化 1；③ `module automatic foo` 把生命周期修饰符当模块名（模块名变成 `automatic`、端口全空）；④ `module foo import pkg::*; #(...)` 遇 import 即跳出，**参数与端口全丢**；⑤ 多维 packed `[1:0][7:0]` 总位宽应为乘积 16，builtin 给 8、slang 给 2（**两个后端都错**）。全部修复后两后端结果一致
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

@@ -2542,6 +2542,96 @@ def test_residual_and_suite_rerun_gates() -> None:
     assert rc["all_verified"] is False and rc["observed"]["apb"] == "FAIL", rc
 
 
+def test_sv_parser_tokenizer_and_header_fixes() -> None:
+    """Defect 130: builtin SV 解析器的 5 处缺陷（分词器 / header / 多维位宽）。
+
+    1. 分词器的 `IDENT` 是 `[A-Za-z_][A-Za-z0-9_$]*`，**不允许 `$` 开头**，
+       也不把 `$` 放进 `SYM` —— `$clog2(DEPTH)` 被静默丢成 `clog2(DEPTH)`，
+       端口宽度退化成 1（slang 正确给 4）。builtin 是 slang 不可用时的后端，
+       于是整体位宽推断全错。
+    2. `<<` / `>>` 被拆成两个单字符 token，`_parse_params` 用
+       `" ".join(t.value ...)` 重新拼成 `< <`，`eval_int_expr` 解析失败 →
+       参数丢失（`parameter int W = 1 << 3` 得到 params={}）、端口宽度退化为 1。
+    3. `module automatic foo (...)` —— 自动机标是生命周期修饰符，旧实现直接取
+       下一个 IDENT 当模块名，于是模块被解析成名字 `automatic`、端口全空。
+    4. `module foo import pkg::*; #(...) (...)` —— header 里的 import 声明让
+       旧实现跳出，**参数与端口全部丢失**。
+    5. 多维 packed 数组 `logic [1:0][7:0]` 总位宽是各维**乘积**（16）：builtin
+       只解析第一维，slang 的 `re.search` 也只取第一维 → 分别得到 8 / 2。
+    """
+    print("coverage: SV tokenizer ($clog2, shifts), module header, multi-dim widths")
+    from fpga_toolbox.core.sv_parser import parse_sv_file, sv_tokenize
+
+    # 1) $ 前缀 token
+    assert [t.value for t in sv_tokenize("$clog2(8)")][0] == "$clog2", \
+        [t.value for t in sv_tokenize("$clog2(8)")]
+    # 2) 多字符运算符必须是一个 token
+    for expr, want in (("1 << 3", ["1", "<<", "3"]),
+                       ("8 >> 2", ["8", ">>", "2"]),
+                       ("a <= b", ["a", "<=", "b"]),
+                       ("x == y", ["x", "==", "y"])):
+        assert [t.value for t in sv_tokenize(expr)] == want, expr
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+
+        # $clog2 端口宽度
+        f1 = root / "clog2.sv"
+        f1.write_text(
+            "module clog2_dut #(parameter int DEPTH = 16) (\n"
+            "  input  logic clk,\n"
+            "  output logic [$clog2(DEPTH)-1:0] addr\n);\n"
+            "  assign addr = '0;\nendmodule\n", encoding="utf-8")
+        m = parse_sv_file(f1, backend="builtin")[0]
+        addr = next(p for p in m.ports if p.name == "addr")
+        assert addr.width == 4, (addr.width_expr, addr.width)
+
+        # 移位参数
+        f2 = root / "shift.sv"
+        f2.write_text(
+            "module sp_dut #(parameter int W = 1 << 3) (\n"
+            "  input  logic [W-1:0] d,\n  output logic [W-1:0] q\n);\n"
+            "  assign q = d;\nendmodule\n", encoding="utf-8")
+        m2 = parse_sv_file(f2, backend="builtin")[0]
+        assert m2.parameters.get("W") == 8, m2.parameters
+        assert all(p.width == 8 for p in m2.ports), [(p.name, p.width) for p in m2.ports]
+
+        # module automatic
+        f3 = root / "auto.sv"
+        f3.write_text(
+            "module automatic auto_dut (\n  input logic clk,\n"
+            "  output logic q\n);\n  assign q = clk;\nendmodule\n", encoding="utf-8")
+        m3 = parse_sv_file(f3, backend="builtin")[0]
+        assert m3.name == "auto_dut", m3.name
+        assert {p.name for p in m3.ports} == {"clk", "q"}, [p.name for p in m3.ports]
+
+        # module ... import pkg::*; #(...) (...)
+        f4 = root / "imp.sv"
+        f4.write_text(
+            "module imp_dut import mypkg::*; #(parameter int W = 8) (\n"
+            "  input  logic [W-1:0] d,\n  output logic [W-1:0] q\n);\n"
+            "  assign q = d;\nendmodule\n", encoding="utf-8")
+        m4 = parse_sv_file(f4, backend="builtin")[0]
+        assert m4.name == "imp_dut", m4.name
+        assert m4.parameters.get("W") == 8, m4.parameters
+        assert {p.name for p in m4.ports} == {"d", "q"}, [p.name for p in m4.ports]
+
+        # 多维 packed：两个后端都要给乘积
+        f5 = root / "multi.sv"
+        f5.write_text(
+            "module multi_dut (\n  input  logic [1:0][7:0] d2d,\n"
+            "  output logic [3:0][3:0] d2d2,\n  output logic [7:0] flat\n);\n"
+            "endmodule\n", encoding="utf-8")
+        for backend in ("builtin", "slang"):
+            mods = parse_sv_file(f5, backend=backend)
+            if not mods:
+                continue
+            got = {p.name: p.width for p in mods[0].ports}
+            assert got.get("d2d") == 16, (backend, got)
+            assert got.get("d2d2") == 16, (backend, got)
+            assert got.get("flat") == 8, (backend, got)
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2583,6 +2673,7 @@ def main() -> int:
     test_security_hardening_injection_xss_verilator_hijack()
     test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml()
     test_residual_and_suite_rerun_gates()
+    test_sv_parser_tokenizer_and_header_fixes()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

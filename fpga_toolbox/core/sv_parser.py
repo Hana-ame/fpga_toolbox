@@ -45,9 +45,9 @@ _TOKEN_RE = re.compile(
     r"""
     (?P<WS>[ \t\r]+)
   | (?P<NL>\n)
-  | (?P<IDENT>[A-Za-z_][A-Za-z0-9_$]*)
+  | (?P<IDENT>\$?[A-Za-z_][A-Za-z0-9_$]*)
   | (?P<NUMBER>[0-9]+'[sS]?[bBdDhHoO][0-9a-fA-FxXzZ_]+|[0-9][0-9_]*)
-  | (?P<SYM>[#()\[\],;=:\+\-\*/<>\{\}\.\?@!~&|\^])
+  | (?P<SYM><<|>>|<=|>=|==|!=|&&|\|\||\*\*|\+\+|--|[#()\[\],;=:\+\-\*/<>\{\}\.\?@!~&|\^])
     """,
     re.VERBOSE,
 )
@@ -217,31 +217,47 @@ class SVModuleParser:
         return params
 
     def _parse_range(self, toks: List[SVToken], start: int, params: Dict[str, int]) -> Tuple[str, int, int]:
-        depth, end, inner = 0, start, []
-        while end < len(toks):
-            t = toks[end]
-            if t.value == "[":
-                depth += 1
-                if depth > 1:
+        """解析 packed 维度并返回**总位宽**（多维相乘）。
+
+        旧实现只解析第一对 `[ ]` 就返回，于是多维 packed 数组
+        `logic [1:0][7:0] x`（16 位）被算成第一维的 2 位、或（更早版本）被
+        拼成整串后按内层 8 位处理 —— 两种都错。SystemVerilog 中多维 packed
+        声明的总位宽是各维**乘积**：`[1:0][7:0]` = 2*8 = 16。
+        """
+        expr_start = start
+        total_w = 1
+        dims = 0
+        end = start
+        while end < len(toks) and toks[end].value == "[":
+            depth, inner = 0, []
+            while end < len(toks):
+                t = toks[end]
+                if t.value == "[":
+                    depth += 1
+                    if depth > 1:
+                        inner.append(t)
+                elif t.value == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end += 1
+                        break
                     inner.append(t)
-            elif t.value == "]":
-                depth -= 1
-                if depth == 0:
-                    end += 1
-                    break
-                inner.append(t)
-            else:
-                inner.append(t)
-            end += 1
-        colon = next((i for i, t in enumerate(inner) if t.value == ":"), None)
-        expr = "[" + "".join(t.value for t in inner) + "]"
-        if colon is not None:
-            msb = eval_int_expr(" ".join(t.value for t in inner[:colon]), params)
-            lsb = eval_int_expr(" ".join(t.value for t in inner[colon + 1:]), params)
-            w = abs(msb - lsb) + 1 if (msb is not None and lsb is not None) else 1
-        else:
-            w = 1
-        return expr, w, end
+                else:
+                    inner.append(t)
+                end += 1
+            colon = next((i for i, t in enumerate(inner) if t.value == ":"), None)
+            dim_w = 1
+            if colon is not None:
+                msb = eval_int_expr(" ".join(t.value for t in inner[:colon]), params)
+                lsb = eval_int_expr(" ".join(t.value for t in inner[colon + 1:]), params)
+                if msb is not None and lsb is not None:
+                    dim_w = abs(msb - lsb) + 1
+            total_w *= dim_w
+            dims += 1
+        if dims == 0:
+            return "1", 1, end
+        expr = "".join(t.value for t in toks[expr_start:end])
+        return expr, total_w, end
 
     def _try_parse_interface_port(self, item: List[SVToken]) -> Optional[SVPortAST]:
         """Recognize SV interface/modport port declarations like `axi_lite_if.slave axi` or `interface.mp name`."""
@@ -351,11 +367,26 @@ class SVModuleParser:
         while self.i < self.n:
             if self._adv().value != "module":
                 continue
+            # `module automatic foo (...)` / `module static foo (...)`：自动机标
+            # 是**生命周期修饰符**，不是模块名。旧实现直接取下一个 IDENT，于是
+            # `module automatic auto_dut` 被解析成名字 `automatic` —— 端口全是
+            # 空的，下游按名字匹配 DUT 时必然失败（实测 builtin 后端）。
+            if self._peek() and self._peek().value in ("automatic", "static"):
+                self._adv()
             nt = self._peek()
             if not nt or nt.kind != "IDENT":
                 continue
             mod_name = self._adv().value
             params: Dict[str, int] = {}
+            # `module foo import pkg::*; #(...) (...);`：header 里可以带
+            # import 声明（SystemVerilog 允许 package import 出现在 module
+            # header 与参数列表之间）。旧实现只认紧随其后的 `#(` / `(`，遇到
+            # `import` 就跳出，于是**参数与端口全部丢失**（实测 params={}、
+            # ports=[]），模块被识别成一个空壳。
+            # 这里把 header 内连续的 `import ... ;` / `export ... ;` 声明跳过。
+            while self._peek() and self._peek().value in ("import", "export"):
+                while self.i < self.n and self._adv().value != ";":
+                    pass
             if self._match("#") and self._peek() and self._peek().value == "(":
                 params = self._parse_params(self._read_balanced("(", ")"))
             ports: List[SVPortAST] = []
@@ -545,9 +576,14 @@ def _parse_with_slang(
                     # 解包数组端口（如 T din[N]）：slang 把解包维度也写进 type
                     # 的 [0:N-1]，packed 维度在前、解包在后。宽度应取二者乘积，
                     # 但这里只取 packed 部分（保守：不重复计解包维度）。
-                    m_rng = re.search(r"\[(\d+):(\d+)\]", tstr)
-                    if m_rng:
-                        w = abs(int(m_rng.group(1)) - int(m_rng.group(2))) + 1
+                    # 多维 packed：`logic[1:0][7:0]` 的总位宽是各维**乘积**
+                    # （=16）。旧实现 re.search 只取第一维 -> 2 位，实测
+                    # `input logic [1:0][7:0] d2d` 被报成 width=2（真相 16）。
+                    _rngs = re.findall(r"\[(\d+):(\d+)\]", tstr)
+                    if _rngs:
+                        w = 1
+                        for _hi, _lo in _rngs:
+                            w *= abs(int(_hi) - int(_lo)) + 1
                     elif re.search(r"\b(byte|shortint|int|integer|longint)\b", tstr):
                         # SV 整数原子类型不是 1 位：byte=8 / shortint=16 / int=32 /
                         # longint=64。旧实现把它们和 logic/bit 一起当成「明确的
