@@ -166,7 +166,21 @@ _PCIE_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
 
 # Clock / reset naming. Anchored, so ``reset_done`` or ``clk_div2`` never match,
 # while every common prefix style (``s_axi_aresetn``, ``i_rst_n``, ``core_clk``) does.
-_CLK_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[ahps]?clk|clock)$", re.I)
+# 时钟名识别。旧正则 `^(?:[a-z0-9]+_)*(?:[ahps]?clk|clock)$` 要求时钟词出现在
+# **末尾**，于是 `clk_extra`（第二时钟）、`clk2`、`clk_i`、`clk_in` 这些极常见
+# 的命名全都识别不到：它们会落进 out_of_scope_ports 被 tie 到 1'b0，而
+# `_is_clock()` 本该给这类端口加 "clock/reset-like port left out of scope"
+# 警告 —— 识别不到就连警告都没有（实测 clk_extra 静默 tie-off，零诊断）。
+# 多时钟设计里把第二个时钟 tie 到 0 是灾难性的，必须能识别并警告。
+_CLK_RE = re.compile(
+    r"^(?:[a-z0-9]+_)*"
+    r"(?:[ahps]?clk|clock)"          # 时钟词
+    # 可选后缀/序号，允许叠加两层：clk_i、clk2、clk_extra、clk_extra_i
+    r"(?:_(?:in|i|o|extra|aux|2nd|b|p|n))*"
+    r"(?:\d+)?"
+    r"$",
+    re.I,
+)
 # reset 名：除了 rst/reset 家族，还要认 power-on-reset 家族（por / poreset /
 # power_on_reset / pon）。`por_n` 是工业界非常标准的 POR 端口名（实测仓库自带的
 # soc_omni_bus_hub.sv 就用 `if (!por_n)`，且它是唯一复位），漏检的后果不是少报

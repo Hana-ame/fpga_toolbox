@@ -163,3 +163,4 @@
 - [98 · staged_rtl_files 从未真正传给解析器](98-staged-rtl-files-reach-parser.md)
 - [99 · PT 网表清理会把注释里的黑盒实例一并删掉](99-netlist-cleaner-preserves-comments.md)
 - [100 · 黑盒输出端口未识别导致悬空 wire](100-netlist-tieoff-blackbox-outputs.md)
+- [101 · 第二时钟 clk_extra/clk2/clk_i 识别不到被静默 tie 到 0](101-secondary-clock-names.md)
