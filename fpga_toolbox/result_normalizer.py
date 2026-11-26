@@ -49,9 +49,95 @@ def _norm_status(raw: Any) -> str:
     return _STATUS_MAP.get(str(raw).strip().upper(), "FAIL")
 
 
+def _norm_completed(raw: Any) -> Optional[bool]:
+    """把 JSON/XML 里的 completed 标志归一成 True/False/None。
+
+    旧实现用 `cocotb_completed is False` 判定 —— 只认 Python 的 False。而结果
+    文件是**序列化后再读回**的，实测三种形态都能绕过这道完整性门禁：
+      * `"completed": "false"`（字符串，某些序列化器会把 bool 写成 str）
+      * `"completed": 0`（整数 0 / 空字符串也常被当作 false）
+      * 走 `"tests"` 分支时 `completed` 被**整条丢弃**（函数直接 return，没读它）
+    归一后：显式假值 -> False；显式真值 -> True；缺失/无法判定 -> None。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return bool(raw)
+    txt = str(raw).strip().lower()
+    if txt in ("false", "0", "no", "incomplete", "aborted", "partial"):
+        return False
+    if txt in ("true", "1", "yes", "complete", "completed", "ok"):
+        return True
+    return None
+
+
+# JUnit XML 允许的根元素。任何别的东西都不是本工具能解释的结果文件 ——
+# 旧实现不校验根标签，`<foo><bar/></foo>` 直接得到 0 条检查 + NO_RESULTS + ok=True
+# （「成功但没结果」），而真相是"这不是一份 JUnit 报告"。
+_JUNIT_ROOTS = ("testsuites", "testsuite")
+
+
 def _from_xml(path: Path) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     root = ET.parse(path).getroot()
+    if root.tag not in _JUNIT_ROOTS:
+        raise ValueError(
+            f"not a JUnit XML report: root element is <{root.tag}>, expected one of "
+            f"{list(_JUNIT_ROOTS)}. Refusing to report NO_RESULTS for an unrelated XML."
+        )
     checks: List[Dict[str, Any]] = []
+
+    # suite / testsuites 级别的失败汇总：JUnit 允许把 setup/teardown 失败或
+    # 汇总计数挂在 suite 上而不展开成 testcase。旧实现只遍历 testcase，于是：
+    #   * <testsuite><errors><error message="setup failed"/></errors></testsuite>
+    #   * <testsuite failures="3">（只有属性没有内联节点）
+    # 都会被判 PASS。这里显式读取，任何非零计数/存在 error 节点即记 FAIL。
+    # 注意：error/failure 节点可能挂在 <testsuites> 下（suite 之外），
+    # 也可能在 suite 内部。两种都要看，否则 `<testsuites><errors><error/></errors>
+    # </testsuites>` 仍会被判 PASS（实测）。
+    _root_level_err = root.find("errors") is not None or root.find("failure") is not None
+    if _root_level_err:
+        checks.append({
+            "rule_id": "TESTSUITES_ERROR_NODE",
+            "category": "junit_suite_integrity",
+            "status": "FAIL",
+            "detail": "JUnit report has a top-level <errors>/<failure> section: the run "
+                      "did not complete cleanly.",
+        })
+    for suite in root.iter("testsuite"):
+        _fails = 0
+        for _k in ("failures", "errors"):
+            try:
+                _fails += int(str(suite.get(_k) or "0").strip() or 0)
+            except (TypeError, ValueError):
+                _fails += 0
+        # `.//error` 只找 suite 子树；root 级的已在上面单独处理。
+        _has_err_node = suite.find(".//error") is not None
+        if _fails or _has_err_node:
+            checks.append({
+                "rule_id": f"SUITE_{suite.get('name') or 'unnamed'}",
+                "category": "junit_suite_integrity",
+                "status": "FAIL",
+                "detail": (f"JUnit <testsuite> reports failures={suite.get('failures')}, "
+                           f"errors={suite.get('errors')}, "
+                           f"error-node={_has_err_node}: the suite did not complete "
+                           "cleanly (not evidence of passing)."),
+            })
+    if root.tag == "testsuites":
+        try:
+            _rf = int(str(root.get("failures") or "0").strip() or 0)
+            _re = int(str(root.get("errors") or "0").strip() or 0)
+        except (TypeError, ValueError):
+            _rf = _re = 0
+        if _rf or _re:
+            checks.append({
+                "rule_id": "TESTSUITES_TOTAL",
+                "category": "junit_suite_integrity",
+                "status": "FAIL",
+                "detail": f"<testsuites> aggregate reports failures={_rf}, errors={_re}.",
+            })
+
     for tc in root.iter("testcase"):
         status, detail = "PASS", ""
         for child in tc:
@@ -69,7 +155,9 @@ def _from_xml(path: Path) -> Tuple[List[Dict[str, Any]], Optional[int]]:
         # 比"零 testcase"（正确判 NO_RESULTS）还宽松。这是典型的假通过：
         # 没有名字就没有证据，不能算通过。
         name = tc.get("name")
-        if not name:
+        # `.strip()`：空白 name（`name="   "`）同样是零身份信息，
+        # 旧判据 `if not name` 对纯空白是 truthy，会被当成有名字的通过项。
+        if not (name or "").strip():
             checks.append({
                 "rule_id": "UNNAMED_TESTCASE",
                 "category": tc.get("classname") or "cocotb",
@@ -113,7 +201,7 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
             "status": _norm_status(c.get("status", "FAIL")),
             "detail": str(c.get("detail", "")),
         } for c in raw_checks]
-        return checks, raw.get("seed"), raw.get("completed")
+        return checks, raw.get("seed"), _norm_completed(raw.get("completed"))
 
     tests = None
     seed = None
@@ -141,7 +229,11 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
             "status": _norm_status(t.get("status", t.get("result", "FAIL"))),
             "detail": str(t.get("detail", "")),
         } for t in tests]
-        return checks, seed, None
+        # tests 分支同样要透传 completed：旧实现直接 `return checks, seed, None`
+        # 把它丢了，于是 {"tests": [...], "completed": false} 完全绕过
+        # COCOTB_INCOMPLETE 完整性门禁（实测 overall_status=PASS）。
+        _completed_tests = raw.get("completed") if isinstance(raw, dict) else None
+        return checks, seed, _norm_completed(_completed_tests)
 
     raise ValueError(
         "Unrecognized results format: expected cocotb JUnit XML, "
@@ -230,7 +322,7 @@ def tool_normalize_sim_result(
         # 明确 completed=False，说明测试没跑完（异常/超时/await 卡死）——此时
         # 残留的「前几条全 PASS」绝不能当通过。旧实现没有这个信号，残缺结果
         # 与完整结果都判 PASS。
-        if cocotb_completed is False:
+        if _norm_completed(cocotb_completed) is False:
             checks.append({
                 "rule_id": "COCOTB_INCOMPLETE",
                 "category": "cocotb_run_integrity",

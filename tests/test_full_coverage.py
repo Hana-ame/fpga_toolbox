@@ -2381,6 +2381,95 @@ def test_security_hardening_injection_xss_verilator_hijack() -> None:
             assert r["ok"], (bad, str(r.get("error"))[:160])
 
 
+def test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml() -> None:
+    """Defect 128: 四处静默假通过（UVM_FATAL / 零帧 / completed 绕过 / XML 结构）。
+
+    1. `parse_uvm_log` 只读 `UVM_ERROR`，完全忽略 `UVM_FATAL`：
+       一份打印 `UVM_FATAL : 3` 的日志被判 `passed=True`。
+    2. 未传 `expected_frames` 时 `target_frames = frames_obs`，于是
+       `delivered=0` + `frames=0` 得到 `0 == 0` → 一个**什么都没跑**的仿真通过。
+    3. `result_normalizer` 的 `COCOTB_INCOMPLETE` 门禁用 `is False` 判定：
+       `"completed": "false"` 与 `"completed": 0` 都能绕过；且走 `"tests"`
+       分支时 `completed` 被整条丢弃，`{"tests": [...], "completed": false}`
+       直接 PASS。
+    4. `_from_xml` 不校验根标签、不读 suite 级 failures/errors、且无名检查用
+       `if not name`（纯空白 name 是 truthy）：非 JUnit XML 得到
+       `ok=True + NO_RESULTS`，suite 级 `<error>` / `failures="3"` 判 PASS，
+       `name="   "` 判 PASS。
+    """
+    print("coverage: UVM_FATAL / zero-frame / completed bypass / JUnit XML structure")
+    from fpga_toolbox.eda_campaign import parse_uvm_log
+
+    base = ("[C3900] NP_LAT: frames=64 min=10 avg=12 max=20\n"
+            "delivered=64\nfid_bad=0\nall_retry=0\nsend_nums=64\n"
+            "win_span=5\nUVM_ERROR :    0\n")
+    assert parse_uvm_log(base)["ok"] is True, "clean UVM log must pass"
+    # 1) UVM_FATAL 必须判失败
+    assert parse_uvm_log(base + "UVM_FATAL :    3\n")["ok"] is False, "UVM_FATAL ignored"
+    assert parse_uvm_log(base.replace("UVM_ERROR :    0", "UVM_ERROR :    5"))["ok"] is False
+    # 2) 零帧不是通过
+    zero = ("[C3900] NP_LAT: frames=0 avg=0\ndelivered=0\nfid_bad=0\n"
+            "all_retry=0\nsend_nums=0\nUVM_ERROR :    0\n")
+    assert parse_uvm_log(zero)["ok"] is False, "zero-frame run treated as pass"
+
+    # 3) completed 的三种绕过形态
+    from fpga_toolbox.result_normalizer import tool_normalize_sim_result
+
+    payloads = {
+        "bool False": {"checks": [{"rule_id": "A", "status": "PASS"}], "completed": False},
+        "str false": {"checks": [{"rule_id": "A", "status": "PASS"}], "completed": "false"},
+        "int 0": {"checks": [{"rule_id": "A", "status": "PASS"}], "completed": 0},
+        "tests + False": {"tests": [{"name": "T", "status": "PASS"}], "completed": False},
+        "tests + str false": {"tests": [{"name": "T", "status": "PASS"}], "completed": "false"},
+    }
+    with tempfile.TemporaryDirectory() as td:
+        for label, payload in payloads.items():
+            f = Path(td) / f"{abs(hash(label))}.json"
+            f.write_text(json.dumps(payload), encoding="utf-8")
+            d = tool_normalize_sim_result("m", cocotb_results_json=str(f))["data"]
+            assert d["overall_status"] == "FAIL", (label, d["overall_status"])
+            assert any(c["rule_id"] == "COCOTB_INCOMPLETE" for c in d["checks"]), label
+        # 显式 True / 缺省都不能被误伤
+        for label, payload in {
+            "bool True": {"checks": [{"rule_id": "A", "status": "PASS"}], "completed": True},
+            "absent": {"checks": [{"rule_id": "A", "status": "PASS"}]},
+        }.items():
+            f = Path(td) / f"{abs(hash(label))}.json"
+            f.write_text(json.dumps(payload), encoding="utf-8")
+            d = tool_normalize_sim_result("m", cocotb_results_json=str(f))["data"]
+            assert d["overall_status"] == "PASS", (label, d["checks"])
+
+        # 4) XML 结构校验
+        xml_cases = {
+            "non-JUnit root": ('<?xml version="1.0"?><foo><bar/></foo>', False, None),
+            "suite error node": (
+                '<?xml version="1.0"?><testsuites><testsuite><testcase name="T"/>'
+                '</testsuite><errors><error message="setup failed"/></errors></testsuites>',
+                True, "FAIL"),
+            "suite failures attr": (
+                '<?xml version="1.0"?><testsuites><testsuite failures="3">'
+                '<testcase name="T"/></testsuite></testsuites>', True, "FAIL"),
+            "whitespace name": (
+                '<?xml version="1.0"?><testsuites><testsuite>'
+                '<testcase name="   "/></testsuite></testsuites>', True, "FAIL"),
+            "clean JUnit": (
+                '<?xml version="1.0"?><testsuites><testsuite>'
+                '<testcase name="T_OK"/></testsuite></testsuites>', True, "PASS"),
+            "real failure": (
+                '<?xml version="1.0"?><testsuites><testsuite><testcase name="T">'
+                '<failure message="boom"/></testcase></testsuite></testsuites>',
+                True, "FAIL"),
+        }
+        for label, (body, want_ok, want_overall) in xml_cases.items():
+            f = Path(td) / f"{abs(hash(label))}.xml"
+            f.write_text(body, encoding="utf-8")
+            r = tool_normalize_sim_result("m", cocotb_results_json=str(f))
+            assert r["ok"] is want_ok, (label, r.get("error"))
+            if want_overall is not None:
+                assert r["data"]["overall_status"] == want_overall, (
+                    label, r["data"]["overall_status"])
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2420,6 +2509,7 @@ def main() -> int:
     test_ddr_control_widths_follow_port()
     test_no_user_data_destruction_and_valid_cocotb_json()
     test_security_hardening_injection_xss_verilator_hijack()
+    test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

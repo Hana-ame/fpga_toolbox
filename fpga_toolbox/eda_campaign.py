@@ -54,6 +54,10 @@ _UVM_LAT_RE = re.compile(
 _UVM_RETRY_RE = re.compile(r"all_retry=(" + _NUM + r")")
 _UVM_SENT_RE = re.compile(r"send_nums=(" + _NUM + r")")
 _UVM_ERR_RE = re.compile(r"UVM_ERROR\s*:\s+(" + _NUM + r")")
+# UVM_FATAL 与 UVM_ERROR 是**并列**的失败计数，且 FATAL 更严重（仿真会立即中止）。
+# 旧实现只读 UVM_ERROR，实测 `UVM_FATAL : 3` 的日志仍判 passed=True —— 一份明确
+# 报告了 3 个致命错误的仿真被当成通过。
+_UVM_FATAL_RE = re.compile(r"UVM_FATAL\s*:\s+(" + _NUM + r")")
 _UVM_WIN_SPAN_RE = re.compile(r"win_span=(" + _NUM + r")")
 _UVM_CALIB_RE = re.compile(
     r"pcs_words=(" + _NUM + r").*?flips_exp=([0-9.,]+).*?flips_act=(" + _NUM + r")"
@@ -82,6 +86,7 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
     all_retry = _last_int(_UVM_RETRY_RE)
     send_nums = _last_int(_UVM_SENT_RE)
     uvm_error = _last_int(_UVM_ERR_RE)
+    uvm_fatal = _last_int(_UVM_FATAL_RE)
 
     lat_matches = _UVM_LAT_RE.findall(log_text)
     frames_obs: Optional[int] = None
@@ -120,6 +125,11 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
         and delivered == target_frames
         and fid_bad == 0
         and uvm_error == 0
+        and not (uvm_fatal or 0)
+        # 零帧不是"通过"：delivered=0 且 frames=0 时 0 == 0 成立，旧实现因此把
+        # 一个**什么都没跑**的仿真判成通过（静默假通过）。要求至少交付 1 帧。
+        and (target_frames or 0) > 0
+        and (delivered or 0) > 0
     )
 
     data = {
@@ -134,6 +144,7 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
         "send_nums": send_nums,
         "retry_rate": round(all_retry / target_frames, 6) if (all_retry is not None and target_frames) else None,
         "uvm_error": uvm_error,
+        "uvm_fatal": uvm_fatal,
         "max_win_span": max_win_span,
         "calibration": {
             "pcs_words": pcs_words,
@@ -147,7 +158,7 @@ def parse_uvm_log(log_text: str, expected_frames: Optional[int] = None) -> Dict[
         return ok_result("parse_uvm_log", data, diagnostics=diags)
     return err_result(
         "parse_uvm_log",
-        f"UVM run gate failed (delivered={delivered}/{target_frames}, fid_bad={fid_bad}, uvm_error={uvm_error}).",
+        f"UVM run gate failed (delivered={delivered}/{target_frames}, fid_bad={fid_bad}, uvm_error={uvm_error}, uvm_fatal={uvm_fatal}).",
         diagnostics=diags,
         data=data,
     )
