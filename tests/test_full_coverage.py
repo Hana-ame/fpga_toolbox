@@ -1291,6 +1291,74 @@ endmodule
     assert "SLVERR" in tb or "chk_resp" in tb, "resp 检查被丢弃"
 
 
+def test_power_on_reset_names_detected() -> None:
+    """Defect 112: `por_n` 这类 power-on-reset 端口名不被识别为复位。
+
+    `por_n` 是工业界非常标准的 POR 端口名。仓库自带的
+    `examples/multi_bus_ref/omni_hub/soc_omni_bus_hub.sv`（6 协议集成 DUT）就用
+    `if (!por_n)`，且它是**唯一**复位 —— 但旧 `_RST_RE` 只认
+    `rst/reset/nreset/nrst` 家族，`por` 完全不在其中。
+
+    后果不是"少一条 warning"：`emit_testbench` 的每条协议模板都硬连复位脚，
+    检测不到复位就直接拒绝生成 TB，于是一个 6 协议 DUT 的**所有协议路径**
+    （pcie/ddr4/axi4/apb...）全部被挡掉，报错还是误导性的
+    "no reset port detected in the RTL. Add a reset port
+    (rst/rst_n/aresetn/hresetn/...)" —— 用户明明写了 `por_n`。
+
+    修复：`_RST_RE` 增加 por / poreset / power_on_reset / pon 家族（含 `n` 前缀
+    与 `_n`/`n`/`b` 后缀），`_reset_active_low` 同步覆盖（否则 `por_n` 会被判成
+    高有效，生成 TB 的复位时序反相）。同时必须**不**误伤 `port` / `ponder` /
+    `por_ready` / `por_cnt` 这类以 por 开头的普通信号（锚定 + 尾部可选后缀）。
+    """
+    print("coverage: power-on-reset names (por_n / npor / poresetn) are recognised")
+    from fpga_toolbox.iface_extractor import _is_reset, _reset_active_low
+
+    # 必须识别为复位，且极性正确
+    must_detect = {
+        "por_n": True, "por": False, "npor": True, "npor_n": True,
+        "poresetn": True, "nporeset": True, "pon_n": True, "npon": True,
+        "power_on_reset_n": True, "power_on_reset": False, "por_rst_n": True,
+        # 既有家族不能回归
+        "rst_n": True, "rst": False, "reset": False, "resetn": True,
+        "s_axi_aresetn": True, "hresetn": True, "presetn": True,
+        "arst_n": True, "nrst": True, "nreset": True, "resetb": True,
+    }
+    for name, want_low in must_detect.items():
+        assert _is_reset(name), f"{name} must be detected as a reset"
+        assert _reset_active_low(name) is want_low, (
+            f"{name}: active_low={_reset_active_low(name)} want={want_low}")
+
+    # 不能误伤：以 por 开头但不是复位、或带 _done/_ready 后缀的派生信号
+    must_not = [
+        "port", "ponder", "por_ready", "por_cnt", "por_init_guard",
+        "por_cke_mrs_zqcl", "power_on_reset_done", "reset_done",
+        "clk", "supports", "report",
+    ]
+    for name in must_not:
+        assert not _is_reset(name), f"{name} must NOT be detected as a reset"
+
+    # 端到端：6 协议集成 DUT 的复位必须被识别出来（修复前 reset=None，
+    # 导致 emit_testbench 对每种协议都拒绝生成）
+    omni = ROOT / "examples" / "multi_bus_ref" / "omni_hub" / "soc_omni_bus_hub.sv"
+    assert omni.is_file(), omni
+    ex = call_tool("extract_interfaces", {"rtl_file": str(omni)})
+    assert ex["ok"], str(ex.get("error"))[:200]
+    mod = ex["data"]["modules"][0]
+    assert mod["reset"] is not None, "omni hub reset not detected (por_n missed)"
+    assert mod["reset"]["port"] == "por_n", mod["reset"]
+    assert mod["reset"]["active_low"] is True, mod["reset"]
+
+    # 且现在能真的生成 PCIe TB（修复前被 "no reset port detected" 挡掉）
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(omni),
+            "out_dir": str(Path(td) / "out"), "protocol": "pcie",
+        })
+        assert r["ok"], f"emit still blocked on por_n: {str(r.get('error'))[:200]}"
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1315,6 +1383,7 @@ def main() -> int:
     test_module_name_not_used_as_unsafe_filename()
     test_ddr_hbm_templates_follow_port_widths()
     test_axi4_template_follows_id_len_widths()
+    test_power_on_reset_names_detected()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

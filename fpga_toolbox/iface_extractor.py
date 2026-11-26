@@ -160,7 +160,16 @@ _PCIE_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
 # Clock / reset naming. Anchored, so ``reset_done`` or ``clk_div2`` never match,
 # while every common prefix style (``s_axi_aresetn``, ``i_rst_n``, ``core_clk``) does.
 _CLK_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[ahps]?clk|clock)$", re.I)
-_RST_RE = re.compile(r"^(?:[a-z0-9]+_)*(?:[ahps]?reset|[ahps]?rst|nreset|nrst)(?:_?[nb])?$", re.I)
+# reset 名：除了 rst/reset 家族，还要认 power-on-reset 家族（por / poreset /
+# power_on_reset / pon）。`por_n` 是工业界非常标准的 POR 端口名（实测仓库自带的
+# soc_omni_bus_hub.sv 就用 `if (!por_n)`，且它是唯一复位），漏检的后果不是少报
+# 一条 warning：emit_testbench 的每条协议都硬连复位脚，检测不到就直接拒绝生成
+# 该 DUT 的 TB —— 一个 6 协议 DUT 因此 6 条路径全被挡掉。
+_RST_RE = re.compile(
+    r"^(?:[a-z0-9]+_)*(?:[ahps]?reset|[ahps]?rst|nreset|nrst"
+    r"|n?por|n?poreset|n?power_?on_?reset|n?pon)(?:_?[nb])?$",
+    re.I,
+)
 
 
 def _norm_prefix(raw: str) -> str:
@@ -181,7 +190,13 @@ def _reset_active_low(name: str) -> bool:
         return True
     if n.endswith(("_n", "_b")):
         return True
-    return bool(re.match(r"^(?:[a-z0-9]+_)*[ahps]?(?:reset|rst)[nb]$", n))
+    # 后缀式低有效：`rst_n` / `resetb` / `aresetn`（`[ahps]?` 覆盖 aresetn/hresetn）。
+    # 必须同时覆盖 POR 家族，否则 `por_n` 会被判成高有效。
+    if re.match(r"^(?:[a-z0-9]+_)*[ahps]?(?:reset|rst|por|poreset|power_?on_?reset|pon)[nb]$", n):
+        return True
+    # 前缀式低有效（`nrst` / `npor` / `nporeset`，实测见于工业 RTL）。
+    return bool(re.match(
+        r"^(?:[a-z0-9]+_)*n(?:reset|rst|por|poreset|power_?on_?reset|pon)$", n))
 
 
 def _infer_sv_iface_protocol(iface_type: str, port_name: str) -> str:

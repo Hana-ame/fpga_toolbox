@@ -93,6 +93,8 @@
 
 - [61-axi4-template-id-len-widths.md](61-axi4-template-id-len-widths.md) — AXI4 `ID` 宽度是实现自选（常见 4/8/16 位）、`LEN` 可窄到 4 位，而 TB 模板把 `awid/bid/arid/rid` 写死 `[3:0]`、`awlen/arlen` 写死 `[7:0]`。Verilator 默认警告即错误，8 位 ID DUT → 4 条 WIDTHEXPAND、4 位 len DUT → 2 条 WIDTHTRUNC，构建失败却返回 `ok=True`。修复：ID/len/size/burst/resp 全部按 `_pw()` 取真实端口位宽，**测试向量同步缩放**（ID 掩码、地址/数据掩码、十六进制格式宽度、beats 收紧到 2^len_w），并**保留原有 6 个检查含 SLVERR 语义**（参数化期间一度砍掉用例属覆盖回退，已恢复）
 
+- [62-power-on-reset-names.md](62-power-on-reset-names.md) — 复位名识别只认 `rst/reset` 家族，**完全不含 `por` / `poreset` / `power_on_reset` / `pon`**。而仓库自带的 6 协议集成 DUT `soc_omni_bus_hub.sv` 唯一复位就叫 `por_n`（`if (!por_n)`）—— 后果不是少一条 warning，而是 `emit_testbench` 的**每条协议模板都硬连复位脚**，检测不到就拒绝生成，于是 pcie/ddr4/axi4/apb 四条路径全被挡掉，报错还误导用户「加一个 rst/rst_n/aresetn/hresetn」。修复 `_RST_RE` + `_reset_active_low` 覆盖 POR 家族（含 `n` 前缀与 `_n/n/b` 后缀），并保留原有 `[ahps]?` 分支；锚定+后缀严格可选，`port`/`ponder`/`por_ready`/`por_cnt` 不误伤。16 个极性用例 0 mismatch，7 参考 DUT 回归全绿
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
