@@ -3822,6 +3822,54 @@ def test_min_score_bounds_are_enforced() -> None:
             assert "must be >=" not in err and "must be <=" not in err, (good, err[:200])
 
 
+def test_parser_backend_enum_is_enforced() -> None:
+    """Defect 160: parser_backend 描述列了 auto/builtin/slang，却没有 enum。
+
+    旧 schema 只有 `type: string`，于是 `parser_backend="BOGUS"` 与 `""` 都
+    返回 ok=true —— 工具静默回退到默认后端，调用方以为进行了后端选择。
+    这与 protocol 参数早已加 enum 的做法不一致（拼错的协议名会立即报错）。
+    """
+    print("coverage: parser_backend enum enforced")
+    from fpga_toolbox.registry import call_tool, list_tool_schemas
+
+    schema = next(s for s in list_tool_schemas() if s["name"] == "extract_interfaces")
+    spec = schema["inputSchema"]["properties"]["parser_backend"]
+    assert spec.get("enum") == ["auto", "builtin", "slang"], spec
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rtl = root / "dut.sv"
+        rtl.write_text(
+            "module dut (\n"
+            "  input  logic        clk,\n"
+            "  input  logic        rst_n,\n"
+            "  input  logic        psel,\n"
+            "  input  logic        penable,\n"
+            "  input  logic        pwrite,\n"
+            "  input  logic [7:0]  paddr,\n"
+            "  input  logic [31:0] pwdata,\n"
+            "  input  logic [3:0]  pstrb,\n"
+            "  output logic        pready,\n"
+            "  output logic [31:0] prdata,\n"
+            "  output logic        pslverr\n"
+            ");\n  assign pready = 1'b1; assign prdata = pwdata; assign pslverr = 1'b0;\n"
+            "endmodule\n", encoding="utf-8")
+
+        for bad in ("BOGUS", "", "slan", "builtin2"):
+            r = call_tool("extract_interfaces", {"rtl_file": str(rtl),
+                                                 "parser_backend": bad})
+            assert r["ok"] is False, (bad, r)
+            err = str(r.get("error"))
+            assert "Allowed values" in err, (bad, err[:200])
+
+        for good in ("auto", "builtin", "slang"):
+            r = call_tool("extract_interfaces", {"rtl_file": str(rtl),
+                                                 "parser_backend": good})
+            # slang 可能因环境缺失而失败，但错误不能是「非法枚举值」
+            err = str(r.get("error") or "")
+            assert "Allowed values" not in err, (good, err[:200])
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3884,6 +3932,7 @@ def main() -> int:
     test_mutation_spec_non_object_entries_are_rejected()
     test_tool_schema_descriptions_match_signature_defaults()
     test_min_score_bounds_are_enforced()
+    test_parser_backend_enum_is_enforced()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

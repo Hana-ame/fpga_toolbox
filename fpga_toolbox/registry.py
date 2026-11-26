@@ -61,7 +61,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "module_name": {"type": "string", "description": "Optional module name to extract; extracts all modules when omitted."},
                 "emit_draft_yaml": {"type": "string", "description": "Optional path to write a draft boundary contract YAML for downstream tools."},
                 "staged_rtl_files": {"type": "array", "items": {"type": "string"}, "description": "Optional additional RTL files compiled together (e.g. packages) for cross-file imports."},
-                "parser_backend": {"type": "string", "description": "Port parser backend: auto (default), builtin, or slang (requires slang on PATH)."},
+                "parser_backend": {"type": "string", "enum": ["auto", "builtin", "slang"], "description": "Port parser backend: auto (default), builtin, or slang (requires slang on PATH)."},
             },
             "required": ["rtl_file"],
             "additionalProperties": False

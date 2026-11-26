@@ -159,3 +159,4 @@
 - [94 · mutation spec 里的非对象元素被静默丢弃](94-mutation-spec-non-object-entries.md)
 - [95 · copy_sandbox 参数描述与真实行为/默认值不符](95-schema-descriptions-match-defaults.md)
 - [96 · min_score 没有 0-100 边界](96-min-score-bounds.md)
+- [97 · parser_backend 描述列举取值却没有 enum](97-parser-backend-enum.md)
