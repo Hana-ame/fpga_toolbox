@@ -3297,6 +3297,63 @@ def test_eda_remote_tag_cannot_escape_staging_dir() -> None:
         raise AssertionError(f"injection accepted: {args}")
 
 
+def test_package_imports_are_part_of_the_dependency_closure() -> None:
+    """Defect 147: `import pkg::*` 依赖的 package 文件必须进 closure。
+
+    `import cfg_pkg::*;` 与 `` `include `` 不同 —— package 通常在自己的文件里，
+    必须作为独立编译单元一起编译。旧实现完全不索引 package：
+
+        resolve_deps(top_mod) -> rtl_files=["top.sv","user.sv"]
+
+    user.sv 有 `import cfg_pkg::*;` 但 pkg.sv 不在清单里，Verilator 报
+    `%Error: user.sv:2:10: Import package not found: 'cfg_pkg'`，而工具报
+    closure_is_complete=true / ok=true。仓库自带的
+    examples/axi_apb_ref/axi/axi_apb_bridge.sv 单文件就复现同样错误。
+    """
+    print("coverage: package imports are part of the closure")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "pkg.sv").write_text(
+            "package cfg_pkg;\n  parameter int W = 8;\nendpackage\n", encoding="utf-8")
+        (root / "user.sv").write_text(
+            "module user_mod (input logic [7:0] d, output logic [7:0] q);\n"
+            "  import cfg_pkg::*;\n"
+            "  assign q = d;\nendmodule\n", encoding="utf-8")
+        (root / "top.sv").write_text(
+            "module top_mod (input logic [7:0] d, output logic [7:0] q);\n"
+            "  user_mod u (.d(d), .q(q));\nendmodule\n", encoding="utf-8")
+
+        idx = call_tool("index_repo", {"project_root": str(root)})
+        assert idx["ok"], str(idx.get("error"))[:200]
+        assert idx["data"]["packages"] == {"cfg_pkg": "pkg.sv"}, idx["data"]["packages"]
+        assert idx["data"]["modules"]["user_mod"]["package_imports"] == ["cfg_pkg"], \
+            idx["data"]["modules"]["user_mod"]
+
+        r = call_tool("resolve_deps", {"project_root": str(root), "target_module": "top_mod"})
+        assert r["ok"], str(r.get("error"))[:200]
+        data = r["data"]
+        assert data["rtl_files"] == ["pkg.sv", "top.sv", "user.sv"], data["rtl_files"]
+        assert data["all_files"] == ["pkg.sv", "top.sv", "user.sv"], data["all_files"]
+
+        # 沙箱必须包含 package 文件
+        sb = root / "_sb"
+        c = call_tool("copy_sandbox", {
+            "project_root": str(root), "sandbox_dir": str(sb),
+            "relative_files": data["all_files"]})
+        assert c["ok"], str(c.get("error"))[:200]
+        assert (sb / "pkg.sv").is_file(), "package file missing from sandbox"
+
+        # 不 import package 的模块不应把 package 拖进来
+        (root / "solo.sv").write_text(
+            "module solo (input logic a, output logic b);\n"
+            "  assign b = a;\nendmodule\n", encoding="utf-8")
+        rs = call_tool("resolve_deps", {"project_root": str(root), "target_module": "solo"})
+        assert rs["ok"], str(rs.get("error"))[:200]
+        assert rs["data"]["rtl_files"] == ["solo.sv"], rs["data"]["rtl_files"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3350,6 +3407,7 @@ def main() -> int:
     test_normalizer_surfaces_verilator_errors_and_empty_verification()
     test_numeric_bounds_are_enforced_at_entry()
     test_eda_remote_tag_cannot_escape_staging_dir()
+    test_package_imports_are_part_of_the_dependency_closure()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

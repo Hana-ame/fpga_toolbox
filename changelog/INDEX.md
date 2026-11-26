@@ -150,3 +150,4 @@
 - [85 · 归一化报告忽略 %Error 且零核对被当作通过](85-normalizer-verilator-errors-and-empty-verification.md)
 - [86 · schema 数值边界缺失，负/零超时被当成仿真超时](86-numeric-bounds-at-entry.md)
 - [87 · eda_campaign 的 tag=.. 让清理临时目录变成删除 /dev](87-eda-tag-dot-escape.md)
+- [88 · import pkg::* 依赖的 package 文件不在依赖闭包里](88-package-imports-in-closure.md)

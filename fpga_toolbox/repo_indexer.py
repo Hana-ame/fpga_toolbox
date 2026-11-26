@@ -20,6 +20,14 @@ from .core.types import err_result, ok_result
 RTL_EXTS = {".v", ".sv", ".vh", ".svh"}
 HDR_EXTS = {".vh", ".svh"}
 _INC_RE = re.compile(r'^\s*`include\s+"([^"]+)"', re.MULTILINE)
+# package 定义与 import：SV `import cfg_pkg::*;` 是**编译单元间**的依赖，与
+# `include 不同——package 通常在自己的文件里，必须作为独立编译单元一起编译。
+# 旧实现完全不索引 package，于是 `resolve_deps` 的 rtl_files/all_files 里少了
+# pkg.sv：实测拿这份清单去 Verilator 编译报
+# `%Error: user.sv:2:10: Import package not found: 'cfg_pkg'`，而工具报
+# closure_is_complete=true / ok=true。
+_PKG_DEF_RE = re.compile(r"^\s*package\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)", re.MULTILINE)
+_PKG_IMPORT_RE = re.compile(r"\bimport\s+([A-Za-z_]\w*)\s*::")
 _IFACE_DEF_RE = re.compile(r"\binterface\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)")
 
 _NON_INST = {
@@ -110,6 +118,17 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             continue
         iface_defined.update(_IFACE_DEF_RE.findall(sources[fpath]))
     headers = {p.name: str(p.relative_to(root)) for p in rtl_files if p.suffix.lower() in {".vh", ".svh"}}
+    # package 索引：定义文件（相对路径）与「谁 import 了哪个 package」。
+    # 参见 _PKG_DEF_RE 处的说明：package 是独立编译单元，必须一起编译。
+    package_files: Dict[str, str] = {}
+    package_imports: Dict[str, List[str]] = {}
+    for _p in rtl_files:
+        _src = sources[_p]
+        for _pkg in _PKG_DEF_RE.findall(_src):
+            package_files.setdefault(_pkg, str(_p.relative_to(root)))
+        _imps = _PKG_IMPORT_RE.findall(_src)
+        if _imps:
+            package_imports[str(_p.relative_to(root))] = sorted(set(_imps))
     # header 之间也会互相 `include（`include "b.svh" 里再 `include "a.svh"）。
     # 旧实现只索引「文件名 -> 路径」，没有任何 header 级的 include 关系，于是
     # resolve_deps 只能拿到模块直接 include 的头文件，**传递依赖全丢**：
@@ -216,6 +235,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             # 归属已按 owner 收敛到「真正定义该 module 的文件」，所以这里的
             # sources[fp] 就是该模块自己的文件，include 不会串味。
             "includes": list(dict.fromkeys(_INC_RE.findall(sources[fp]))),
+            "package_imports": package_imports.get(str(owner.get(m.name, fp).relative_to(root)), []),
         }
         if unknown:
             unresolved[m.name] = unknown
@@ -238,6 +258,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         "headers": headers,
         "header_includes": header_includes,
         "included_files": sorted(included_files),
+        "packages": package_files,
         "modules": modules,
         "unresolved_instantiations": unresolved,
     }, diagnostics=diags)
@@ -391,6 +412,33 @@ def tool_resolve_deps(
                         break
             if _resolved and _resolved != _owner:
                 _inc_by_closure.add(_resolved)
+    # package 依赖：闭包内任何模块 `import pkg::` 时，定义该 package 的文件
+    # 必须一起进 rtl_files/all_files，否则编译报 Import package not found。
+    # package 之间也可能互相 import（package 里 import 另一个 package 合法），
+    # 因此这里做简单闭包展开。
+    _pkg_defs = repo_index.get("packages") or {}
+    _pkg_imps = {}
+    for _m, _info in mods.items():
+        _pi = _info.get("package_imports") or []
+        if _pi:
+            _pkg_imps[_info.get("file_path")] = _pi
+    _pkg_files: Set[str] = set()
+    _pkg_todo: List[str] = []
+    for _m in closure:
+        _info = mods.get(_m) or {}
+        for _pkg in _info.get("package_imports") or []:
+            _pf = _pkg_defs.get(_pkg)
+            if _pf and _pf not in _pkg_files:
+                _pkg_files.add(_pf)
+                _pkg_todo.append(_pf)
+    while _pkg_todo:
+        _pf = _pkg_todo.pop()
+        for _pkg in _pkg_imps.get(_pf, []):
+            _pf2 = _pkg_defs.get(_pkg)
+            if _pf2 and _pf2 not in _pkg_files:
+                _pkg_files.add(_pf2)
+                _pkg_todo.append(_pf2)
+    rtl_set |= _pkg_files
     return ok_result("resolve_deps", {
         "target_module": target_module,
         "target_file": mods[target_module]["file_path"],
