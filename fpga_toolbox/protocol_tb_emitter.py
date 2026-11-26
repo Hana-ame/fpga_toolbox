@@ -1289,6 +1289,22 @@ def emit_protocol_testbench(
                       "unsupported_protocols": [want],
                       "supported_protocols": list(SUPPORTED_MULTI_PROTOCOLS)},
             )
+        # 走到这里说明「既没有匹配 want 的模块，也没有 want 在检测集里」。
+        # 旧文案 `Protocol 'axi4' not found in any module (modules: {...})`
+        # 只说了没找到，不直接指出「这个 DUT 其实是 axi4_lite」——用户的第一
+        # 反应会是「分类器没认出我的总线」，而实际是自己传错了协议名 / DUT
+        # 版本与预期不同。把检测到的协议集合写进错误信息。
+        if want is not None and detected:
+            return err_result(
+                "emit_testbench",
+                f"Protocol {want!r} was requested but {rp.name} does not contain it. "
+                f"Detected bus protocol(s): {detected}. "
+                f"(Supported protocols: {list(SUPPORTED_MULTI_PROTOCOLS)}.) "
+                f"Detected per module: {found}.",
+                data={"requested_protocol": want,
+                      "detected_protocols": detected,
+                      "supported_protocols": list(SUPPORTED_MULTI_PROTOCOLS)},
+            )
         return err_result(
             "emit_testbench",
             f"{'Protocol ' + repr(want) + ' not found' if want else 'No supported multi-bus interface found'} "

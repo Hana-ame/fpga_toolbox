@@ -4344,6 +4344,53 @@ def test_multiple_candidate_modules_are_disclosed() -> None:
             assert "W057" not in [d["code"] for d in (r2.get("diagnostics") or [])]
 
 
+def test_wrong_requested_protocol_names_the_detected_one() -> None:
+    """Defect 169: 请求了错误协议时，错误信息不指出 DUT 实际是什么协议。
+
+    对一个 `axi4_lite` 从机传 `protocol="axi4"`，旧文案是
+
+        Protocol 'axi4' not found in any module of axi_narrow.sv
+        (modules: {'axi_narrow_dut': ['axi4_lite']})
+
+    用户第一反应是「分类器没认出我的总线」，而实际是自己传错协议 / DUT 版本
+    与预期不同。括号里的 `axi4_lite` 是唯一的线索，却埋在末尾。
+    """
+    print("coverage: wrong requested protocol names the detected one")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+
+    rtl = (
+        "module axil_dut (\n"
+        "  input  logic        aclk, input logic aresetn,\n"
+        "  input  logic [7:0]  awaddr, input logic awvalid, output logic awready,\n"
+        "  input  logic [31:0] wdata, input logic [3:0] wstrb, input logic wvalid,\n"
+        "  output logic wready, output logic [1:0] bresp, output logic bvalid,\n"
+        "  input  logic bready, input logic [7:0] araddr, input logic arvalid,\n"
+        "  output logic arready, output logic [31:0] rdata, output logic [1:0] rresp,\n"
+        "  output logic rvalid, input logic rready\n"
+        ");\n"
+        "  assign awready = 1\'b1; assign wready = 1\'b1; assign bvalid = 1\'b0;\n"
+        "  assign bresp = 2\'b00; assign arready = 1\'b1; assign rvalid = 1\'b0;\n"
+        "  assign rdata = 32\'h0; assign rresp = 2\'b00;\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "axil_dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+        r = emit_protocol_testbench(str(f), str(root / "tb"), "axi4")
+        assert r["ok"] is False
+        err = str(r.get("error"))
+        # 必须直接点名检测到的协议
+        assert "axi4_lite" in err, err[:300]
+        assert "does not contain it" in err, err[:300]
+        assert "Detected bus protocol(s)" in err, err[:300]
+        # data 里三个字段齐全
+        d = r.get("data") or {}
+        assert d.get("requested_protocol") == "axi4", d
+        assert "axi4_lite" in (d.get("detected_protocols") or []), d
+        assert d.get("supported_protocols"), d
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4415,6 +4462,7 @@ def main() -> int:
     test_direction_suffixed_bus_ports_are_classified()
     test_multi_interface_dut_reports_uncovered_bus()
     test_multiple_candidate_modules_are_disclosed()
+    test_wrong_requested_protocol_names_the_detected_one()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

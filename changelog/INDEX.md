@@ -168,3 +168,4 @@
 - [103 · 方向后缀 psel_i/pready_o 让协议识别彻底失败](103-direction-suffixed-ports.md)
 - [104 · 多接口 DUT 只测第一个接口其余静默悬空](104-uncovered-interfaces.md)
 - [105 · 多模块文件里静默只测第一个匹配模块](105-multiple-candidate-modules.md)
+- [106 · 请求错误协议时错误信息不指出 DUT 实际协议](106-wrong-protocol-names-detected.md)
