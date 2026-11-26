@@ -119,6 +119,8 @@
 
 - [74-silent-pass-gates.md](74-silent-pass-gates.md) — review 第三类（静默误判）确认 4 组共 9 种绕过。① `parse_uvm_log` 只读 `UVM_ERROR` **完全忽略 `UVM_FATAL`**（`UVM_FATAL : 3` 仍判 passed）；② 未传 `expected_frames` 时 `target_frames=frames_obs`，`delivered=0`+`frames=0` 满足 `0==0` → **什么都没跑的仿真通过**；③ `COCOTB_INCOMPLETE` 门禁用 `is False`，`"false"` / `0` / `tests` 分支（整条丢弃 completed）三种形态全绕过；④ `_from_xml` 不校验根标签、不读 suite 级 failures/errors、无名检查用 `if not name`（纯空白是 truthy）—— 非 JUnit XML 得到 `ok=True+NO_RESULTS`、suite 级 `<error>`/`failures="3"`/`name="   "` 全判 PASS。另记一个方法论教训：修 ④ 时第一版只查 suite 内部，而 fixture 把 `<errors>` 放在 `<testsuites>` 下，测出仍 PASS —— 用例构造位置决定能否发现漏洞
 
+- [75-residual-and-rerun-gates.md](75-residual-and-rerun-gates.md) — 三处「判定信号选错」（用子串存在代替状态一致）。① `check_residual_mutations` 用 `m["new"] in txt` 判残留，**删除型变异（`new=""`）时 `"" in txt` 恒真** → 任何 old 已消失的文件都误报 E030，合法的删除型变异永远无法运行；② 变异主循环 `replace(...,1)` 只改第一处，old 多次出现时「第一处已改、第二处仍是 old」→ `old in txt` 为真 → **漏报真实混合态**（实测返回空残留列表）；③ `verify_suite_identities` 用 `setdefault`，同名 suite **重跑**不重置状态 → 第一次 PASS、第二次被截断时沿用旧 PASS 与 summaries，判 `all_verified=True`。修复：删除型跳过残留检查（与合法变异态不可区分，还原靠 try/finally）、增加「old 与 new 并存」混合态判据、suite 头每次重置并清空该 suite 汇总记录。真实 9-suite pcie 日志不误伤
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

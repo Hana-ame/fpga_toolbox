@@ -49,7 +49,14 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
         m_hdr = hdr_re.search(line)
         if m_hdr:
             current = m_hdr.group(1)
-            results.setdefault(current, "STARTED")
+            # 同名 suite **重跑**时必须重置状态：旧实现用 `setdefault`（只在
+            # 缺失时写入），于是「第一次 PASS、第二次被截断/无任何输出」会沿用
+            # 第一次的 PASS 与 summaries，判 all_verified=True（实测）。
+            # 一个被截断的重跑不该算通过。这里改成每次遇到 suite 头都重置为
+            # STARTED，并丢弃该 suite 之前的汇总行记录（后续必须以它自己的
+            # 汇总行重新证明通过）。
+            results[current] = "STARTED"
+            summaries.pop(current, None)
             continue
         if current:
             # 明确的失败信号优先（含崩溃/断言的痕迹）

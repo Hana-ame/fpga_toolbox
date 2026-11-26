@@ -60,7 +60,34 @@ def check_residual_mutations(workdir: Path, mutations: List[Dict[str, str]]) -> 
         if fp is None or not fp.is_file():
             continue
         txt = fp.read_text(encoding="utf-8", errors="replace")
-        if m["old"] not in txt and m["new"] in txt:
+        _old, _new = m["old"], m["new"]
+
+        # ---- 删除型变异（new == ""）：不能用 `new in txt` 判定 ----
+        # `"" in txt` 恒为真，于是任何"old 已不存在"的文件都会被判成残留
+        # （实测：已变异的 `assign y =;` 对 spec old=' a & b' new='' 必然报
+        # E030）。删除型变异的残留信号只能是「old 已消失」本身 —— 但这也正是
+        # 合法变异后的状态，无法与「未恢复」区分。因此删除型变异**不参与**
+        # 残留检查，改为在主循环里保证 try/finally 还原（by design）。
+        if _new == "":
+            continue
+
+        # ---- 重复模式：不能只比较"old 是否完全不存在" ----
+        # 变异主循环用 replace(..., 1) 只替换**第一处**。若 old 在同一文件出现
+        # 多次、第一处已变异而后面仍是 old，则 `old in txt` 为真 → 旧判据认为
+        # 没有残留，**漏报**真实未恢复的变异（实测）。
+        # 正确信号：new 的出现次数 > old 的出现次数变化。这里用「new 存在且
+        # old 的剩余次数 < 原始应有次数」判定，但原始次数无从得知 —— 退一步用
+        # 更保守的可靠信号：**两者并存**（old 还在 且 new 已出现）说明文件中
+        # 至少有一处已被改写、同时至少还有一处未改写，必是混合态。
+        _has_old = _old in txt
+        _has_new = _new in txt
+        # 三种都需要覆盖：
+        #   a) old 完全消失、new 出现       -> 完整未恢复（旧判据已能抓到）
+        #   b) old 与 new **并存**          -> 混合态（部分改写）。只要两者都在，
+        #      就说明"至少改写了一次、且至少还剩一处未改写"。这正是
+        #      `replace(...,1)` + 多处匹配才会产生的状态，必然是残留。
+        #   c) new 出现次数 > old 次数      -> 兜底（new 在文本里已多处出现）
+        if _has_new and (_has_old or txt.count(_new) > txt.count(_old)):
             residuals.append({
                 "severity": "ERROR",
                 "code": "E030",

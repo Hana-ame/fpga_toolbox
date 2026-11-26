@@ -2470,6 +2470,78 @@ def test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml() -> None:
                     label, r["data"]["overall_status"])
 
 
+def test_residual_and_suite_rerun_gates() -> None:
+    """Defect 129: 残留检测的删除型误报/重复模式漏报 + suite 重跑沿用旧状态。
+
+    1. `check_residual_mutations` 用 `m["new"] in txt` 判残留。删除型变异
+       （`new == ""`）时 `"" in txt` **恒真**，于是任何「old 已消失」的文件都
+       被判残留 → 合法的删除型变异永远无法运行（实测已变异的
+       `assign y =;` 对 old=' a & b' new='' 必报 E030）。
+    2. 变异主循环用 `replace(..., 1)` 只替换**第一处**。若 old 在文件中出现多
+       次、第一处已变异而后面仍是 old，则 `old in txt` 为真 → 旧判据认为没有
+       残留，**漏报**真实未恢复的混合态（实测）。
+    3. `verify_suite_identities` 用 `results.setdefault(current, "STARTED")`
+       —— 同名 suite **重跑**时不重置状态：第一次 PASS、第二次被截断（无任何
+       输出）时沿用第一次的 PASS 与 summaries，判 `all_verified=True`。
+    """
+    print("coverage: residual gates (deletion/duplicate) + suite rerun state reset")
+    from fpga_toolbox.mutation_runner import check_residual_mutations
+    from fpga_toolbox.sim_runner import verify_suite_identities
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+
+        # 1) 删除型变异（new=""）不参与残留检查 —— 否则必然误报
+        (root / "del.sv").write_text("assign y =;\n", encoding="utf-8")
+        r = check_residual_mutations(root, [
+            {"id": "D1", "file": "del.sv", "old": " a & b", "new": "", "desc": "delete"}])
+        assert r == [], f"deletion-type mutation false-positive residual: {r}"
+
+        # 干净文件 + 删除型变异也不该报
+        (root / "clean.sv").write_text("assign y = a & b;\n", encoding="utf-8")
+        r2 = check_residual_mutations(root, [
+            {"id": "D2", "file": "clean.sv", "old": " a & b", "new": "", "desc": "d"}])
+        assert r2 == [], r2
+
+        # 2a) 完全未恢复（old 消失、new 在）必须报
+        (root / "full.sv").write_text("assign y = (a | b);\n", encoding="utf-8")
+        r3 = check_residual_mutations(root, [
+            {"id": "M1", "file": "full.sv", "old": "a & b", "new": "a | b", "desc": "x"}])
+        assert len(r3) == 1 and r3[0]["code"] == "E030", r3
+
+        # 2b) 混合态（第一处已改、第二处仍是 old）必须报 —— 旧判据漏报
+        (root / "mixed.sv").write_text(
+            "assign a = x | y;\nassign b = x & y;\n", encoding="utf-8")
+        r4 = check_residual_mutations(root, [
+            {"id": "M2", "file": "mixed.sv", "old": "x & y", "new": "x | y", "desc": "d"}])
+        assert len(r4) == 1 and r4[0]["code"] == "E030", r4
+
+        # 2c) 完全干净（只有 old、没有 new）不能误报
+        (root / "ok.sv").write_text("assign a = x & y;\n", encoding="utf-8")
+        r5 = check_residual_mutations(root, [
+            {"id": "M3", "file": "ok.sv", "old": "x & y", "new": "x | y", "desc": "d"}])
+        assert r5 == [], r5
+
+    # 3) suite 重跑：截断的重跑不能沿用第一次 PASS
+    trunc = ("== sim: apb (top=t) ==\nPASS: apb ok\n"
+             "== sim: apb (top=t) ==\n")
+    rr = verify_suite_identities(trunc, ["apb"])
+    assert rr["all_verified"] is False, rr
+    assert rr["observed"]["apb"] == "STARTED", rr["observed"]
+
+    # 重跑也完整通过 -> 仍 PASS
+    both = ("== sim: apb (top=t) ==\nPASS: apb ok\n"
+            "== sim: apb (top=t) ==\nPASS: apb ok again\n")
+    rb = verify_suite_identities(both, ["apb"])
+    assert rb["all_verified"] is True, rb
+
+    # 重跑崩溃 -> FAIL
+    crash = ("== sim: apb (top=t) ==\nPASS: apb ok\n"
+             "== sim: apb (top=t) ==\n[CHECK] id=A | status=PASS\n%Error: crash\n")
+    rc = verify_suite_identities(crash, ["apb"])
+    assert rc["all_verified"] is False and rc["observed"]["apb"] == "FAIL", rc
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2510,6 +2582,7 @@ def main() -> int:
     test_no_user_data_destruction_and_valid_cocotb_json()
     test_security_hardening_injection_xss_verilator_hijack()
     test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml()
+    test_residual_and_suite_rerun_gates()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
