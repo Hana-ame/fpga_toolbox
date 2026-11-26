@@ -1187,6 +1187,110 @@ endmodule
     assert "64'hF123456789ABCDEF" not in tb
 
 
+def test_axi4_template_follows_id_len_widths() -> None:
+    """Defect 111: AXI4 模板把 ID/len/size/burst/resp 位宽写死。
+
+    AXI4 允许 ID 任意位宽（常见 4/8/16 位），`awlen` 也可窄到 4 位（≤16 beats）。
+    旧模板写死 `awid/bid/arid/rid` = [3:0]、`awlen/arlen` = [7:0]，DUT 一不同宽
+    就是 WIDTHEXPAND / WIDTHTRUNC —— Verilator 默认警告即错误，构建失败却返回
+    ok=True（实测 8 位 ID：4 条 WIDTHEXPAND；4 位 len：2 条 WIDTHTRUNC）。
+
+    同时测试向量必须能装进实际位宽：旧模板直接把 `4'd9` / `16'h0200` /
+    `32'hA000_0000` 写死，窄 ID / 窄地址上会变成 WIDTHDIGITS。
+    """
+    print("coverage: AXI4 template follows ID/len/size/burst/resp widths")
+    from fpga_toolbox.protocol_tb_emitter import _pw
+
+    iface = {"port_details": {
+        "awid": {"port": "s_axi_awid", "direction": "input", "width": 8},
+        "awlen": {"port": "s_axi_awlen", "direction": "input", "width": 4},
+        "awsize": {"port": "s_axi_awsize", "direction": "input", "width": 3},
+        "awburst": {"port": "s_axi_awburst", "direction": "input", "width": 2},
+        "bresp": {"port": "s_axi_bresp", "direction": "output", "width": 2},
+        "wdata": {"port": "s_axi_wdata", "direction": "input", "width": 64},
+        "awaddr": {"port": "s_axi_awaddr", "direction": "input", "width": 12},
+    }}
+    assert _pw(iface, "awid", 4) == 8
+    assert _pw(iface, "awlen", 8) == 4
+    assert _pw(iface, "wdata", 32) == 64
+    assert _pw(iface, "awaddr", 16) == 12
+
+    def _emit(id_w: int, len_w: int, aw: int, dw: int) -> str:
+        rtl = f"""`timescale 1ns/1ps
+module axi4_w (
+  input  logic           aclk,
+  input  logic           aresetn,
+  input  logic [{id_w - 1}:0] s_axi_awid,
+  input  logic [{aw - 1}:0]   s_axi_awaddr,
+  input  logic [{len_w - 1}:0] s_axi_awlen,
+  input  logic [2:0]     s_axi_awsize,
+  input  logic [1:0]     s_axi_awburst,
+  input  logic           s_axi_awvalid,
+  output logic           s_axi_awready,
+  input  logic [{dw - 1}:0]   s_axi_wdata,
+  input  logic [{max(1, dw // 8) - 1}:0] s_axi_wstrb,
+  input  logic           s_axi_wlast,
+  input  logic           s_axi_wvalid,
+  output logic           s_axi_wready,
+  output logic [{id_w - 1}:0] s_axi_bid,
+  output logic [1:0]     s_axi_bresp,
+  output logic           s_axi_bvalid,
+  input  logic           s_axi_bready,
+  input  logic [{id_w - 1}:0] s_axi_arid,
+  input  logic [{aw - 1}:0]   s_axi_araddr,
+  input  logic [{len_w - 1}:0] s_axi_arlen,
+  input  logic [2:0]     s_axi_arsize,
+  input  logic [1:0]     s_axi_arburst,
+  input  logic           s_axi_arvalid,
+  output logic           s_axi_arready,
+  output logic [{id_w - 1}:0] s_axi_rid,
+  output logic [{dw - 1}:0]   s_axi_rdata,
+  output logic [1:0]     s_axi_rresp,
+  output logic           s_axi_rlast,
+  output logic           s_axi_rvalid,
+  input  logic           s_axi_rready
+);
+  assign s_axi_awready = 1; assign s_axi_wready = 1; assign s_axi_arready = 1;
+  assign s_axi_bid = s_axi_awid; assign s_axi_bresp = 2'b00; assign s_axi_bvalid = 1'b1;
+  assign s_axi_rid = s_axi_arid; assign s_axi_rdata = '0; assign s_axi_rresp = 2'b00;
+  assign s_axi_rlast = 1'b1; assign s_axi_rvalid = 1'b1;
+endmodule
+"""
+        with tempfile.TemporaryDirectory() as td:
+            p_ = Path(td) / "dut.sv"
+            p_.write_text(rtl, encoding="utf-8")
+            r = call_tool("emit_testbench", {
+                "rtl_file": str(p_), "out_dir": str(Path(td) / "out"), "protocol": "axi4",
+            })
+            assert r["ok"], str(r.get("error"))[:300]
+            return Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+
+    # 8 位 ID + 4 位 len + 12 位地址 + 64 位数据：网线必须全部跟随
+    tb = _emit(id_w=8, len_w=4, aw=12, dw=64)
+    # 用「声明行 + 名字」匹配，不依赖模板里的对齐空格数
+    def _decl(name: str) -> str:
+        for ln in tb.splitlines():
+            if ln.strip().startswith("logic") and name in ln and "=" in ln or (
+                    ln.strip().startswith("logic") and name in ln):
+                return ln
+        return ""
+
+    assert "[7:0]" in _decl("s_axi_awid"), _decl("s_axi_awid")
+    assert "[7:0]" in _decl("s_axi_bid"), _decl("s_axi_bid")
+    assert "[3:0]" in _decl("s_axi_awlen"), _decl("s_axi_awlen")
+    assert "[11:0]" in _decl("s_axi_awaddr"), _decl("s_axi_awaddr")
+    assert "[63:0]" in _decl("s_axi_wdata"), _decl("s_axi_wdata")
+    # 旧模板的写死值不能残留
+    assert "[3:0]" not in _decl("s_axi_awid"), _decl("s_axi_awid")
+    assert "[7:0]" not in _decl("s_axi_awlen"), _decl("s_axi_awlen")
+    # 测试向量按位宽缩放：ID 不能再是 4'd9，地址不能超出 12 位
+    assert "16'h0200" not in tb, "地址常量未按 aw 缩放"
+    assert "4'd9" not in tb, "ID 常量未按 id_w 缩放"
+    # 6 个检查（含 SLVERR 用例）必须保留，不能因为参数化而砍掉覆盖
+    assert tb.count("axi_wr_burst(") + tb.count("axi_rd_burst(") >= 6, "测试序列被削减"
+    assert "SLVERR" in tb or "chk_resp" in tb, "resp 检查被丢弃"
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1210,6 +1314,7 @@ def main() -> int:
     test_pcie_tb_matches_dut_parameterization()
     test_module_name_not_used_as_unsafe_filename()
     test_ddr_hbm_templates_follow_port_widths()
+    test_axi4_template_follows_id_len_widths()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

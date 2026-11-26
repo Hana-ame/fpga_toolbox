@@ -91,6 +91,8 @@
 
 - [60-ddr-hbm-template-widths.md](60-ddr-hbm-template-widths.md) — DDR3/DDR4/HBM 的 TB 模板把端口位宽、数据常量、`$display` 格式宽度全部写死，而 Verilator **默认警告即错误**，DUT 位宽不符时生成的 TB 编译不过却报 `ok=True`（DUT 一点没验到）。三个协议实测：DDR3 写死 BA=3 位/常量 `8'hBEEF` → 4 条 WIDTHDIGITS + 1 条 WIDTHTRUNC；DDR4 写死 adr=17/dq=64/dm_dbi_n=8 位 → 4 条 WIDTHTRUNC；HBM 写死 data=256/ID=6/addr=28 位 → 64 位与 512 位 DUT 各 2/6 条 WIDTHEXPAND。新增 `_pw()` 从 `port_details` 取 RTL 真实位宽（三级回退），三个模板全部跟随，数据常量按位宽掩码、格式宽度同步。顺带修掉一个按十六进制字符截断数据图案的 off-by-one（dw=256 时低 64 位错成 `0xF123456789ABCDEF`）。6 个参考 DUT 全部 0 宽度告警 rc=0
 
+- [61-axi4-template-id-len-widths.md](61-axi4-template-id-len-widths.md) — AXI4 `ID` 宽度是实现自选（常见 4/8/16 位）、`LEN` 可窄到 4 位，而 TB 模板把 `awid/bid/arid/rid` 写死 `[3:0]`、`awlen/arlen` 写死 `[7:0]`。Verilator 默认警告即错误，8 位 ID DUT → 4 条 WIDTHEXPAND、4 位 len DUT → 2 条 WIDTHTRUNC，构建失败却返回 `ok=True`。修复：ID/len/size/burst/resp 全部按 `_pw()` 取真实端口位宽，**测试向量同步缩放**（ID 掩码、地址/数据掩码、十六进制格式宽度、beats 收紧到 2^len_w），并**保留原有 6 个检查含 SLVERR 语义**（参数化期间一度砍掉用例属覆盖回退，已恢复）
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
