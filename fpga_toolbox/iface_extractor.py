@@ -15,7 +15,12 @@ if __package__ in (None, ""):
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
     __package__ = "fpga_toolbox"
 
-from .core.sv_parser import SVModuleAST, SVPortAST, parse_sv_file
+from .canonical_iface import (
+    CANONICAL_INTERFACES,
+    bind_protocol,
+    interface_score,
+)
+from .core.sv_parser import SVModuleAST, parse_sv_file
 from .core.types import REQUIRED_APB_SIGNALS, REQUIRED_AXIL_SIGNALS, err_result, ok_result
 
 _AXIL_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
@@ -296,107 +301,100 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
             "missing_signals": [],
         })
 
-    for proto, pats, min_cnt in (
-        ("hbm", _HBM_PATS, 6),
-        ("pcie", _PCIE_PATS, 4),
-        ("ddr4", _DDR4_PATS, 5),
-        ("ddr3", _DDR3_PATS, 5),
-        ("ahb_lite", _AHB_PATS, 5),
-        ("axi4_lite", _AXIL_PATS, 6),
-        ("axi4_stream", _AXIS_PATS, 2),
-        ("apb", _APB_PATS, 4),
-        ("spi", _SPI_PATS, 4),
-        ("ethernet", _ETH_PATS, 4),
-    ):
-        groups: Dict[str, Dict[str, SVPortAST]] = {}
-        for p in mod.ports:
-            if p.name in claimed:
+    # ------------------------------------------------------------------
+    # 标准接口 -> DUT 端口绑定
+    #
+    # 旧实现为每个协议维护一张「canonical 信号 -> 名字正则」表，并逐个
+    # `pat.search(port)`。命名风格空间是无界的（psel / p_sel / psel_i /
+    # s0_p_sel / s_axi_psel / PSel ...），每遇到一种就要打一条补丁 ——
+    # 缺陷 131（方向前缀拆组）、166（方向后缀全失效）、170（burst 信号漏
+    # 绑定）都是同一个病根的三次发作。
+    #
+    # 现在改为：标准接口在 canonical_iface 里**声明一次**（名称、方向、位宽
+    # 语义、是否必需），绑定引擎把任意 DUT 端口名 token 化后按「token 后缀
+    # 拼接 == canonical 名」匹配，剩余前导 token 作为通道/实例前缀分组。
+    # TB 仍只面向 canonical 信号生成，再经 port_map 连到真实端口名。
+    # ------------------------------------------------------------------
+    _BIND_ORDER = ("hbm", "pcie", "ddr4", "ddr3", "ahb_lite", "axi4_lite",
+                   "axi4_stream", "apb", "spi", "ethernet")
+    _REQ_FALLBACK: Dict[str, Tuple[str, ...]] = {
+        "apb": REQUIRED_APB_SIGNALS,
+        "axi4_lite": REQUIRED_AXIL_SIGNALS,
+        "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hwdata",
+                     "hready", "hrdata", "hresp"),
+        "ddr3": ("cs_n", "ba", "addr", "dq"),
+        "ddr4": ("cs_n", "act_n", "bg", "ba", "adr", "dq"),
+        "hbm": ("awaddr", "awvalid", "awready", "wdata", "wvalid", "wready",
+                "araddr", "arvalid", "arready", "rdata", "rvalid", "rready"),
+        "spi": ("sclk", "cs_n", "mosi", "miso"),
+        "ethernet": ("tx_en", "tx_data", "rx_dv", "rx_data"),
+        "pcie": ("tx_tvalid", "tx_tready", "tx_tdata",
+                 "rx_tvalid", "rx_tready", "rx_tdata"),
+        "axi4_stream": ("tdata", "tvalid", "tready"),
+    }
+
+    for proto in _BIND_ORDER:
+        ci = CANONICAL_INTERFACES.get(proto)
+        if ci is None:
+            continue
+        for bi in bind_protocol(ci, mod.ports, claimed):
+            req_n, tot_n = interface_score(bi, ci)
+            if tot_n < ci.min_signals:
                 continue
-            # 匹配前先剥掉**方向后缀**（`_i`/`_o`/`_in`/`_out`/`_ib`/`_ob`）。
-            # 各 `_*_PATS` 的形态都是 `(?:^|_)sig$`（信号名在末尾），于是
-            # `psel_i` / `pready_o` / `awaddr_o` / `rdata_i` 这类**非常常见**的
-            # 方向后缀命名全部匹配不到：实测一个完全标准的 APB 从机
-            # （psel_i/penable_i/.../pready_o/prdata_o/pslverr_o）被分类成 0 个
-            # 接口，9 个信号全落进 out_of_scope_ports；AXI4-Lite 同理（17 个
-            # 信号全落空）。这比前缀问题（缺陷 131）影响面更大 —— 前缀至少有
-            # `(?:^|_)` 兜住，后缀则完全无解。
-            _mname = p.name
-            _suf = _DIR_SUFFIX_RE.search(_mname)
-            if _suf:
-                _mname = _mname[:_suf.start()]
-            matched = None
-            for canon, pat in pats:
-                m = pat.search(_mname)
-                if m:
-                    groups.setdefault(_norm_prefix(_mname[:m.start()]), {})[canon] = p
-                    matched = canon
-                    break
-            if matched:
+            sigs = {k: v.port for k, v in bi.signals.items()}
+            # 认同一个接口的判据：
+            #   * 绑定信号数达到 min_signals（协议自身的最低特征数），且
+            #   * 至少有一个「协议特征信号」绑上 —— 否则 AXI4 的 awaddr 之类
+            #     可能在别的协议里凑够数量造成误认。
+            # 注意不能用「required 信号的绑定数」，因为 SPI/ethernet 的
+            # 全部信号在标准接口里都是可选（不同实现只暴露子集），
+            # required 计数恒为 0 会把它们全部拒掉。
+            req = _REQ_FALLBACK.get(proto) or tuple(
+                s.name for s in ci.signals if s.required)
+            # 特征信号命中数必须按 `req`（协议特征清单）统计，不能用
+            # `interface_score` 的 required 计数 —— SPI/ethernet 的所有信号在
+            # 标准接口里都标了 required=False（不同实现只暴露子集），于是
+            # required 计数恒为 0，任何非空 `req` 都会把整个协议拒掉。
+            if req and not any(x in sigs for x in req):
                 continue
-        for grp, sigs in groups.items():
-            if len(sigs) < min_cnt:
-                continue
-            claimed.update(p.name for p in sigs.values())
-            if proto == "apb":
-                v_port = sigs.get("psel") or sigs.get("penable")
-                req = REQUIRED_APB_SIGNALS
-                aw_p, dw_p = sigs.get("paddr"), sigs.get("pwdata") or sigs.get("prdata")
-            elif proto == "ahb_lite":
-                v_port = sigs.get("htrans") or sigs.get("hsel")
-                req = ("hsel", "haddr", "htrans", "hwrite", "hwdata", "hready", "hrdata", "hresp")
-                aw_p, dw_p = sigs.get("haddr"), sigs.get("hwdata") or sigs.get("hrdata")
-            elif proto in ("ddr3", "ddr4"):
-                v_port = sigs.get("cs_n") or sigs.get("act_n")
-                req = ("cs_n", "ba", "addr", "dq") if proto == "ddr3" else ("cs_n", "act_n", "bg", "ba", "adr", "dq")
-                aw_p, dw_p = sigs.get("addr") or sigs.get("adr"), sigs.get("dq")
-            elif proto == "hbm":
-                v_port = sigs.get("awvalid") or sigs.get("arvalid")
-                req = ("awaddr", "awvalid", "awready", "wdata", "wvalid", "wready", "araddr", "arvalid", "arready", "rdata", "rvalid", "rready")
-                aw_p, dw_p = sigs.get("awaddr") or sigs.get("araddr"), sigs.get("wdata") or sigs.get("rdata")
-            elif proto == "spi":
-                v_port = sigs.get("cs_n") or sigs.get("sclk")
-                req = ("sclk", "cs_n", "mosi", "miso")
-                aw_p, dw_p = None, None
-            elif proto == "ethernet":
-                v_port = sigs.get("rx_dv") or sigs.get("tx_en")
-                req = ("tx_en", "tx_data", "rx_dv", "rx_data")
-                aw_p, dw_p = None, sigs.get("tx_data") or sigs.get("rx_data")
-            elif proto == "pcie":
-                v_port = sigs.get("rx_valid") or sigs.get("tx_valid")
-                req = ("tx_valid", "tx_ready", "tx_data", "rx_valid", "rx_ready", "rx_data")
-                aw_p, dw_p = None, sigs.get("tx_data") or sigs.get("rx_data")
-            elif proto == "axi4_lite":
-                for bp in mod.ports:
-                    if bp.name in claimed:
-                        continue
-                    for canon, bpat in _AXI4_BURST_PATS:
-                        bm = bpat.search(bp.name)
-                        if bm and _norm_prefix(bp.name[:bm.start()]) == grp:
-                            sigs.setdefault(canon, bp)
-                            claimed.add(bp.name)
-                            break
-                v_port = sigs.get("awvalid") or sigs.get("arvalid")
-                req = REQUIRED_AXIL_SIGNALS
-                aw_p, dw_p = sigs.get("awaddr") or sigs.get("araddr"), sigs.get("wdata") or sigs.get("rdata")
-            else:
-                v_port = sigs.get("tvalid")
-                req = ("tdata", "tvalid", "tready")
-                aw_p, dw_p = None, sigs.get("tdata")
-            role = ("slave" if v_port.direction == "input" else "master") if v_port else "unknown"
-            eff_proto = "axi4" if (proto == "axi4_lite" and any(k in sigs for k in ("awlen", "arlen", "wlast", "rlast", "awburst", "arburst"))) else proto
+            claimed.update(v.port.name for v in bi.signals.values())
+
+            aw_name = next((c for c in ("paddr", "awaddr", "araddr", "haddr",
+                                        "addr", "adr") if c in sigs), None)
+            dw_name = next((c for c in ("pwdata", "prdata", "wdata", "rdata",
+                                        "hwdata", "hrdata", "dq",
+                                        "tx_data", "rx_data", "tdata")
+                            if c in sigs), None)
+            aw_p = sigs.get(aw_name) if aw_name else None
+            dw_p = sigs.get(dw_name) if dw_name else None
+            probe = next((sigs[c] for c in ci.role_probes if c in sigs), None)
+            role = ("slave" if probe is not None and probe.direction == "input"
+                    else ("master" if probe is not None else "unknown"))
+            eff_proto = proto
+            if proto == "axi4_lite" and any(b in sigs for b in ci.burst_probes):
+                eff_proto = "axi4"
+
             entry: Dict[str, Any] = {
                 "protocol": eff_proto,
-                "group_prefix": grp,
+                "group_prefix": bi.group,
                 "role": role,
                 "addr_width": aw_p.width if aw_p else None,
                 "data_width": dw_p.width if dw_p else None,
-                "port_map": {k: v.name for k, v in sigs.items()},
-                "port_details": {
-                    k: {"port": v.name, "direction": v.direction, "width": v.width}
-                    for k, v in sigs.items()
+                "port_map": bi.port_map(),
+                "port_details": bi.port_details(),
+                "missing_signals": [x for x in req if x not in sigs],
+                # 绑定证据：命名风格不再决定识别成功率，但调用方仍应能看到
+                # 每个 canonical 信号被哪个真实端口、以什么拼写匹配上的。
+                "binding": {
+                    "matched": {k: v.matched for k, v in bi.signals.items()},
+                    "ambiguous": bi.ambiguous,
                 },
-                "missing_signals": [s for s in req if s not in sigs],
             }
+            if bi.ambiguous:
+                entry["binding"]["ambiguity_warning"] = (
+                    "multiple DUT ports bind to the same canonical signal; "
+                    "the highest-preference one was chosen - verify the binding"
+                )
             if proto == "pcie":
                 if "GEN" in mod.parameters:
                     entry["pcie_gen"] = mod.parameters["GEN"]

@@ -4391,6 +4391,104 @@ def test_wrong_requested_protocol_names_the_detected_one() -> None:
         assert d.get("supported_protocols"), d
 
 
+def test_canonical_interface_binding_engine() -> None:
+    """Canonical-interface binding engine (replaces per-protocol regex patches).
+
+    Defects 131/166/170 were three separate patches on the same root cause: a
+    hand-written regex per canonical signal, extended once per naming style.
+    The engine now declares each standard interface once and binds DUT ports by
+    tokenizing names (snake_case, camelCase, direction prefixes/suffixes) and
+    matching a token suffix against the canonical spelling.
+    """
+    print("coverage: canonical interface binding engine")
+    from fpga_toolbox.canonical_iface import (
+        CANONICAL_INTERFACES,
+        _filter_group_tokens,
+        _match_suffix,
+        _tokens_ok,
+        bind_protocol,
+        interface_score,
+        tokenize_port_name,
+    )
+
+    # every declared protocol has canonical signals and a sane threshold
+    for proto, ci in CANONICAL_INTERFACES.items():
+        assert ci.protocol == proto, proto
+        assert ci.signals, proto
+        assert ci.min_signals >= 1, proto
+        for sig in ci.signals:
+            # `concat` normalizes underscore-containing canonicals (cs_n)
+            assert sig.concat == sig.name.replace("_", "").lower(), sig.name
+            assert sig.all_spellings()[0] == sig.name, sig.name
+
+    # tokenizer styles
+    assert tokenize_port_name("s0_p_sel_i") == ["s0", "p", "sel", "i"], \
+        tokenize_port_name("s0_p_sel_i")
+    assert tokenize_port_name("sAwAddr") == ["s", "aw", "addr"], \
+        tokenize_port_name("sAwAddr")
+    assert tokenize_port_name("PSlvErr") == ["p", "slv", "err"], \
+        tokenize_port_name("PSlvErr")
+    assert tokenize_port_name("__") == []
+
+    # suffix matching concatenates tokens, so spacing/case do not matter
+    assert _match_suffix(["s0", "p", "sel"], "psel") == (1, "psel")
+    assert _match_suffix(["aw", "addr"], "awaddr") == (0, "awaddr")
+    assert _match_suffix(["x"], "nosuch") is None
+
+    # group prefix filtering: direction words never split a channel
+    ci_apb = CANONICAL_INTERFACES["apb"]
+    assert _filter_group_tokens(["i"], ci_apb) == []
+    assert _filter_group_tokens(["o"], ci_apb) == []
+    assert _filter_group_tokens(["s0"], ci_apb) == ["s0"]
+    ci_pcie = CANONICAL_INTERFACES["pcie"]
+    assert _filter_group_tokens(["pcie", "rx"], ci_pcie) == ["pcie"]
+    assert _filter_group_tokens(["pcie", "tx"], ci_pcie) == ["pcie"]
+
+    # protocol token rules
+    assert _tokens_ok(["ddr3", "addr"], CANONICAL_INTERFACES["ddr3"]) is True
+    assert _tokens_ok(["ddr4", "addr"], CANONICAL_INTERFACES["ddr3"]) is False
+    assert _tokens_ok(["hbm", "awaddr"], CANONICAL_INTERFACES["hbm"]) is True
+    assert _tokens_ok(["awaddr"], CANONICAL_INTERFACES["hbm"]) is False
+    assert _tokens_ok(["whatever"], ci_apb) is True
+
+    # an APB with i_/o_ prefixes binds as ONE group of 9 signals
+    apb_src = (
+        "module dp (\n"
+        "  input  logic        clk, input logic rst_n,\n"
+        "  input  logic        i_psel, input logic i_penable, input logic i_pwrite,\n"
+        "  input  logic [7:0]  i_paddr, input logic [31:0] i_pwdata, input logic [3:0] i_pstrb,\n"
+        "  output logic        o_pready, output logic [31:0] o_prdata, output logic o_pslverr\n"
+        ");\n"
+        "  assign o_pready = 1\'b1; assign o_prdata = i_pwdata; assign o_pslverr = 1\'b0;\n"
+        "endmodule\n")
+    from fpga_toolbox.core.sv_parser import parse_sv_file
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dp.sv"
+        f.write_text(apb_src, encoding="utf-8")
+        mod = parse_sv_file(f)[0]
+    bound = bind_protocol(ci_apb, mod.ports, set())
+    assert len(bound) == 1, [(b.group, len(b.signals)) for b in bound]
+    bi = bound[0]
+    assert bi.group == "default", bi.group
+    assert len(bi.signals) == 9, sorted(bi.port_map())
+    req_n, tot_n = interface_score(bi, ci_apb)
+    assert tot_n == 9 and req_n >= 1, (req_n, tot_n)
+    assert bi.port_map()["psel"] == "i_psel", bi.port_map()
+    assert bi.port_map()["pready"] == "o_pready", bi.port_map()
+    # details carry direction/width for the emitter
+    det = bi.port_details()
+    assert det["psel"]["direction"] == "input", det["psel"]
+    assert det["pwdata"]["width"] == 32, det["pwdata"]
+    assert bi.ambiguous == [], bi.ambiguous
+
+    # `_sig` builds CanonSignal with aliases and required flag
+    from fpga_toolbox.canonical_iface import _sig
+    cs = _sig("tx_tvalid", "out", required=False, aliases=("tx_valid",))
+    assert cs.name == "tx_tvalid" and cs.direction == "out"
+    assert cs.required is False and cs.aliases == ("tx_valid",)
+    assert cs.all_spellings() == ("tx_tvalid", "tx_valid")
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4463,6 +4561,7 @@ def main() -> int:
     test_multi_interface_dut_reports_uncovered_bus()
     test_multiple_candidate_modules_are_disclosed()
     test_wrong_requested_protocol_names_the_detected_one()
+    test_canonical_interface_binding_engine()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

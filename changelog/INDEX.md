@@ -169,3 +169,4 @@
 - [104 · 多接口 DUT 只测第一个接口其余静默悬空](104-uncovered-interfaces.md)
 - [105 · 多模块文件里静默只测第一个匹配模块](105-multiple-candidate-modules.md)
 - [106 · 请求错误协议时错误信息不指出 DUT 实际协议](106-wrong-protocol-names-detected.md)
+- [107 · 架构重构：标准接口定义 + 绑定层](107-canonical-interface-binding.md)
