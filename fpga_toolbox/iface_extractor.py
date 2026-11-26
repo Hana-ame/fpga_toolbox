@@ -570,12 +570,17 @@ def tool_extract_interfaces(
         # axi4_lite 段。纯 APB 设备若写入空的 axi4_lite.port_map，validator 会把
         # 空 dict 当成「有 AXI 边界」并报 17 条 E001，让合法的纯 APB 契约无法
         # 通过自家校验（回归 33）。
-        if axil or not apb:
+        # 只在**确实存在** AXI 接口时写 axi4_lite 段。旧条件 `axil or not apb`
+        # 对「AXI 和 APB 都没有」也成立，于是纯 DDR3/HBM/PCIe 设备会被凭空塞进
+        # 一个 `axi4_lite: {port_map: {}}` —— draft 谎报了一种不存在的总线，
+        # 下游按它选模板就会用错协议。真正「什么接口都没识别到」的兜底段在下面
+        # （仅当 interfaces 为空时）。
+        if axil:
             boundary["axi4_lite"] = {
-                "addr_width": (axil["addr_width"] or 12) if axil else 12,
-                "data_width": (axil["data_width"] or 32) if axil else 32,
-                "role": (axil["role"] if axil and axil["role"] != "unknown" else "slave"),
-                "port_map": axil["port_map"] if axil else {},
+                "addr_width": axil["addr_width"] or 12,
+                "data_width": axil["data_width"] or 32,
+                "role": axil["role"] if axil["role"] != "unknown" else "slave",
+                "port_map": axil["port_map"],
             }
         if apb:
             boundary["apb"] = {
@@ -584,6 +589,43 @@ def tool_extract_interfaces(
                 "role": apb["role"] if apb["role"] != "unknown" else "slave",
                 "port_map": apb["port_map"],
             }
+        # **其余协议也要写进 draft**。旧实现只导出 axi4_lite / apb：一个 DDR3
+        # 控制器生成的 draft 里根本没有 ddr3 段，反而被塞了一个
+        # `axi4_lite: {port_map: {}}`（因为 `axil or not apb` 分支对「两者都
+        # 没有」也成立）—— 用这份 draft 继续走 emit_testbench 会拿错协议模板。
+        # 这里把每个已识别接口按协议名写入，并带上绑定证据（含双向拆分的
+        # in/out 对），让 draft 真实反映 RTL。
+        _exported = {"axi4_lite", "axi4", "apb"}
+        for _if in m0["interfaces"]:
+            _proto = _if["protocol"]
+            if _proto in _exported:
+                continue
+            # full AXI4 已归入 axi4_lite 段（契约层统一出口），不重复写
+            if _proto == "axi4":
+                continue
+            seg: Dict[str, Any] = {
+                "role": _if["role"] if _if.get("role") not in (None, "unknown") else "slave",
+                "port_map": _if.get("port_map") or {},
+            }
+            if _if.get("addr_width"):
+                seg["addr_width"] = _if["addr_width"]
+            if _if.get("data_width"):
+                seg["data_width"] = _if["data_width"]
+            if _if.get("split_port_map"):
+                seg["split_port_map"] = _if["split_port_map"]
+            if _if.get("pcie_gen") is not None:
+                seg["pcie_gen"] = _if["pcie_gen"]
+            if _if.get("pcie_lanes") is not None:
+                seg["pcie_lanes"] = _if["pcie_lanes"]
+            if _if.get("missing_signals"):
+                seg["missing_signals"] = _if["missing_signals"]
+            boundary[_proto] = seg
+            _exported.add(_proto)
+        # 只有在确实没有任何受支持接口时，才保留旧的 axi4_lite 占位段（契约
+        # 层需要它作为统一出口）；有其它协议时不再凭空造空 AXI 段。
+        if not m0["interfaces"] and "axi4_lite" not in boundary:
+            boundary["axi4_lite"] = {
+                "addr_width": 12, "data_width": 32, "role": "slave", "port_map": {}}
         if m0.get("instance_hierarchy"):
             boundary["instance_hierarchy"] = m0["instance_hierarchy"]
         draft = {

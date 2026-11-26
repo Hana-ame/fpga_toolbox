@@ -4636,6 +4636,77 @@ def test_bind_order_is_derived_from_canonical_declarations() -> None:
         assert "ddr5" in err, err[:300]
 
 
+def test_draft_yaml_exports_all_protocols_and_validates() -> None:
+    """Defect 179/180: draft 只导出 AXI/APB，且非 AXI 契约无法通过校验。
+
+    179: `emit_draft_yaml` 的生成逻辑只认 `axi4_lite`（含 full AXI4）与 `apb`
+    两种接口。一个 DDR3 控制器的 draft 里**没有 ddr3 段**，反而因为
+    `axil or not apb` 对「两者都没有」也成立，被塞进
+    `axi4_lite: {port_map: {}}` —— 凭空谎报了一种不存在的总线，下游按它选
+    模板就会用错协议。现在把所有已识别接口按协议名导出（含
+    split_port_map / pcie_gen 等），只在真的没有任何接口时保留 AXI 占位段。
+
+    180: `validate_contract` 里 `has_axil = isinstance(axil_raw, dict) or
+    not has_apb`，对既非 AXI 也非 APB 的设备（纯 DDR3/HBM/PCIe）成立，于是强行
+    进入 AXI 校验并报 17 条 `E001 Missing required 'awaddr'`，把合法契约判死。
+    """
+    print("coverage: draft yaml exports all protocols and validates")
+    import yaml
+
+    from fpga_toolbox.registry import call_tool
+
+    ref = Path(__file__).resolve().parent.parent / "examples" / "multi_bus_ref"
+    expects = {
+        "apb_slave.sv": "apb",
+        "axi4_full_slave.sv": "axi4_lite",
+        "ahb_lite_slave.sv": "ahb_lite",
+        "ddr3_mem_ctrl.sv": "ddr3",
+        "ddr4_mem_ctrl.sv": "ddr4",
+        "hbm_pc_ctrl.sv": "hbm",
+        "pcie_tlp_ep.sv": "pcie",
+    }
+    _META = {"module_name", "rtl_files", "parameters", "clock", "reset",
+             "out_of_scope_ports", "instance_hierarchy"}
+
+    with tempfile.TemporaryDirectory() as td:
+        for fname, proto in expects.items():
+            out = Path(td) / f"{fname}.yaml"
+            r = call_tool("extract_interfaces", {
+                "rtl_file": str(ref / fname), "emit_draft_yaml": str(out)})
+            assert r["ok"], (fname, str(r.get("error"))[:200])
+            boundary = yaml.safe_load(out.read_text(encoding="utf-8"))["boundary"]
+            buses = [k for k in boundary if k not in _META]
+            # 只导出真实存在的总线，不凭空造 axi4_lite
+            assert buses == [proto], (fname, buses)
+            # 非 AXI/APB 协议必须带完整 port_map（不是空 dict）
+            if proto not in ("axi4_lite", "apb"):
+                assert boundary[proto]["port_map"], (fname, boundary[proto])
+            # 且这份 draft 必须能通过自家校验
+            v = call_tool("validate_contract", {
+                "spec_path": str(out), "rtl_file": str(ref / fname)})
+            assert v["ok"], (fname, str(v.get("error"))[:200],
+                             [d["code"] for d in (v.get("diagnostics") or [])][:5])
+
+        # DDR3 draft 要带双向拆分信息，下游才知道 dq 的两半
+        d3 = Path(td) / "ddr3_mem_ctrl.sv.yaml"
+        b3 = yaml.safe_load(d3.read_text(encoding="utf-8"))["boundary"]
+        assert b3["ddr3"]["split_port_map"]["dq"] == {
+            "in": "ddr3_dq_in", "out": "ddr3_dq_out"}, b3["ddr3"]
+
+        # 完全没有总线时仍保留 AXI 占位段（契约层需要它作为统一出口）
+        nobus = Path(td) / "nobus.sv"
+        nobus.write_text(
+            "module nobus (input logic clk, input logic rst_n,\n"
+            "  input logic [7:0] din, output logic [7:0] dout);\n"
+            "  assign dout = din;\nendmodule\n", encoding="utf-8")
+        nout = Path(td) / "nobus.yaml"
+        rn = call_tool("extract_interfaces", {
+            "rtl_file": str(nobus), "emit_draft_yaml": str(nout)})
+        assert rn["ok"], str(rn.get("error"))[:200]
+        bn = yaml.safe_load(nout.read_text(encoding="utf-8"))["boundary"]
+        assert "axi4_lite" in bn, [k for k in bn if k not in _META]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4711,6 +4782,7 @@ def main() -> int:
     test_canonical_interface_binding_engine()
     test_nonstandard_prefix_dut_ports_are_bound_and_wired()
     test_bind_order_is_derived_from_canonical_declarations()
+    test_draft_yaml_exports_all_protocols_and_validates()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

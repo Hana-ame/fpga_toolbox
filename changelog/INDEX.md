@@ -172,3 +172,4 @@
 - [107 · 架构重构：标准接口定义 + 绑定层](107-canonical-interface-binding.md)
 - [108 · 非标准前缀与双向 dq 的绑定/接线](108-prefix-binding-and-bidirectional-dq.md)
 - [109 · 绑定顺序派生、DDR5 声明、新架构文档](109-bind-order-derivation-and-docs.md)
+- [110 · draft 只导出 AXI/APB 且非 AXI 契约无法校验](110-draft-exports-all-protocols.md)

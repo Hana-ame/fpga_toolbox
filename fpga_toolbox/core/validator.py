@@ -288,7 +288,17 @@ def build_and_validate_ir(
 
     # Preserve full backward compatibility: if neither axi4_lite nor apb is provided, validate axi4_lite as before.
     has_apb = isinstance(apb_raw, dict)
-    has_axil = isinstance(axil_raw, dict) or not has_apb
+    # 契约层历史上只支持 AXI4-Lite / APB 两种边界，`has_axil` 写成
+    # 「有 axi4_lite 段 **或** 没有 apb 段」—— 对于既非 AXI 也非 APB 的设备
+    # （DDR3/DDR4/HBM/PCIe/SPI/以太网 draft 里的 ddr3/hbm/pcie 等段），
+    # `not has_apb` 为真，于是强行进入 AXI 校验分支并报 17 条
+    # `E001 Missing required 'awaddr'`，把合法的非 AXI/APB 契约判死
+    # （缺陷 180）。这里改成：只有在**没有其它已声明总线**时才回退到 AXI
+    # 假定（保持旧的「空 spec 当 AXI」行为）。
+    _NON_AXIL_APB_BUSES = ("ddr3", "ddr4", "ddr5", "hbm", "pcie",
+                           "spi", "ethernet", "axi4_stream", "ahb_lite")
+    _other_bus = any(isinstance(b_raw.get(_k), dict) for _k in _NON_AXIL_APB_BUSES)
+    has_axil = isinstance(axil_raw, dict) or (not has_apb and not _other_bus)
 
     axil_dict = axil_raw if isinstance(axil_raw, dict) else {}
     addr_w = _to_int(axil_dict.get("addr_width"), _to_int((apb_raw or {}).get("addr_width"), 12))
