@@ -510,7 +510,7 @@ python3 -m fpga_toolbox audit_harness
 {
   "ok": true,
   "data": {
-    "total": 10, "passed": 10, "failed": 0,
+    "total": 18, "passed": 18, "failed": 0,
     "checks": [
       {"id": "A1_LINT_FAULT_CATCH", "passed": true, "detail": "ok=False codes=['C1', 'R2']"},
       {"id": "A2_MUTATION_RESIDUAL_GUARD", "passed": true, "detail": "ok=False codes=['E030']"},
@@ -532,6 +532,14 @@ python3 -m fpga_toolbox audit_harness
 | A8 | `emit_testbench` 缺 boundary 时 fail-fast |
 | A9 | slang 回退对调用方可见（W013）|
 | A10 | `clean_pt_netlist` 清理残留时报 E051 |
+| A11 | SV 静默通过（S4）能检出，有真实判定时不误报 |
+| A12 | `run_sim` 波形/日志产物守卫（E024、陈旧波形不冒充本次产物）|
+| A13 | 契约路径 TB 的波形开关链路完整（$dumpfile + plusarg + 变量声明 + 无死 `ifdef`）|
+| A14 | 生成的 shell 脚本语法 + `set -u` 运行期无未声明变量 |
+| A15 | `run_mutation` 有 baseline 预检（坏 test_cmd 不能报假 100%）|
+| A16 | 套件打印 PASS 后崩溃不算通过 |
+| A17 | 审计报告 `summary`/`overall_status` 与 `checks` 矛盾必须可见（W052/W053）|
+| A18 | 畸形 results（非对象元素、无名 testcase）必须报错/判 FAIL，不静默 NO_RESULTS |
 
 ---
 

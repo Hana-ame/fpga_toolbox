@@ -414,7 +414,7 @@ endmodule</code></pre></div>
 <div class="code-block"><div class="code-lang">json</div><pre><code>{
   "ok": true,
   "data": {
-    "total": 10, "passed": 10, "failed": 0,
+    "total": 18, "passed": 18, "failed": 0,
     "checks": [
       {"id": "A1_LINT_FAULT_CATCH", "passed": true, "detail": "ok=False codes=['C1', 'R2']"},
       {"id": "A2_MUTATION_RESIDUAL_GUARD", "passed": true, "detail": "ok=False codes=['E030']"},
@@ -423,7 +423,7 @@ endmodule</code></pre></div>
     ]
   }
 }</code></pre></div>
-<div class="table-wrap"><table><thead><tr><th>项</th><th>验证什么</th></tr></thead><tbody><tr><td>A1</td><td><code>lint_tb</code> 能抓到时钟竞争与握手缺陷</td></tr><tr><td>A2</td><td><code>run_mutation</code> 拒绝残留变异（E030）</td></tr><tr><td>A3</td><td><code>normalize_sim_result</code> 拒绝垃圾 JSON，不静默 PASS</td></tr><tr><td>A4</td><td><code>copy_sandbox</code> 拒绝以项目根为沙箱</td></tr><tr><td>A5/A6</td><td>套件身份核对能解析真实日志、套件齐时不假报警</td></tr><tr><td>A7</td><td>Verilator 版本守卫（E020）生效</td></tr><tr><td>A8</td><td><code>emit_testbench</code> 缺 boundary 时 fail-fast</td></tr><tr><td>A9</td><td>slang 回退对调用方可见（W013）</td></tr><tr><td>A10</td><td><code>clean_pt_netlist</code> 清理残留时报 E051</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>项</th><th>验证什么</th></tr></thead><tbody><tr><td>A1</td><td><code>lint_tb</code> 能抓到时钟竞争与握手缺陷</td></tr><tr><td>A2</td><td><code>run_mutation</code> 拒绝残留变异（E030）</td></tr><tr><td>A3</td><td><code>normalize_sim_result</code> 拒绝垃圾 JSON，不静默 PASS</td></tr><tr><td>A4</td><td><code>copy_sandbox</code> 拒绝以项目根为沙箱</td></tr><tr><td>A5/A6</td><td>套件身份核对能解析真实日志、套件齐时不假报警</td></tr><tr><td>A7</td><td>Verilator 版本守卫（E020）生效</td></tr><tr><td>A8</td><td><code>emit_testbench</code> 缺 boundary 时 fail-fast</td></tr><tr><td>A9</td><td>slang 回退对调用方可见（W013）</td></tr><tr><td>A10</td><td><code>clean_pt_netlist</code> 清理残留时报 E051</td></tr><tr><td>A11</td><td>SV 静默通过（S4）能检出，有真实判定时不误报</td></tr><tr><td>A12</td><td><code>run_sim</code> 波形/日志产物守卫（E024、陈旧波形不冒充本次产物）</td></tr><tr><td>A13</td><td>契约路径 TB 的波形开关链路完整（$dumpfile + plusarg + 变量声明 + 无死 <code>ifdef</code>）</td></tr><tr><td>A14</td><td>生成的 shell 脚本语法 + <code>set -u</code> 运行期无未声明变量</td></tr><tr><td>A15</td><td><code>run_mutation</code> 有 baseline 预检（坏 test_cmd 不能报假 100%）</td></tr><tr><td>A16</td><td>套件打印 PASS 后崩溃不算通过</td></tr><tr><td>A17</td><td>审计报告 <code>summary</code>/<code>overall_status</code> 与 <code>checks</code> 矛盾必须可见（W052/W053）</td></tr><tr><td>A18</td><td>畸形 results（非对象元素、无名 testcase）必须报错/判 FAIL，不静默 NO_RESULTS</td></tr></tbody></table></div>
 <hr>
 <h2 id="4-诊断码总表">4. 诊断码总表</h2>
 <h3 id="校验类validate_contract">校验类（<code>validate_contract</code>）</h3>

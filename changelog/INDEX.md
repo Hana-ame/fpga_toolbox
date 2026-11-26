@@ -103,6 +103,8 @@
 
 - [66-visual-report-data-consistency.md](66-visual-report-data-consistency.md) — `render_visual_report` 的自检只查 HTML 标签配平与渲染行数（W050/W051），**完全不看 report 数据是否自相矛盾**：`summary.passed=2` 而 checks 全 FAIL、`overall_status=PASS` 却没有任何检查通过等四种情形，全部 `consistency_ok=True` + 零诊断被原样印进 HTML —— 读者面对「通过率 100%」和满屏 FAIL 行无从判断。新增 **W052**（summary 计数与实际不符）与 **W053**（overall_status 与行级结论矛盾）。另修六种畸形 report 字段抛裸 `AttributeError: 'str' object has no attribute 'get'`（无字段名无索引），改为渲染前统一结构校验 + 可定位错误（与上轮 normalize_sim_result 同口径）；**另暴露流程盲区**：新增诊断码必须在 `docs/FEATURES.md` 登记，但该检查只在 CI 的 `docs_check.py`（D13）里跑，本地 `--fast` 的 Layer 5 不查 —— 本地全绿、CI 四个 test job 全红。已把 D13 前移到本地门禁（与 CI 同口径：字符串字面量声明 + README/docs 范围覆盖）
 
+- [67-self-audit-covers-new-guardrails.md](67-self-audit-covers-new-guardrails.md) — `audit_harness` 是「护栏的护栏」，但最近几轮修的缺陷（变异 baseline / 套件身份 / 报告自洽 / 畸形 results）**都不在矩阵里** —— 这些护栏将来被回退，自审计本身发现不了。新增 **A15–A18**（矩阵 14 → 18 项，18/18 通过）。更关键的是加完 A18 后做回退验证时发现：探针在被测护栏坏掉时会**抛异常把整个 `audit_harness` 打崩**，调用方拿到 traceback 而不是「A18 失败」—— 而自审计的全部价值就是「护栏被回退时必须报 FAIL」。加 `_audit_call` 包装器把任意异常折算成 `(None, "Type: msg")`，A15/A17/A18 全部改用；两次回退验证现在都干净报 FAIL 并指名异常。顺带补全 FEATURES.md 能力表里一直缺失的 A11–A14
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

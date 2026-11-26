@@ -8,6 +8,7 @@ and copy_sandbox all reject invalid/broken inputs with ok=False.
 from __future__ import annotations
 
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -27,6 +28,7 @@ from .sandbox_copier import tool_copy_sandbox
 from .sim_runner import tool_run_sim, verify_suite_identities
 from .tb_emitter import tool_emit_testbench
 from .tb_linter import tool_lint_tb
+from .visual_renderer import tool_render_visual_report
 
 
 def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
@@ -488,6 +490,124 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "passed": a14_ok,
             "detail": f"checked={_a14_checked} bad={len(_a14_bad)} "
                       f"{_a14_bad[:2]}",
+        })
+
+        def _audit_call(fn):
+            """执行一个自审计探针；任何异常都折算成 (None, "Type: msg")。
+
+            自审计的价值在于「护栏被回退时必须报 FAIL」。如果探针本身在护栏
+            坏掉时抛异常，整个 audit_harness 会崩，调用方看到的是 traceback
+            而不是「A18 失败」—— 那样自审计就无法履行它的职责（实测踩到）。
+            """
+            try:
+                return fn(), None
+            except Exception as exc:  # noqa: BLE001 - 自审计要观察任意失败形态
+                return None, f"{type(exc).__name__}: {exc}"
+
+        # ---- A15: run_mutation 必须有 baseline 预检（缺陷 113）----
+        # 坏掉的 test_cmd（永远非零）不能让每个变异都判 KILLED 从而报假 100%。
+        _bm = root / "mut_baseline"
+        _bm.mkdir()
+        (_bm / "dut.sv").write_text("assign y = a + b;\n", encoding="utf-8")
+        _bspec = root / "mut_baseline.json"
+        _bspec.write_text('[{"id":"M01","file":"dut.sv","old":"a + b","new":"a - b","desc":"x"}]',
+                          encoding="utf-8")
+        r_base, _e_base = _audit_call(lambda: tool_run_mutation(
+            str(_bm), str(_bspec),
+            [sys.executable, "-c", "raise SystemExit(1)"], min_score=0.0))
+        # baseline 通过 + 真能杀掉变异 => 必须报 100% 且 killed=1
+        _bm2 = root / "mut_good"
+        _bm2.mkdir()
+        (_bm2 / "dut.sv").write_text("assign y = a + b;\n", encoding="utf-8")
+        _gspec = root / "mut_good.json"
+        _gspec.write_text('[{"id":"M01","file":"dut.sv","old":"a + b","new":"a - b","desc":"x"}]',
+                          encoding="utf-8")
+        r_good, _e_good = _audit_call(lambda: tool_run_mutation(
+            str(_bm2), str(_gspec),
+            [sys.executable, "-c",
+             "import pathlib,sys; sys.exit(0 if b'a + b' in pathlib.Path('dut.sv').read_bytes() else 1)"],
+            min_score=0.0))
+        a15_ok = (
+            _e_base is None and _e_good is None
+            and not (r_base or {}).get("ok", True)
+            and "Baseline" in str((r_base or {}).get("error", ""))
+            and bool((r_good or {}).get("ok"))
+            and (r_good or {}).get("data", {}).get("killed") == 1
+            and (r_good or {}).get("data", {}).get("evaluated") == 1
+        )
+        checks.append({
+            "id": "A15_MUTATION_BASELINE_PRECHECK",
+            "passed": a15_ok,
+            "detail": f"broken_ok={getattr(r_base or {}, 'get', lambda *_: _e_base)('ok')} "
+                      f"good_score={(r_good or {}).get('data', {}).get('mutation_score')} "
+                      f"raised={[_e_base, _e_good]}",
+        })
+
+        # ---- A16: 套件打了 PASS 后崩溃不能算通过（缺陷 117）----
+        _crash_log = ("== sim: apb (top=tb) ==\n"
+                      "[CHECK] id=C1 | status=PASS\n%Error: Assertion failed\n")
+        _ok_log = ("== sim: apb (top=tb) ==\n"
+                   "[CHECK] id=C1 | status=PASS\nPASS: apb all 8 checks passed\n")
+        _vc = verify_suite_identities(_crash_log, ["apb"])
+        _vo = verify_suite_identities(_ok_log, ["apb"])
+        a16_ok = (_vc["observed"].get("apb") == "FAIL" and _vc["all_verified"] is False
+                  and _vo["observed"].get("apb") == "PASS" and _vo["all_verified"] is True)
+        checks.append({
+            "id": "A16_SUITE_PASS_THEN_CRASH",
+            "passed": a16_ok,
+            "detail": f"crash={_vc['observed']} ok={_vo['observed']}",
+        })
+
+        # ---- A17: 审计报告 summary 与 checks 矛盾必须可见（缺陷 120）----
+        _vs_tmp = root / "visual_consistency.html"
+        _vs, _e_vs = _audit_call(lambda: tool_render_visual_report(
+            {"module": "audit", "overall_status": "PASS",
+             "summary": {"total": 2, "passed": 2, "failed": 0},
+             "checks": [{"rule_id": "A", "status": "FAIL"}]},
+            {}, [], str(_vs_tmp)))
+        _vs_codes = {d.get("code") for d in ((_vs or {}).get("diagnostics") or [])}
+        a17_ok = (_e_vs is None and bool(_vs["ok"])
+                  and _vs["data"].get("consistency_ok") is False
+                  and bool(_vs_codes & {"W052", "W053"}))
+        checks.append({
+            "id": "A17_REPORT_DATA_CONSISTENCY",
+            "passed": a17_ok,
+            "detail": f"consistency_ok={(_vs or {}).get('data', {}).get('consistency_ok')} "
+                      f"codes={sorted(_vs_codes)} raised={_e_vs}",
+        })
+
+        # ---- A18: 畸形 results 必须报错，不能静默 NO_RESULTS（缺陷 119）----
+        # 自审计项必须容忍"被测代码彻底坏掉"的形态：护栏一旦被回退，这里可能
+        # 直接抛异常（实测临时回退修复后 AttributeError 冒泡，把整个 audit 打崩，
+        # 而不是给出 A18 FAIL）。异常必须被捕获并记成该检查失败 —— 否则
+        # "自审计能发现护栏回退"这个前提本身就不成立。
+        _bad_tests = root / "bad_tests.json"
+        _bad_tests.write_text('{"tests": ["oops", null, 42]}', encoding="utf-8")
+        _bad_checks = root / "bad_checks.json"
+        _bad_checks.write_text('{"checks": ["oops"]}', encoding="utf-8")
+        _unnamed = root / "unnamed.xml"
+        _unnamed.write_text('<?xml version="1.0"?><testsuites><testsuite><testcase/>'
+                            '</testsuite></testsuites>', encoding="utf-8")
+        _r_bt, _e_bt = _audit_call(lambda: tool_normalize_sim_result(
+            "audit_mod", cocotb_results_json=str(_bad_tests)))
+        _r_bc, _e_bc = _audit_call(lambda: tool_normalize_sim_result(
+            "audit_mod", cocotb_results_json=str(_bad_checks)))
+        _r_un, _e_un = _audit_call(lambda: tool_normalize_sim_result(
+            "audit_mod", cocotb_results_json=str(_unnamed)))
+        a18_ok = (
+            _e_bt is None and _e_bc is None and _e_un is None
+            and (not _r_bt["ok"]) and (not _r_bc["ok"])
+            and "attribute 'get'" not in str(_r_bt.get("error", ""))
+            and "attribute 'get'" not in str(_r_bc.get("error", ""))
+            and _r_un["data"]["overall_status"] == "FAIL"
+        )
+        checks.append({
+            "id": "A18_MALFORMED_RESULTS_REJECTED",
+            "passed": a18_ok,
+            "detail": f"tests_ok={getattr(_r_bt, 'get', lambda *_: _e_bt)('ok')} "
+                      f"checks_ok={getattr(_r_bc, 'get', lambda *_: _e_bc)('ok')} "
+                      f"unnamed={(_r_un or {}).get('data', {}).get('overall_status')} "
+                      f"raised={[_e_bt, _e_bc, _e_un]}",
         })
 
     failed = [c for c in checks if not c["passed"]]
