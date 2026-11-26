@@ -164,7 +164,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "workdir": {"type": "string", "description": "Working directory containing the RTL to mutate (isolated sandbox recommended)."},
                 "mutation_spec": {"type": "string", "description": "Path to the mutation spec JSON/YAML listing mutations to apply."},
                 "test_cmd": {"type": "array", "items": {"type": "string"}, "description": "Command (argv list) run after each mutation; non-zero exit means the mutation was killed."},
-                "min_score": {"type": "number", "description": "Minimum acceptable mutation kill score percentage (default 80)."},
+                "min_score": {"type": "number", "minimum": 0, "maximum": 100, "description": "Minimum acceptable mutation kill score percentage, 0-100 (default 80). Values above 100 are unachievable and would always fail."},
                 "timeout_sec": {"type": "integer", "minimum": 1, "description": "Per-mutation test command timeout in seconds (default 120)."},
                 "only_id": {"type": "string", "description": "Optional single mutation id to run (for targeted verification)."},
             },

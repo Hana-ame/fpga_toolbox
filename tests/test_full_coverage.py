@@ -3777,6 +3777,51 @@ def test_tool_schema_descriptions_match_signature_defaults() -> None:
     assert "default TRUE" in clean_desc, clean_desc
 
 
+def test_min_score_bounds_are_enforced() -> None:
+    """Defect 159: min_score 没有 0-100 边界。
+
+    `min_score` 是「可接受的变异杀伤率百分比」，上限必然是 100。旧 schema 只有
+    `type: number`：
+    - `min_score=150` → 永远不可能达到（分数上限 100%），每次调用都必然失败；
+    - `min_score=-1` → 无意义的阈值，任何分数都「达标」。
+    两者都应作为非法参数在入口拒绝，而不是伪装成「分数未达标」。
+    """
+    print("coverage: min_score bounds enforced")
+    from fpga_toolbox.registry import call_tool, list_tool_schemas
+
+    schema = next(s for s in list_tool_schemas() if s["name"] == "run_mutation")
+    ms_spec = schema["inputSchema"]["properties"]["min_score"]
+    assert ms_spec.get("minimum") == 0, ms_spec
+    assert ms_spec.get("maximum") == 100, ms_spec
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "dut.sv").write_text(
+            "module dut (input logic a, output logic b);\n  assign b = a;\nendmodule\n",
+            encoding="utf-8")
+        sp = root / "spec.json"
+        sp.write_text(json.dumps({"mutations": [
+            {"id": "m1", "file": "dut.sv", "old": "assign b = a;",
+             "new": "assign b = ~a;"}]}), encoding="utf-8")
+        base = {"workdir": str(root), "mutation_spec": str(sp),
+                "test_cmd": ["true"]}
+
+        for bad in (-1, -0.5, 101, 150):
+            r = call_tool("run_mutation", {**base, "min_score": bad})
+            assert r["ok"] is False, (bad, r)
+            err = str(r.get("error"))
+            assert "must be >=" in err or "must be <=" in err, (bad, err[:200])
+            # 不能把「参数非法」伪装成「分数未达标」
+            assert "below threshold" not in err, (bad, err[:200])
+
+        # 合法值照常工作
+        for good in (0, 50, 100):
+            r = call_tool("run_mutation", {**base, "min_score": good})
+            # score=0 时 >=0 通过、<50/<100 不通过，两种都算「参数被接受」
+            err = str(r.get("error") or "")
+            assert "must be >=" not in err and "must be <=" not in err, (good, err[:200])
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3838,6 +3883,7 @@ def main() -> int:
     test_check_lines_and_suite_summary_precedence()
     test_mutation_spec_non_object_entries_are_rejected()
     test_tool_schema_descriptions_match_signature_defaults()
+    test_min_score_bounds_are_enforced()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
