@@ -46,6 +46,60 @@ def _build_svg(report: Dict[str, Any], dep_graph: Dict[str, Any], ifaces: List[D
 </svg>"""
 
 
+def _check_report_data_consistency(report: Dict[str, Any],
+                                   checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """核对 report 的 summary / overall_status 与 checks 实际内容是否自洽。
+
+    这是审计报告最核心的职责面：HTML 里同时印着「通过率 100%」「2/2 PASS」和
+    逐条 FAIL 的行，读者无从判断信哪个。旧实现只检查 HTML 标签配平与行数
+    （W050/W051），完全不看**数据本身**是否自相矛盾 —— 实测下列四种不一致
+    全部返回 ok=True、consistency_ok=True、零诊断：
+
+      * summary.passed=2 而 checks 里全是 FAIL
+      * summary.total 与实际检查条数不符
+      * overall_status=PASS 但没有任何通过的检查
+      * overall_status=FAIL 但所有检查都 PASS
+
+    这里只报 WARNING（不改变 ok），因为调用方可能故意渲染一份"外部汇总"与
+    "本机明细"混合的报告；但必须让矛盾可见，而不是静默印出去。
+    """
+    diags: List[Dict[str, Any]] = []
+    real = [c for c in checks if isinstance(c, dict)]
+    n = len(real)
+    counted = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+    for c in real:
+        st = str(c.get("status", "")).strip().upper()
+        if st in counted:
+            counted[st] += 1
+    summary = report.get("summary")
+    if isinstance(summary, dict):
+        for key, actual in (("total", n), ("passed", counted["PASS"]),
+                            ("failed", counted["FAIL"])):
+            claimed = summary.get(key)
+            # 只在调用方**声明了**该字段时核对；缺字段不是矛盾。
+            if isinstance(claimed, (int, float)) and int(claimed) != actual:
+                diags.append({
+                    "severity": "WARNING", "code": "W052", "path": f"report.summary.{key}",
+                    "message": (f"report.summary.{key}={int(claimed)} but the checks "
+                                f"actually contain {actual} ({counted}). The rendered "
+                                "dashboard would show two contradictory conclusions."),
+                })
+    overall = str(report.get("overall_status", "")).strip().upper()
+    if overall == "PASS" and n > 0 and counted["PASS"] == 0:
+        diags.append({
+            "severity": "WARNING", "code": "W053", "path": "report.overall_status",
+            "message": (f"overall_status=PASS but none of the {n} check(s) passed "
+                        f"({counted}). The report headline contradicts its own rows."),
+        })
+    if overall == "FAIL" and n > 0 and counted["FAIL"] == 0 and counted["SKIP"] == 0:
+        diags.append({
+            "severity": "WARNING", "code": "W053", "path": "report.overall_status",
+            "message": (f"overall_status=FAIL but no check is FAIL ({counted}). "
+                        "The report headline contradicts its own rows."),
+        })
+    return diags
+
+
 def _check_html_consistency(page: str, expected_checks: int) -> List[Dict[str, Any]]:
     diags: List[Dict[str, Any]] = []
     for tag in ("table", "tbody", "html", "body"):
@@ -334,6 +388,60 @@ def tool_render_visual_report(
     if not isinstance(extracted_interfaces, list):
         return err_result("render_visual_report", "extracted_interfaces must be a list.")
 
+    # report 是外部（或 AI）生成的 JSON，任何嵌套字段的形状都可能不对。旧实现
+    # 一路 c.get(...) 下去，畸形输入得到的是裸 `AttributeError: 'str' object has
+    # no attribute 'get'` —— 没有字段名、没有索引，用户完全不知道哪个字段写错了。
+    # 这里在渲染**之前**统一校验会参与渲染的集合/映射字段，给出可定位的
+    # 结构化错误（与 normalize_sim_result 的处理口径一致）。
+    for field in ("checks", "project_pages", "capability_matrix"):
+        val = report.get(field)
+        if val is None:
+            continue
+        if not isinstance(val, list):
+            return err_result(
+                "render_visual_report",
+                f"report.{field} must be a list, got {type(val).__name__}.",
+            )
+        bad = [i for i, it in enumerate(val) if not isinstance(it, dict)]
+        if bad:
+            return err_result(
+                "render_visual_report",
+                f"report.{field} must be a list of objects; element(s) at index "
+                f"{bad[:5]} are not objects (got types "
+                f"{[type(val[i]).__name__ for i in bad[:5]]}).",
+            )
+    for field in ("summary", "coverage_summary", "mutation_summary"):
+        val = report.get(field)
+        if val is not None and not isinstance(val, dict):
+            return err_result(
+                "render_visual_report",
+                f"report.{field} must be an object, got {type(val).__name__}.",
+            )
+    mut = report.get("mutation_summary")
+    if isinstance(mut, dict) and mut.get("results") is not None:
+        res = mut["results"]
+        if not isinstance(res, list):
+            return err_result(
+                "render_visual_report",
+                f"report.mutation_summary.results must be a list, got "
+                f"{type(res).__name__}.",
+            )
+        bad = [i for i, it in enumerate(res) if not isinstance(it, dict)]
+        if bad:
+            return err_result(
+                "render_visual_report",
+                f"report.mutation_summary.results must be a list of objects; "
+                f"element(s) at index {bad[:5]} are not objects.",
+            )
+    # dep_graph.dependency_closure 也参与渲染（SVG 里的依赖框）
+    closure = dep_graph.get("dependency_closure")
+    if closure is not None and not isinstance(closure, list):
+        return err_result(
+            "render_visual_report",
+            f"dep_graph.dependency_closure must be a list, got "
+            f"{type(closure).__name__}.",
+        )
+
     out_html = Path(out_html_path)
     out_html.parent.mkdir(parents=True, exist_ok=True)
     svg = _build_svg(report, dep_graph, extracted_interfaces)
@@ -499,6 +607,8 @@ def tool_render_visual_report(
     out_html.write_text(page, encoding="utf-8")
 
     diags = _check_html_consistency(page, expected_checks=len(checks))
+    # 数据自洽性：summary/overall_status 必须与 checks 实际内容一致（W052/W053）。
+    diags.extend(_check_report_data_consistency(report, checks))
     return ok_result(
         "render_visual_report",
         {

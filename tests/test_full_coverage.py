@@ -1811,6 +1811,79 @@ def test_normalizer_rejects_malformed_and_unnamed_results() -> None:
         assert engines == {"Verilator 5.020"}, engines
 
 
+def test_visual_renderer_consistency_and_shape_validation() -> None:
+    """Defect 120: 审计报告自检只看 HTML 标签，不看数据是否自相矛盾。
+
+    `render_visual_report` 的职责是"生成一份审计报告"，它自带
+    `_check_html_consistency` 自检 —— 但那个自检只查 `<table>` 标签配平和
+    渲染行数（W050/W051），**完全不看 report 数据本身**。于是下面四种自相矛盾
+    的报告全部 ok=True、consistency_ok=True、零诊断，被原样印进 HTML：
+
+      * summary.passed=2 而 checks 里全 FAIL
+      * summary.total 与实际条数不符
+      * overall_status=PASS 但没有任何检查通过
+      * overall_status=FAIL 但所有检查都通过
+
+    读者面对"通过率 100%"和逐条 FAIL 行，无从判断该信哪个。
+
+    另一处：report 是外部/AI 生成的 JSON，嵌套字段形状任意。旧实现一路
+    `c.get(...)`，畸形输入得到裸 `AttributeError: 'str' object has no attribute
+    'get'` —— 没有字段名、没有索引。
+    """
+    print("coverage: render_visual_report data consistency (W052/W053) + shape validation")
+    from fpga_toolbox.visual_renderer import tool_render_visual_report
+
+    def _render(report: dict) -> dict:
+        with tempfile.TemporaryDirectory() as td:
+            return tool_render_visual_report(report, {}, [], str(Path(td) / "r.html"))
+
+    # ---- 数据一致性：四种矛盾都必须给出诊断 ----
+    cases = {
+        "summary over-reports passes": {
+            "summary": {"total": 2, "passed": 2, "failed": 0},
+            "checks": [{"rule_id": "A", "status": "FAIL"}]},
+        "summary.total wrong": {
+            "summary": {"total": 5, "passed": 1, "failed": 0},
+            "checks": [{"rule_id": "A", "status": "PASS"}]},
+        "PASS headline, all rows FAIL": {
+            "overall_status": "PASS",
+            "checks": [{"rule_id": "A", "status": "FAIL"}]},
+        "FAIL headline, all rows PASS": {
+            "overall_status": "FAIL",
+            "checks": [{"rule_id": "A", "status": "PASS"}]},
+    }
+    for label, extra in cases.items():
+        r = _render({"module": "m", **extra})
+        codes = {d["code"] for d in r.get("diagnostics") or []}
+        assert r["ok"], (label, r.get("error"))
+        assert codes & {"W052", "W053"}, (label, codes)
+        assert r["data"]["consistency_ok"] is False, (label, r["data"])
+
+    # 自洽的报告不能误报
+    ok = _render({"module": "m", "overall_status": "PASS",
+                  "summary": {"total": 1, "passed": 1, "failed": 0},
+                  "checks": [{"rule_id": "A", "status": "PASS"}]})
+    assert ok["data"]["consistency_ok"] is True, [d["code"] for d in ok["diagnostics"]]
+
+    # ---- 形状校验：畸形字段给出可定位错误，而不是裸 AttributeError ----
+    malformed = {
+        "report.checks": {"module": "m", "checks": ["oops"]},
+        "report.checks (None)": {"module": "m", "checks": [None]},
+        "report.project_pages": {"module": "m", "checks": [], "project_pages": ["x"]},
+        "report.capability_matrix": {"module": "m", "checks": [], "capability_matrix": ["x"]},
+        "report.summary": {"module": "m", "checks": [], "summary": "x"},
+        "report.mutation_summary.results": {
+            "module": "m", "checks": [], "mutation_summary": {"results": ["x"]}},
+    }
+    for label, rep in malformed.items():
+        r = _render(rep)
+        assert r["ok"] is False, (label, r.get("data"))
+        err = str(r["error"])
+        assert "attribute 'get'" not in err, (label, err[:160])
+        # 错误必须点名是哪个字段
+        assert label.split(" ")[0] in err, (label, err[:160])
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1843,6 +1916,7 @@ def main() -> int:
     test_suite_identity_requires_per_suite_summary()
     test_mutation_rejects_empty_old_pattern()
     test_normalizer_rejects_malformed_and_unnamed_results()
+    test_visual_renderer_consistency_and_shape_validation()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
