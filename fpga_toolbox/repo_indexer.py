@@ -109,6 +109,20 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             continue
         iface_defined.update(_IFACE_DEF_RE.findall(sources[fpath]))
     headers = {p.name: str(p.relative_to(root)) for p in rtl_files if p.suffix.lower() in {".vh", ".svh"}}
+    # header 之间也会互相 `include（`include "b.svh" 里再 `include "a.svh"）。
+    # 旧实现只索引「文件名 -> 路径」，没有任何 header 级的 include 关系，于是
+    # resolve_deps 只能拿到模块直接 include 的头文件，**传递依赖全丢**：
+    # 实测 top.sv -> c.svh -> b.svh -> a.svh 只返回 header_files=["inc/c.svh"]，
+    # 调用方 copy_sandbox 照着复制，沙箱里缺 b.svh/a.svh，Verilator 直接
+    # `%Error: inc/c.svh:1:10: Cannot find include file: 'b.svh'`，而工具全程
+    # ok=True。这里按 header 的仓库相对路径记录它自己的 include 列表，供
+    # resolve_deps 做传递闭包。
+    header_includes: Dict[str, List[str]] = {}
+    for p in rtl_files:
+        if p.suffix.lower() not in {".vh", ".svh"}:
+            continue
+        rel = str(p.relative_to(root))
+        header_includes[rel] = list(dict.fromkeys(_INC_RE.findall(sources[p])))
 
     # 归属修正：`include 会把子模块展开进顶层文件，导致同一模块出现在多个文件
     # 的解析结果里（如 datapath 同时出现在 datapath.v 和 include 它的
@@ -196,6 +210,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         "project_root": str(root.resolve()),
         "total_rtl_files": len(rtl_files),
         "headers": headers,
+        "header_includes": header_includes,
         "modules": modules,
         "unresolved_instantiations": unresolved,
     }, diagnostics=diags)
@@ -223,6 +238,40 @@ def _resolve_include(inc: str, hdrs: Dict[str, str]) -> Optional[str]:
     return None
 
 
+def _collect_header(
+    inc: str,
+    hdrs: Dict[str, str],
+    hdr_includes: Dict[str, List[str]],
+    hdr_set: set,
+    missing_inc: List[str],
+    seen_hdr: set,
+) -> None:
+    """收集一个 `include 及其**传递**依赖的 header。
+
+    `include 是文本包含，header 内部还可以再 `include 别的 header
+    （``defs.svh`` 里 include ``base.svh`` 是常见写法）。旧实现只收集模块
+    直接 include 的那一层，传递依赖全部丢失：调用方（copy_sandbox）照
+    ``all_files`` 复制，沙箱里缺被间接引用的 header，编译报
+    ``Cannot find include file``，而工具仍返回 ok=True。
+
+    这里做深度优先展开：每解析出一个 header 就把它加入清单，并继续展开它
+    自己的 include 列表。``seen_hdr`` 按 header 的 relative path 去重，
+    循环 include（a 包含 b、b 又包含 a）不会死循环。
+    """
+    stack = [inc]
+    while stack:
+        cur = stack.pop()
+        resolved = _resolve_include(cur, hdrs)
+        if resolved is None:
+            missing_inc.append(cur)
+            continue
+        if resolved in seen_hdr:
+            continue
+        seen_hdr.add(resolved)
+        hdr_set.add(resolved)
+        stack.extend(hdr_includes.get(resolved) or [])
+
+
 def tool_resolve_deps(
     target_module: str,
     repo_index: Optional[Dict[str, Any]] = None,
@@ -237,11 +286,13 @@ def tool_resolve_deps(
         repo_index = idx["data"]
 
     mods, hdrs = repo_index.get("modules", {}), repo_index.get("headers", {})
+    hdr_includes = repo_index.get("header_includes") or {}
     if target_module not in mods:
         return err_result("resolve_deps", f"Module '{target_module}' not found. Available: {sorted(mods)}")
 
     closure, seen, edges = [], set(), []
     rtl_set, hdr_set, missing_inc = set(), set(), []
+    seen_hdr: set = set()
     q = deque([target_module])
     while q:
         cur = q.popleft()
@@ -254,8 +305,7 @@ def tool_resolve_deps(
         for inc in info.get("includes", []):
             # 带路径前缀的 include（inc/defs.svh）也要按 basename 解析到 headers，
             # 否则真实存在的 header 被误报 W101 并漏出 staged 清单（缺陷 102）。
-            resolved = _resolve_include(inc, hdrs)
-            (hdr_set.add(resolved) if resolved is not None else missing_inc.append(inc))
+            _collect_header(inc, hdrs, hdr_includes, hdr_set, missing_inc, seen_hdr)
         for child in info.get("instantiated_modules", []):
             edges.append({"from": cur, "to": child})
             if child not in seen and child in mods:

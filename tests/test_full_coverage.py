@@ -2728,6 +2728,73 @@ endmodule
         assert ".HREADYOUT(HREADYOUT)" in tb, "template must connect the slave's HREADYOUT"
 
 
+def test_resolve_deps_transitive_headers() -> None:
+    """Defect 132: resolve_deps 必须展开 header 之间的传递 include。
+
+    `include 是文本包含，header 内部还能再 include 别的 header。旧实现只收集
+    模块**直接** include 的那一层，传递依赖全丢：top.sv -> c.svh -> b.svh ->
+    a.svh 只返回 header_files=["inc/c.svh"]。调用方把 all_files 喂给
+    copy_sandbox，沙箱里就缺 b.svh / a.svh，Verilator 报
+    %Error: inc/c.svh:1:10: Cannot find include file: 'b.svh' —— 而整条链
+    全程 ok=True（实测复现）。
+    """
+    print("coverage: resolve_deps transitive header closure")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        inc = root / "inc"
+        inc.mkdir()
+        (inc / "a.svh").write_text("`define A 1\n", encoding="utf-8")
+        (inc / "b.svh").write_text('`include "a.svh"\n`define B 2\n', encoding="utf-8")
+        (inc / "c.svh").write_text(
+            '`include "b.svh"\n`include "a.svh"\n`define C 3\n', encoding="utf-8")
+        (root / "top.sv").write_text(
+            '`include "c.svh"\n`include "c.svh"\nmodule top(input logic clk); endmodule\n',
+            encoding="utf-8")
+
+        r = call_tool("resolve_deps", {"project_root": str(root), "target_module": "top"})
+        assert r["ok"], str(r.get("error"))[:200]
+        data = r["data"]
+        hdrs = data["header_files"]
+        assert hdrs == ["inc/a.svh", "inc/b.svh", "inc/c.svh"], hdrs
+        assert data["all_files"] == ["inc/a.svh", "inc/b.svh", "inc/c.svh", "top.sv"], \
+            data["all_files"]
+        # 传递依赖齐全时不应有任何 W101
+        assert not [d for d in (r.get("diagnostics") or []) if d["code"] == "W101"], r["diagnostics"]
+
+        # 沙箱复制必须带齐所有传递 header，并且真的能编译
+        sb = root / "_sb"
+        c = call_tool("copy_sandbox", {
+            "project_root": str(root), "sandbox_dir": str(sb),
+            "relative_files": data["all_files"]})
+        assert c["ok"], str(c.get("error"))[:200]
+        for rel in ("inc/a.svh", "inc/b.svh", "inc/c.svh", "top.sv"):
+            assert (sb / rel).is_file(), f"missing in sandbox: {rel}"
+
+        # 循环 include 不能死循环
+        cyc = root / "_cyc"
+        cyc.mkdir()
+        (cyc / "x.svh").write_text('`include "y.svh"\n`define X 1\n', encoding="utf-8")
+        (cyc / "y.svh").write_text('`include "x.svh"\n`define Y 2\n', encoding="utf-8")
+        (cyc / "topc.sv").write_text(
+            '`include "x.svh"\nmodule topc(input logic clk); endmodule\n', encoding="utf-8")
+        rc = call_tool("resolve_deps", {"project_root": str(cyc), "target_module": "topc"})
+        assert rc["ok"], str(rc.get("error"))[:200]
+        assert rc["data"]["header_files"] == ["x.svh", "y.svh"], rc["data"]["header_files"]
+
+        # 传递依赖里缺 header：必须报 W101，而不是静默给出不完整清单
+        miss = root / "_miss"
+        miss.mkdir()
+        (miss / "outer.svh").write_text('`include "ghost.svh"\n`define O 1\n', encoding="utf-8")
+        (miss / "topm.sv").write_text(
+            '`include "outer.svh"\nmodule topm(input logic clk); endmodule\n', encoding="utf-8")
+        rm = call_tool("resolve_deps", {"project_root": str(miss), "target_module": "topm"})
+        assert rm["ok"], str(rm.get("error"))[:200]
+        codes = [(d["code"], d["path"]) for d in (rm.get("diagnostics") or [])]
+        assert ("W101", "ghost.svh") in codes, codes
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2771,6 +2838,7 @@ def main() -> int:
     test_residual_and_suite_rerun_gates()
     test_sv_parser_tokenizer_and_header_fixes()
     test_iface_direction_prefix_and_ahb_ready_split()
+    test_resolve_deps_transitive_headers()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
