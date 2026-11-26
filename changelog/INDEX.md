@@ -99,6 +99,8 @@
 
 - [64-suite-identity-and-empty-mutation.md](64-suite-identity-and-empty-mutation.md) — 又两处同根静默假通过：「只看某条证据存在，不看它是否属于该对象/是否覆盖完整边界」。① `verify_suite_identities` 对任意含 `\bPASS\b` 的行判该套件 PASS —— 套件打印 `[CHECK] ... status=PASS` 后在 `$finish` 前崩溃（断言挂/段错误/超时被杀）仍被判 PASS；② `result_normalizer` 的完成度只比**汇总行总数** vs 启动套件数，A 重复两条 `PASS:` + B 崩溃一条没有时仍放行（实测 `overall_status=PASS`）。修复：按套件边界归集各自的结束汇总行，启动过却没有自己汇总行的套件判 FAIL，`VERILATOR_NO_SUMMARY` 点名具体套件。真实 apb(1)/pcie(9) 日志不误伤。另修 `old: ""` 被当成「匹配任意位置」：`replace(b"", new, 1)` 把 new 插到文件开头，变异「成功」却无语义 —— 现显式拒绝且不动文件
 
+- [65-normalizer-malformed-results.md](65-normalizer-malformed-results.md) — `normalize_sim_result` 违背自己的 docstring 承诺（「无法识别的输入报错而非静默 NO_RESULTS」）三处：① `checks` 混入非对象 → 裸 `AttributeError: 'str' object has no attribute 'get'`（无字段名无索引）；② `tests` 混入非对象被 `isinstance(t, dict)` **静默过滤** → 零检查 + `overall_status=NO_RESULTS` + **`ok=True`**，调用方看到「成功、零检查」而真相是文件无法解析（本轮最危险）；③ JUnit 里无名 `<testcase/>` 被判 PASS —— 比真正空的 XML（正确判 NO_RESULTS）还宽松，零证据反而成了通过。另把写死的 `engine="Verilator 5.054"` 改成从日志抓真实版本
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

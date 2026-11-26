@@ -63,8 +63,24 @@ def _from_xml(path: Path) -> Tuple[List[Dict[str, Any]], Optional[int]]:
             if tag == "skipped":
                 status = "SKIP"
                 detail = (child.get("message") or "").strip()
+        # 既无 name 也无 classname 的 <testcase/> 不携带任何身份信息。旧实现把它
+        # 记成 rule_id="UNKNOWN"、status=PASS —— 于是一份**完全没有断言**的
+        # XML（只有一个空 testcase 元素）会让 overall_status 变成 PASS，
+        # 比"零 testcase"（正确判 NO_RESULTS）还宽松。这是典型的假通过：
+        # 没有名字就没有证据，不能算通过。
+        name = tc.get("name")
+        if not name:
+            checks.append({
+                "rule_id": "UNNAMED_TESTCASE",
+                "category": tc.get("classname") or "cocotb",
+                "status": "FAIL",
+                "detail": "JUnit <testcase> has no 'name' attribute; it cannot be "
+                          "attributed to a specific check, so it is not evidence of "
+                          "passing (treated as failure, not silent pass).",
+            })
+            continue
         checks.append({
-            "rule_id": tc.get("name") or "UNKNOWN",
+            "rule_id": str(name),
             "category": tc.get("classname") or "cocotb",
             "status": status,
             "detail": detail.replace("\n", " ")[:400],
@@ -79,12 +95,24 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
     True/False 表示 cocotb 测试平台是否跑完了全部阶段。
     """
     if isinstance(raw, dict) and isinstance(raw.get("checks"), list):
+        raw_checks = raw["checks"]
+        # 非 dict 元素会让 c.get(...) 抛 AttributeError，冒泡成
+        # "'str' object has no attribute 'get'" —— 用户完全看不出是结果文件
+        # 的 checks 数组里混进了字符串/None。模块 docstring 承诺「无法识别的
+        # 输入报错而不是静默 NO_RESULTS」，所以这里是可读错误。
+        bad = [i for i, c in enumerate(raw_checks) if not isinstance(c, dict)]
+        if bad:
+            raise ValueError(
+                f"results 'checks' must be a list of objects; "
+                f"element(s) at index {bad[:5]} are not objects "
+                f"(got types {[type(raw_checks[i]).__name__ for i in bad[:5]]})."
+            )
         checks = [{
             "rule_id": str(c.get("rule_id", "UNKNOWN")),
             "category": str(c.get("category", "functional")),
             "status": _norm_status(c.get("status", "FAIL")),
             "detail": str(c.get("detail", "")),
-        } for c in raw["checks"]]
+        } for c in raw_checks]
         return checks, raw.get("seed"), raw.get("completed")
 
     tests = None
@@ -94,12 +122,25 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
     elif isinstance(raw, list):
         tests = raw
     if tests is not None:
+        # 旧实现对非 dict 元素用 `if isinstance(t, dict)` **静默过滤**：
+        # {"tests": ["oops", null, 42]} 会变成 0 条检查 -> summary.total=0 ->
+        # overall_status=NO_RESULTS 且 ok=True。调用方看到"成功"、零检查，
+        # 而真相是**结果文件根本无法解析**。这与模块 docstring 的承诺
+        # （"Unrecognized input is reported as an error instead of silently
+        # yielding an empty PASS/NO_RESULTS report"）直接矛盾。
+        bad_tests = [i for i, t in enumerate(tests) if not isinstance(t, dict)]
+        if bad_tests:
+            raise ValueError(
+                f"results 'tests' must be a list of objects; "
+                f"element(s) at index {bad_tests[:5]} are not objects "
+                f"(got types {[type(tests[i]).__name__ for i in bad_tests[:5]]})."
+            )
         checks = [{
             "rule_id": str(t.get("name", t.get("rule_id", "UNKNOWN"))),
             "category": str(t.get("category", "cocotb")),
             "status": _norm_status(t.get("status", t.get("result", "FAIL"))),
             "detail": str(t.get("detail", "")),
-        } for t in tests if isinstance(t, dict)]
+        } for t in tests]
         return checks, seed, None
 
     raise ValueError(
@@ -107,6 +148,19 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
         "a JSON object with 'checks'/'tests', or a JSON list of tests."
     )
 
+
+
+_ENGINE_VER_RE = re.compile(r"\bVerilator\s+(\d+\.\d+(?:\.\d+)?)")
+
+
+def _detect_engine(log_txt: str) -> str:
+    """从日志里读出真实仿真器版本；读不到返回空串（绝不编版本号）。"""
+    m = _ENGINE_VER_RE.search(log_txt)
+    if m:
+        return f"Verilator {m.group(1)}"
+    if "Verilator" in log_txt:
+        return "Verilator"
+    return ""
 
 
 def _parse_verilator_checks(log_txt: str) -> List[Dict[str, Any]]:
@@ -128,7 +182,11 @@ def _parse_verilator_checks(log_txt: str) -> List[Dict[str, Any]]:
             "rule_id": fields["id"],
             "protocol": fields.get("proto", ""),
             "category": fields.get("cat", "verilator_check"),
-            "engine": "Verilator 5.054",
+            # 不能写死工具版本：日志可能来自任何 Verilator 版本（本仓库 CI 就跨
+            # 5.020/5.054，用户环境更是各异）。旧实现把所有 [CHECK] 一律标成
+            # "Verilator 5.054"，报告里的版本信息是编的。
+            # 从日志本身抓 `Verilator 5.0xx` 字样，抓不到就留空（不猜）。
+            "engine": _detect_engine(log_txt),
             "tx": fields.get("tx", ""),
             "expected": fields.get("exp", ""),
             "observed": fields.get("got", ""),

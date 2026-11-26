@@ -1743,6 +1743,74 @@ def test_mutation_rejects_empty_old_pattern() -> None:
         assert (wd / "a.txt").read_text(encoding="utf-8") == "hello world\n"
 
 
+def test_normalizer_rejects_malformed_and_unnamed_results() -> None:
+    """Defect 119: normalize_sim_result 对畸形结果「静默 NO_RESULTS」或裸 AttributeError。
+
+    模块 docstring 承诺 "Unrecognized input is reported as an error instead of
+    silently yielding an empty PASS/NO_RESULTS report"，但旧实现有三处违背：
+
+    1. `checks: [str/None]` → `c.get(...)` 抛 `AttributeError: 'str' object has
+       no attribute 'get'`，用户看不出是 checks 数组混进了非对象。
+    2. `tests: [str/None/42]` → 被 `if isinstance(t, dict)` **静默过滤**，
+       变成 0 条检查 → summary.total=0 → overall_status=NO_RESULTS 且
+       **ok=True**。调用方看到「成功 + 零检查」，真相是文件根本无法解析。
+    3. JUnit XML 里既无 name 也无 classname 的 `<testcase/>`（零证据）被记成
+       rule_id="UNKNOWN"、status=PASS → 整份报告 overall_status=PASS，
+       比「零 testcase」（正确判 NO_RESULTS）还宽松。
+    """
+    print("coverage: normalize_sim_result rejects malformed items and unnamed testcases")
+    from fpga_toolbox.result_normalizer import tool_normalize_sim_result
+
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+
+        # 1) checks 里混入非对象 => 可读错误，不是 AttributeError 裸文案
+        for bad in (["oops"], [None], [{"rule_id": "R1"}, "x"]):
+            f = base / f"c{abs(hash(str(bad)))}.json"
+            f.write_text(json.dumps({"checks": bad}), encoding="utf-8")
+            r = tool_normalize_sim_result("m", cocotb_results_json=str(f))
+            assert r["ok"] is False, (bad, r.get("data"))
+            err = str(r["error"])
+            assert "must be a list of objects" in err, (bad, err[:200])
+            assert "attribute 'get'" not in err, (bad, err[:200])
+
+        # 2) tests 里混入非对象 => 报错，不能静默变成 NO_RESULTS + ok=True
+        f = base / "t.json"
+        f.write_text(json.dumps({"tests": ["oops", None, 42]}), encoding="utf-8")
+        r = tool_normalize_sim_result("m", cocotb_results_json=str(f))
+        assert not r["ok"], f"all-invalid tests silently passed: {r.get('data')}"
+        assert "must be a list of objects" in str(r["error"]), str(r["error"])[:200]
+
+        # 3) 无名 testcase => FAIL（零证据不算通过），而不是 PASS
+        xml = base / "u.xml"
+        xml.write_text('<?xml version="1.0"?><testsuites><testsuite>'
+                       '<testcase/></testsuite></testsuites>', encoding="utf-8")
+        r = tool_normalize_sim_result("m", cocotb_results_json=str(xml))
+        assert r["data"]["overall_status"] == "FAIL", r["data"]["checks"]
+        assert any(c["rule_id"] == "UNNAMED_TESTCASE" and c["status"] == "FAIL"
+                   for c in r["data"]["checks"]), r["data"]["checks"]
+
+        # 正常 JUnit（有名字、无 failure）仍 PASS —— 不能过度收紧
+        ok_xml = base / "ok.xml"
+        ok_xml.write_text('<?xml version="1.0"?><testsuites><testsuite>'
+                          '<testcase name="T_OK"/></testsuite></testsuites>',
+                          encoding="utf-8")
+        r = tool_normalize_sim_result("m", cocotb_results_json=str(ok_xml))
+        assert r["data"]["overall_status"] == "PASS", r["data"]["checks"]
+
+        # 4) engine 版本不再写死：从日志抓真实版本，抓不到留空
+        log = base / "v.log"
+        log.write_text(
+            "== sim: apb (top=t) ==\n"
+            "[CHECK] id=A1 | proto=APB | exp=0x1 | got=0x1 | status=PASS\n"
+            "- Verilator 5.020 2024-01-01 rev (Debian 5.020-1)\n"
+            "PASS: apb ok\n", encoding="utf-8")
+        r = tool_normalize_sim_result("m", verilator_log_path=str(log),
+                                      expected_suites=["apb"])
+        engines = {c.get("engine") for c in r["data"]["checks"] if c.get("engine")}
+        assert engines == {"Verilator 5.020"}, engines
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1774,6 +1842,7 @@ def main() -> int:
     test_review_fixes_artifact_escaping_and_polarity()
     test_suite_identity_requires_per_suite_summary()
     test_mutation_rejects_empty_old_pattern()
+    test_normalizer_rejects_malformed_and_unnamed_results()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
