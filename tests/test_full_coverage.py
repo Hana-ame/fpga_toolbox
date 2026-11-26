@@ -4107,6 +4107,62 @@ def test_secondary_clock_names_are_recognised() -> None:
         assert "clock/reset-like" in oos["clk_extra"]["warning"], oos["clk_extra"]
 
 
+def test_secondary_reset_names_are_recognised() -> None:
+    """Defect 165: 第二复位 `rst_extra` / `rst2` / `rst_i` 等识别不到。
+
+    与时钟（缺陷 164）完全同构：`_RST_RE` 旧式样要求复位词在名称**末尾**，
+    只允许一个 `_n`/`_b` 极性后缀。于是多复位域设计里常见的 `rst_extra`、
+    `rst2`、`rst_i`、`reset_extra`、`rst_async`、`rst_sync_i` 全部识别不到：
+    它们落进 out_of_scope_ports 被 tie 到固定电平，且因为 `_is_reset()` 返回
+    False，连既有的 "clock/reset-like port left out of scope" 警告都不触发。
+    """
+    print("coverage: secondary reset names are recognised")
+    from fpga_toolbox.iface_extractor import _is_reset, _reset_active_low
+    from fpga_toolbox.registry import call_tool
+
+    resets = ("rst_n", "rst", "reset_n", "nrst", "aresetn", "hresetn", "presetn",
+              "rst_extra", "rst2", "rst_i", "reset_extra", "por_n", "arst_n",
+              "sys_rst", "rst_async", "rst_b", "rst_sync_i", "rst_hard")
+    for n in resets:
+        assert _is_reset(n), f"reset name not recognised: {n}"
+    # 含 rst 但不是复位
+    for n in ("rst_en", "reset_en", "restart", "result", "rstdone", "burst"):
+        assert not _is_reset(n), f"false positive reset name: {n}"
+
+    # 极性判定不能因新增形态而错
+    assert _reset_active_low("rst_n") is True
+    assert _reset_active_low("rst") is False
+    assert _reset_active_low("nrst") is True
+    assert _reset_active_low("aresetn") is True
+    assert _reset_active_low("rst_b") is True
+    assert _reset_active_low("rst_extra") is False
+    assert _reset_active_low("rst_async") is False
+
+    # 端到端：第二复位落进 out_of_scope 并带 warning
+    rtl = (
+        "module tworeset (\n"
+        "  input  logic clk,\n"
+        "  input  logic rst_n,\n"
+        "  input  logic rst_extra,\n"
+        "  input  logic psel, input logic penable, input logic pwrite,\n"
+        "  input  logic [7:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+        "  output logic pready, output logic [31:0] prdata, output logic pslverr\n"
+        ");\n"
+        "  assign pready = 1\'b1; assign prdata = pwdata; assign pslverr = 1\'b0;\n"
+        "endmodule\n")
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "tworeset.sv"
+        f.write_text(rtl, encoding="utf-8")
+        rr = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert rr["ok"], str(rr.get("error"))[:200]
+        mod = rr["data"]["modules"][0]
+        assert (mod["reset"] or {}).get("port") == "rst_n", mod["reset"]
+        oos = {o["port"]: o for o in mod["out_of_scope_ports"]}
+        assert "rst_extra" in oos, sorted(oos)
+        assert "warning" in oos["rst_extra"], oos["rst_extra"]
+        assert "clock/reset-like" in oos["rst_extra"]["warning"], oos["rst_extra"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4174,6 +4230,7 @@ def main() -> int:
     test_netlist_cleaner_preserves_comments()
     test_netlist_cleaner_ties_off_blackbox_outputs()
     test_secondary_clock_names_are_recognised()
+    test_secondary_reset_names_are_recognised()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

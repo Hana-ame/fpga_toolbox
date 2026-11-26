@@ -186,9 +186,21 @@ _CLK_RE = re.compile(
 # soc_omni_bus_hub.sv 就用 `if (!por_n)`，且它是唯一复位），漏检的后果不是少报
 # 一条 warning：emit_testbench 的每条协议都硬连复位脚，检测不到就直接拒绝生成
 # 该 DUT 的 TB —— 一个 6 协议 DUT 因此 6 条路径全被挡掉。
+# 复位名识别。与时钟（缺陷 164）同构：旧式样要求复位词出现在名称**末尾**
+# （只允许一个 `_n`/`_b` 后缀），于是 `rst_extra`（第二复位域）、`rst2`、
+# `rst_i`、`reset_extra`、`rst_async`、`rst_sync_i` 全都识别不到。这类端口会
+# 落进 out_of_scope_ports 被 tie 到固定电平，而 `_is_reset()` 返回 False 时连
+# "clock/reset-like port left out of scope" 警告都不会出现 —— 复位被拉死是
+# 灾难性的（整块逻辑永不出复位态，仿真可能照样报 PASS）。
 _RST_RE = re.compile(
     r"^(?:[a-z0-9]+_)*(?:[ahps]?reset|[ahps]?rst|nreset|nrst"
-    r"|n?por|n?poreset|n?power_?on_?reset|n?pon)(?:_?[nb])?$",
+    r"|n?por|n?poreset|n?power_?on_?reset|n?pon)"
+    # 极性后缀（_n/_b）在前，随后允许叠加的修附属后缀与序号：
+    # rst_n / rst_i / rst_extra / rst_async / rst_sync_i / rst2 / rst_b
+    r"(?:_?[nb])?"
+    r"(?:_(?:in|i|o|extra|aux|2nd|b|p|n|async|sync|a|hard|soft))*"
+    r"(?:\d+)?"
+    r"$",
     re.I,
 )
 
