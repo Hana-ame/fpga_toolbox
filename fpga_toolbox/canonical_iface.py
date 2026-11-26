@@ -246,6 +246,11 @@ CANONICAL_INTERFACES: Dict[str, CanonInterface] = {
             _sig("ras_n", "out", required=False), _sig("cas_n", "out", required=False),
             _sig("we_n", "out", required=False), _sig("ba", "out"),
             _sig("addr", "out", "addr"), _sig("dq", "inout", "data"),
+            # read-data-valid strobe exposed by controller-style DDR3 models
+            # (same signal DDR4 declares).  Without it the port falls into
+            # out_of_scope and gets tied, while the TB template still expects a
+            # response handshake.
+            _sig("rd_valid", "out", required=False),
         ),
     ),
     "ddr4": CanonInterface(
@@ -350,6 +355,10 @@ class BoundSignal:
     matched: str                   # concatenation that matched
     prefix_tokens: List[str]       # channel/instance prefix tokens
     preference: int                # higher = better (exact-name match wins)
+    #: for bidirectional canonicals split into drive/observe pairs
+    #: (``ddr3_dq_out`` drives the bus, ``ddr3_dq_in`` observes it)
+    twin: Optional[Any] = None
+    twin_role: str = ""            # "in" or "out" for the twin port
 
     @property
     def group(self) -> str:
@@ -368,12 +377,37 @@ class BoundInterface:
     def port_map(self) -> Dict[str, str]:
         return {k: v.port.name for k, v in self.signals.items()}
 
+    def split_port_map(self) -> Dict[str, Dict[str, str]]:
+        """Bidirectional canonicals that a DUT split into an in/out pair.
+
+        DDR controllers commonly expose ``ddr3_dq_in`` (data the controller
+        receives) and ``ddr3_dq_out`` (data it drives) instead of one ``inout``.
+        The TB template drives/observes both, so the canonical ``dq`` carries a
+        map rather than a single name::
+
+            {"dq": {"in": "ddr3_dq_in", "out": "ddr3_dq_out"}}
+        """
+        out: Dict[str, Dict[str, str]] = {}
+        for k, v in self.signals.items():
+            if v.twin is None:
+                continue
+            pair: Dict[str, str] = {}
+            pair["in" if v.port.direction == "input" else "out"] = v.port.name
+            pair["in" if v.twin.direction == "input" else "out"] = v.twin.name
+            out[k] = pair
+        return out
+
     def port_details(self) -> Dict[str, Dict[str, Any]]:
-        return {
-            k: {"port": v.port.name, "direction": v.port.direction,
-                "width": v.port.width}
-            for k, v in self.signals.items()
-        }
+        details: Dict[str, Dict[str, Any]] = {}
+        for k, v in self.signals.items():
+            details[k] = {"port": v.port.name, "direction": v.port.direction,
+                          "width": v.port.width}
+            if v.twin is not None:
+                details[k]["twin"] = {
+                    "port": v.twin.name, "direction": v.twin.direction,
+                    "width": v.twin.width,
+                }
+        return details
 
 
 def _filter_group_tokens(
@@ -411,13 +445,30 @@ def _tokens_ok(tokens: Sequence[str], canon_iface: "CanonInterface") -> bool:
 def _preference(port_name: str, canon: str) -> int:
     """Prefer bindings whose port name is closest to the canonical spelling.
 
-    ``paddr`` (exact) should beat ``p_addr_o`` (split + suffixed) when both
-    exist, so a stray alias cannot hijack the canonical signal.
+    Ranking (higher wins) is needed when a module exposes several aliases of the
+    same signal, so a stray alias cannot hijack the canonical one:
+
+    4  the port name **is** the canonical name (``psel`` for canon ``psel``)
+    3  canonical spelling with cosmetic separators/case only (``p_sel``, ``PSel``)
+    2  canonical spelling plus a direction word (``psel_i``, ``p_sel_o``)
+    1  anything else that still concatenates to the canonical name
+
+    Defect 171: the old version collapsed ranks 4 and 3 into one value, so with
+    both ``psel`` and ``p_sel`` present the winner was decided by name sorting and
+    ``p_sel`` won -- rejecting the port that is literally named after the
+    canonical signal.
     """
-    base = port_name.lower().replace("_", "")
+    low = port_name.lower()
+    if low == canon:
+        return 4
+    base = low.replace("_", "")
     if base == canon:
         return 3
-    if base.rstrip("ioinub").startswith(canon):
+    # split into tokens and drop trailing/leading direction words
+    toks = tokenize_port_name(port_name)
+    while toks and toks[-1] in _DIR_WORDS and "".join(toks[:-1]).replace("_", ""):
+        toks = toks[:-1]
+    if "".join(toks) == canon:
         return 2
     return 1
 
@@ -530,12 +581,34 @@ def bind_protocol(
         bi = BoundInterface(protocol=canon_iface.protocol, group=grp)
         for canon, candidates in by_c.items():
             candidates.sort(key=lambda b: (-b.preference, b.port.name))
-            bi.signals[canon] = candidates[0]
-            if len(candidates) > 1:
+            primary = candidates[0]
+            rest = list(candidates[1:])
+
+            # Bidirectional canonicals (DDR ``dq``) are frequently expressed as an
+            # **in/out pair** instead of one ``inout`` port.  Treat the opposite
+            # direction port as the twin of the chosen one instead of reporting a
+            # conflict -- a conflict report here would be misleading (nothing is
+            # wrong with the DUT) and would drop the driver side entirely.
+            twin = None
+            twin_role = ""
+            if primary.port.direction in ("input", "output"):
+                for cand in rest:
+                    if (cand.port.direction in ("input", "output")
+                            and cand.port.direction != primary.port.direction
+                            and cand.port.width == primary.port.width):
+                        twin = cand.port
+                        twin_role = primary.port.direction
+                        rest.remove(cand)
+                        break
+            primary.twin = twin
+            primary.twin_role = twin_role
+            bi.signals[canon] = primary
+
+            if rest:
                 bi.ambiguous.append({
                     "canonical": canon,
-                    "chosen": candidates[0].port.name,
-                    "rejected": [c.port.name for c in candidates[1:]],
+                    "chosen": primary.port.name,
+                    "rejected": [c.port.name for c in rest],
                     "reason": "multiple DUT ports bind to the same canonical signal",
                 })
         out.append(bi)

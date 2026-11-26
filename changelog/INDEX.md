@@ -170,3 +170,4 @@
 - [105 · 多模块文件里静默只测第一个匹配模块](105-multiple-candidate-modules.md)
 - [106 · 请求错误协议时错误信息不指出 DUT 实际协议](106-wrong-protocol-names-detected.md)
 - [107 · 架构重构：标准接口定义 + 绑定层](107-canonical-interface-binding.md)
+- [108 · 非标准前缀与双向 dq 的绑定/接线](108-prefix-binding-and-bidirectional-dq.md)

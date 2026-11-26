@@ -4489,6 +4489,71 @@ def test_canonical_interface_binding_engine() -> None:
     assert cs.all_spellings() == ("tx_tvalid", "tx_valid")
 
 
+def test_nonstandard_prefix_dut_ports_are_bound_and_wired() -> None:
+    """Defect 172/173/174/175: 非标准前缀 DUT + 双向 dq 拆分的完整链路。
+
+    绑定层（canonical_iface）已经能识别 `mem_ddr3_*` 这类前缀，但旧模板仍把
+    端口名写死成 `ddr3_ck_p` 等字面量：
+
+    - 174: `_missing_tb_ports` 拿模板侧拼写（`ddr3_ck_p`）去查以 canonical 名
+      （`ck_p`）为键的 port_map，永远查不到 → 合法的带前缀 DUT 被判「缺端口」。
+    - 175: 即使校验放过，实例连线仍是 `.ddr3_ck_p(...)` → PINNOTFOUND，
+      工具报 ok=True 而 TB 编译失败。
+    - 172: DDR 的 `dq` 在真实 RTL 里常拆成 `_dq_in`/`_dq_out` 两个端口，
+      绑定层把它们当成冲突（选一个、拒一个），驱动侧或观察侧被丢进
+      out_of_scope 再 tie 一次。
+    - 173: DDR3 canonical 漏了 `rd_valid`，该端口落进 out_of_scope。
+    """
+    print("coverage: non-standard prefix DUT ports bound and wired")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+    from fpga_toolbox.registry import call_tool
+
+    ref = Path(__file__).resolve().parent.parent / "examples" / "multi_bus_ref"
+
+    # (172) 双向 dq 拆分必须成对绑定，且两半都进 claimed（不再落 out_of_scope）
+    r = call_tool("extract_interfaces", {"rtl_file": str(ref / "ddr3_mem_ctrl.sv")})
+    assert r["ok"], str(r.get("error"))[:200]
+    mod = r["data"]["modules"][0]
+    iface = next(i for i in mod["interfaces"] if i["protocol"] == "ddr3")
+    split = iface["split_port_map"]
+    assert "dq" in split, iface
+    assert split["dq"]["in"] == "ddr3_dq_in", split
+    assert split["dq"]["out"] == "ddr3_dq_out", split
+    # (173) rd_valid 必须被绑定，而不是 tie 掉
+    assert iface["port_map"].get("rd_valid") == "ddr3_rd_valid", iface["port_map"]
+    assert mod["out_of_scope_ports"] == [], mod["out_of_scope_ports"]
+    # 拆分对不能再出现在越界端口里
+    oos = {o["port"] for o in mod["out_of_scope_ports"]}
+    assert "ddr3_dq_out" not in oos and "ddr3_dq_in" not in oos, oos
+
+    with tempfile.TemporaryDirectory() as td:
+        # (174/175) 非标准前缀：模板必须按真实端口名连线
+        src = (ref / "ddr3_mem_ctrl.sv").read_text(encoding="utf-8")
+        prefixed = src.replace("ddr3_", "mem_ddr3_")
+        f = Path(td) / "mem_ddr3.sv"
+        f.write_text(prefixed, encoding="utf-8")
+
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        im = ex["data"]["modules"][0]["interfaces"]
+        assert [(x["protocol"], len(x["port_map"])) for x in im] == [("ddr3", 11)], im
+        assert im[0]["split_port_map"]["dq"] == {
+            "in": "mem_ddr3_dq_in", "out": "mem_ddr3_dq_out"}, im[0]["split_port_map"]
+
+        out = Path(td) / "tb"
+        em = emit_protocol_testbench(str(f), str(out), "ddr3")
+        assert em["ok"], str(em.get("error"))[:250]
+        tb = Path(em["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        # 实例连线必须是真实端口名
+        for pin in ("mem_ddr3_ck_p", "mem_ddr3_cke", "mem_ddr3_cs_n",
+                    "mem_ddr3_ba", "mem_ddr3_addr", "mem_ddr3_dq_in",
+                    "mem_ddr3_dq_out", "mem_ddr3_rd_valid"):
+            assert f".{pin}(" in tb, (pin, tb[:800])
+        # 不能残留硬编码的旧拼写作为 pin 名
+        assert ".ddr3_ck_p(" not in tb, tb[:800]
+        assert ".ddr3_dq_out(" not in tb, tb[:800]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4562,6 +4627,7 @@ def main() -> int:
     test_multiple_candidate_modules_are_disclosed()
     test_wrong_requested_protocol_names_the_detected_one()
     test_canonical_interface_binding_engine()
+    test_nonstandard_prefix_dut_ports_are_bound_and_wired()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

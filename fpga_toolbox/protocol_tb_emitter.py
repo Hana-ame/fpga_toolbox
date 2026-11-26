@@ -124,19 +124,81 @@ def _wrong_dir_ports(
     return bad
 
 
+#: template port name -> canonical signal name, for the protocols whose template
+#: still hard-codes a prefixed port spelling (ddr3_ck_p, pcie_tx_tvalid ...).
+#: ``REQUIRED_TB_PORTS`` lists template-side spellings; the extractor's port_map is
+#: keyed by canonical names, so the check below needs this bridge.
+_TEMPLATE_TO_CANON: Dict[str, Dict[str, str]] = {
+    "ddr3": {
+        "ddr3_ck_p": "ck_p", "ddr3_ck_n": "ck_n", "ddr3_cke": "cke",
+        "ddr3_cs_n": "cs_n", "ddr3_ras_n": "ras_n", "ddr3_cas_n": "cas_n",
+        "ddr3_we_n": "we_n", "ddr3_ba": "ba", "ddr3_addr": "addr",
+        "ddr3_dq_in": "dq", "ddr3_dq_out": "dq", "ddr3_rd_valid": "rd_valid",
+    },
+    "ddr4": {
+        "ddr4_ck_t": "ck_t", "ddr4_ck_c": "ck_c", "ddr4_act_n": "act_n",
+        "ddr4_bg": "bg", "ddr4_ba": "ba", "ddr4_adr": "adr",
+        "ddr4_cs_n": "cs_n", "ddr4_odt": "odt", "ddr4_dq_in": "dq",
+        "ddr4_dq_out": "dq", "ddr4_dm_dbi_n": "dm_dbi_n",
+        "ddr4_rd_valid": "rd_valid",
+    },
+    "hbm": {f"hbm_{n}": n for n in (
+        "awid", "awaddr", "awvalid", "awready", "wdata", "wvalid", "wready",
+        "bid", "bvalid", "bready", "arid", "araddr", "arvalid", "arready",
+        "rid", "rdata", "rvalid", "rready")},
+    "pcie": {
+        "pcie_tx_tvalid": "tx_tvalid", "pcie_tx_tready": "tx_tready",
+        "pcie_tx_tdata": "tx_tdata", "pcie_tx_tlast": "tx_tlast",
+        "pcie_rx_tvalid": "rx_tvalid", "pcie_rx_tready": "rx_tready",
+        "pcie_rx_tdata": "rx_tdata", "pcie_rx_tlast": "rx_tlast",
+        "pcie_link_up": "link_up", "pcie_cfg_speed": "speed",
+        "pcie_cfg_lanes": "lanes",
+    },
+}
+
+
 def _missing_tb_ports(proto: str, iface: Dict[str, Any], rtl_ports: List[str]) -> List[str]:
     """返回该协议 TB 模板需要、但 DUT 实际没有的端口名。
 
     优先用 port_map 的映射结果判断（emitter 就是按 port_map 连线），若 port_map
-    没给某项则退回 RTL 端口名本身——两者都不存在就是真缺失。
+    没给该项则退回 RTL 端口名本身——两者都不存在就是真缺失。
+
+    对 DDR4/HBM/PCIe 这类模板仍硬编码前缀端口名的协议，``REQUIRED_TB_PORTS``
+    列的是**模板侧拼写**（``ddr3_ck_p``），而 port_map 以 canonical 名
+    （``ck_p``）为键。旧实现直接拿模板名去查 port_map，永远查不到，于是任何
+    使用非标准前缀的合法 DUT（如 ``mem_ddr3_*``）都被判成「缺端口」——尽管
+    binding 层已经正确绑定了全部信号（缺陷 174）。
     """
     required = REQUIRED_TB_PORTS.get(proto)
     if not required:
         return []
     port_set = {p.lower() for p in rtl_ports}
+    bridge = _TEMPLATE_TO_CANON.get(proto) or {}
+    split = iface.get("split_port_map") or {}
     missing: List[str] = []
     for canon in required:
-        mapped = _pm(iface, canon, canon)
+        cname = bridge.get(canon, canon)
+        # 双向拆分端口：模板对 dq 的两半分别连线（dq_in 由 TB 驱动、dq_out 由
+        # DUT 驱动），所以必须分别校验。DUT 只有 dq_out、没有 dq_in 时，
+        # `_split_pm` 会回退到默认名 `ddr3_dq_in` —— 该端口并不存在，
+        # 生成的 TB 带 `.ddr3_dq_in(...)` 连线，Verilator 报 PINNOTFOUND
+        # （缺陷 121）。split 里缺 corresponding role 时直接判缺失。
+        pair = split.get(cname)
+        role = "in" if canon.endswith("_in") else ("out" if canon.endswith("_out") else "")
+        if role:
+            if isinstance(pair, dict):
+                mapped = pair.get(role)
+                if not mapped or mapped.lower() not in port_set:
+                    missing.append(f"{canon}->{mapped or canon}")
+                continue
+            # 没有 split 记录：dq 只绑定了单一方向（例如 DUT 只有 ddr3_dq_out）。
+            # 模板对 in/out 两半都会连线，缺的那一半必须按**约定名**校验存在性，
+            # 否则生成的 TB 会带一个不存在的 pin（PINNOTFOUND，缺陷 121）。
+            # 约定名 = 模板默认拼写（ddr3_dq_in / ddr3_dq_out）
+            if canon.lower() not in port_set:
+                missing.append(f"{canon}->{canon}")
+            continue
+        mapped = _pm(iface, cname, canon)
         if mapped.lower() not in port_set:
             missing.append(f"{canon}->{mapped}")
     return missing
@@ -148,6 +210,23 @@ def _pm(iface: Dict[str, Any], canon: str, default: str) -> str:
     if isinstance(val, dict):
         return str(val.get("port") or default)
     return str(val or default)
+
+
+def _split_pm(iface: Dict[str, Any], canon: str, role: str, default: str) -> str:
+    """Resolve one half of a bidirectional canonical signal.
+
+    DDR controllers commonly expose ``ddr3_dq_in`` / ``ddr3_dq_out`` instead of a
+    single ``inout ddr3_dq``.  The extractor reports that pair through
+    ``split_port_map``; when it is absent (single inout port) the canonical name
+    from ``port_map`` is used for both halves.
+    """
+    sp = iface.get("split_port_map") or {}
+    pair = sp.get(canon)
+    if isinstance(pair, dict):
+        val = pair.get(role)
+        if val:
+            return str(val)
+    return _pm(iface, canon, default)
 
 
 def _pw(iface: Dict[str, Any], canon: str, default: int) -> int:
@@ -539,6 +618,22 @@ def _emit_ddr3_tb(mod: str, clk: str, rst: str, iface: Optional[Dict[str, Any]] 
     cas_d = _pw(_i, "cas_n", 1)
     we_d = _pw(_i, "we_n", 1)
     rdv_d = _pw(_i, "rd_valid", 1)
+    # DUT 的真实 dq 端口名：可能是 inout `ddr3_dq`，也可能是 in/out 拆分对
+    # （`ddr3_dq_in` / `ddr3_dq_out`，甚至别的前缀）。模板必须按真实名字连线，
+    # 否则 Verilator 报 PINNOTFOUND 而工具仍报 ok=True。
+    dq_in_n = _split_pm(_i, "dq", "in", "ddr3_dq_in")
+    dq_out_n = _split_pm(_i, "dq", "out", "ddr3_dq_out")
+    # 其余端口同样必须按真实名字连线（DUT 可能用 mem_ddr3_* 等前缀）。
+    ck_p_n = _pm(_i, "ck_p", "ddr3_ck_p")
+    ck_n_n = _pm(_i, "ck_n", "ddr3_ck_n")
+    cke_n = _pm(_i, "cke", "ddr3_cke")
+    cs_n_n = _pm(_i, "cs_n", "ddr3_cs_n")
+    ras_n_n = _pm(_i, "ras_n", "ddr3_ras_n")
+    cas_n_n = _pm(_i, "cas_n", "ddr3_cas_n")
+    we_n_n = _pm(_i, "we_n", "ddr3_we_n")
+    ba_n = _pm(_i, "ba", "ddr3_ba")
+    addr_n = _pm(_i, "addr", "ddr3_addr")
+    rdv_n = _pm(_i, "rd_valid", "ddr3_rd_valid")
     return f"""`timescale 1ns/1ps
 // Auto-generated by fpga_toolbox.protocol_tb_emitter (protocol=ddr3)
 module tb_{mod}_ddr3;
@@ -555,11 +650,11 @@ module tb_{mod}_ddr3;
   int          errs = 0;
 
   {mod} dut (
-    .{clk}({clk}), .{rst}({rst}), .ddr3_ck_p({clk}), .ddr3_ck_n(~{clk}),
-    .ddr3_cke(ddr3_cke), .ddr3_cs_n(ddr3_cs_n), .ddr3_ras_n(ddr3_ras_n),
-    .ddr3_cas_n(ddr3_cas_n), .ddr3_we_n(ddr3_we_n), .ddr3_ba(ddr3_ba),
-    .ddr3_addr(ddr3_addr), .ddr3_dq_in(ddr3_dq_in), .ddr3_dq_out(ddr3_dq_out),
-    .ddr3_rd_valid(ddr3_rd_valid)
+    .{clk}({clk}), .{rst}({rst}), .{ck_p_n}({clk}), .{ck_n_n}(~{clk}),
+    .{cke_n}(ddr3_cke), .{cs_n_n}(ddr3_cs_n), .{ras_n_n}(ddr3_ras_n),
+    .{cas_n_n}(ddr3_cas_n), .{we_n_n}(ddr3_we_n), .{ba_n}(ddr3_ba),
+    .{addr_n}(ddr3_addr), .{dq_in_n}(ddr3_dq_in), .{dq_out_n}(ddr3_dq_out),
+    .{rdv_n}(ddr3_rd_valid)
   );
   always #5 {clk} = ~{clk};
 
@@ -642,6 +737,19 @@ def _emit_ddr4_tb(mod: str, clk: str, rst: str, iface: Optional[Dict[str, Any]] 
     _cs_d = _pw(_i, "cs_n", 1)
     _odt_d = _pw(_i, "odt", 1)
     _rdv_d = _pw(_i, "rd_valid", 1)
+    # 端口名同样按 DUT 真实名字连线（DUT 可能用 mem_ddr4_* 等前缀）
+    _ck_t_n = _pm(_i, "ck_t", "ddr4_ck_t")
+    _ck_c_n = _pm(_i, "ck_c", "ddr4_ck_c")
+    _act_n_n = _pm(_i, "act_n", "ddr4_act_n")
+    _cs_n_n = _pm(_i, "cs_n", "ddr4_cs_n")
+    _odt_n = _pm(_i, "odt", "ddr4_odt")
+    _bg_n = _pm(_i, "bg", "ddr4_bg")
+    _ba_n = _pm(_i, "ba", "ddr4_ba")
+    _adr_n = _pm(_i, "adr", "ddr4_adr")
+    _dq_in_n = _split_pm(_i, "dq", "in", "ddr4_dq_in")
+    _dq_out_n = _split_pm(_i, "dq", "out", "ddr4_dq_out")
+    _dm_n = _pm(_i, "dm_dbi_n", "ddr4_dm_dbi_n")
+    _rdv_n = _pm(_i, "rd_valid", "ddr4_rd_valid")
     return f"""`timescale 1ns/1ps
 // Auto-generated by fpga_toolbox.protocol_tb_emitter (protocol=ddr4)
 module tb_{mod}_ddr4;
@@ -658,11 +766,11 @@ module tb_{mod}_ddr4;
   int          errs = 0;
 
   {mod} dut (
-    .{clk}({clk}), .{rst}({rst}), .ddr4_ck_t({clk}), .ddr4_ck_c(~{clk}),
-    .ddr4_act_n(ddr4_act_n), .ddr4_cs_n(ddr4_cs_n), .ddr4_odt(ddr4_odt),
-    .ddr4_bg(ddr4_bg), .ddr4_ba(ddr4_ba), .ddr4_adr(ddr4_adr),
-    .ddr4_dq_in(ddr4_dq_in), .ddr4_dq_out(ddr4_dq_out),
-    .ddr4_dm_dbi_n(ddr4_dm_dbi_n), .ddr4_rd_valid(ddr4_rd_valid)
+    .{clk}({clk}), .{rst}({rst}), .{_ck_t_n}({clk}), .{_ck_c_n}(~{clk}),
+    .{_act_n_n}(ddr4_act_n), .{_cs_n_n}(ddr4_cs_n), .{_odt_n}(ddr4_odt),
+    .{_bg_n}(ddr4_bg), .{_ba_n}(ddr4_ba), .{_adr_n}(ddr4_adr),
+    .{_dq_in_n}(ddr4_dq_in), .{_dq_out_n}(ddr4_dq_out),
+    .{_dm_n}(ddr4_dm_dbi_n), .{_rdv_n}(ddr4_rd_valid)
   );
   always #5 {clk} = ~{clk};
 
@@ -729,6 +837,25 @@ def _emit_hbm_tb(mod: str, clk: str, rst: str, iface: Optional[Dict[str, Any]] =
     pat_val &= (1 << dw_d) - 1
     pat_hex = f"{pat_val:0{dw_hex}X}"
     lo_hex = f"{pat_val & 0xFFFFFFFFFFFFFFFF:016X}"
+    # HBM 模板的 18 个端口同样按 DUT 真实名字连线。
+    _hbm_awid_n = _pm(_i, "awid", "hbm_awid")
+    _hbm_awaddr_n = _pm(_i, "awaddr", "hbm_awaddr")
+    _hbm_awvalid_n = _pm(_i, "awvalid", "hbm_awvalid")
+    _hbm_awready_n = _pm(_i, "awready", "hbm_awready")
+    _hbm_wdata_n = _pm(_i, "wdata", "hbm_wdata")
+    _hbm_wvalid_n = _pm(_i, "wvalid", "hbm_wvalid")
+    _hbm_wready_n = _pm(_i, "wready", "hbm_wready")
+    _hbm_bid_n = _pm(_i, "bid", "hbm_bid")
+    _hbm_bvalid_n = _pm(_i, "bvalid", "hbm_bvalid")
+    _hbm_bready_n = _pm(_i, "bready", "hbm_bready")
+    _hbm_arid_n = _pm(_i, "arid", "hbm_arid")
+    _hbm_araddr_n = _pm(_i, "araddr", "hbm_araddr")
+    _hbm_arvalid_n = _pm(_i, "arvalid", "hbm_arvalid")
+    _hbm_arready_n = _pm(_i, "arready", "hbm_arready")
+    _hbm_rid_n = _pm(_i, "rid", "hbm_rid")
+    _hbm_rdata_n = _pm(_i, "rdata", "hbm_rdata")
+    _hbm_rvalid_n = _pm(_i, "rvalid", "hbm_rvalid")
+    _hbm_rready_n = _pm(_i, "rready", "hbm_rready")
     return f"""`timescale 1ns/1ps
 // Auto-generated by fpga_toolbox.protocol_tb_emitter (protocol=hbm)
 module tb_{mod}_hbm;
@@ -742,11 +869,11 @@ module tb_{mod}_hbm;
 
   {mod} dut (
     .{clk}({clk}), .{rst}({rst}),
-    .hbm_awid(hbm_awid), .hbm_awaddr(hbm_awaddr), .hbm_awvalid(hbm_awvalid), .hbm_awready(hbm_awready),
-    .hbm_wdata(hbm_wdata), .hbm_wvalid(hbm_wvalid), .hbm_wready(hbm_wready),
-    .hbm_bid(hbm_bid), .hbm_bvalid(hbm_bvalid), .hbm_bready(hbm_bready),
-    .hbm_arid(hbm_arid), .hbm_araddr(hbm_araddr), .hbm_arvalid(hbm_arvalid), .hbm_arready(hbm_arready),
-    .hbm_rid(hbm_rid), .hbm_rdata(hbm_rdata), .hbm_rvalid(hbm_rvalid), .hbm_rready(hbm_rready)
+    .{_hbm_awid_n}(hbm_awid), .{_hbm_awaddr_n}(hbm_awaddr), .{_hbm_awvalid_n}(hbm_awvalid), .{_hbm_awready_n}(hbm_awready),
+    .{_hbm_wdata_n}(hbm_wdata), .{_hbm_wvalid_n}(hbm_wvalid), .{_hbm_wready_n}(hbm_wready), .{_hbm_bid_n}(hbm_bid),
+    .{_hbm_bvalid_n}(hbm_bvalid), .{_hbm_bready_n}(hbm_bready), .{_hbm_arid_n}(hbm_arid), .{_hbm_araddr_n}(hbm_araddr),
+    .{_hbm_arvalid_n}(hbm_arvalid), .{_hbm_arready_n}(hbm_arready), .{_hbm_rid_n}(hbm_rid), .{_hbm_rdata_n}(hbm_rdata),
+    .{_hbm_rvalid_n}(hbm_rvalid), .{_hbm_rready_n}(hbm_rready)
   );
   always #5 {clk} = ~{clk};
 
@@ -820,10 +947,19 @@ def _emit_pcie_tb(
     """
     params: Dict[str, int] = dict(dut_params or {})
     widths: Dict[str, int] = dict(port_widths or {})
-    tx_data = _pm(iface, "tx_data", "pcie_tx_tdata")
-    rx_data = _pm(iface, "rx_data", "pcie_rx_tdata")
+    tx_data = _pm(iface, "tx_tdata", _pm(iface, "tx_data", "pcie_tx_tdata"))
+    rx_data = _pm(iface, "rx_tdata", _pm(iface, "rx_data", "pcie_rx_tdata"))
     spd = _pm(iface, "speed", "pcie_cfg_speed")
     lns = _pm(iface, "lanes", "pcie_cfg_lanes")
+    # 其余 PCIe 端口名也按 DUT 真实名字连线，模板里不再出现硬编码的
+    # `pcie_tx_tvalid` 之类字面量（DUT 可能用 tl_/ep_ 等前缀）。
+    tx_valid_n = _pm(iface, "tx_tvalid", "pcie_tx_tvalid")
+    tx_ready_n = _pm(iface, "tx_tready", "pcie_tx_tready")
+    tx_last_n = _pm(iface, "tx_tlast", "pcie_tx_tlast")
+    rx_valid_n = _pm(iface, "rx_tvalid", "pcie_rx_tvalid")
+    rx_ready_n = _pm(iface, "rx_tready", "pcie_rx_tready")
+    rx_last_n = _pm(iface, "rx_tlast", "pcie_rx_tlast")
+    link_up_n = _pm(iface, "link_up", "pcie_link_up")
 
     real_dw = int(widths.get(rx_data) or widths.get(tx_data) or 0)
     if real_dw <= 0:
@@ -981,11 +1117,11 @@ def _emit_pcie_tb(
         "\n"
         f"  {mod}{pin_conn} dut (\n"
         f"    .{clk}({clk}), .{rst}({rst}),\n"
-        "    .pcie_tx_tvalid(pcie_tx_tvalid), .pcie_tx_tready(pcie_tx_tready),\n"
-        f"    .{tx_data}({tx_data}), .pcie_tx_tlast(pcie_tx_tlast),\n"
-        "    .pcie_rx_tvalid(pcie_rx_tvalid), .pcie_rx_tready(pcie_rx_tready),\n"
-        f"    .{rx_data}({rx_data}), .pcie_rx_tlast(pcie_rx_tlast),\n"
-        f"    .pcie_link_up(pcie_link_up), .{spd}({spd}), .{lns}({lns})\n"
+        f"    .{tx_valid_n}(pcie_tx_tvalid), .{tx_ready_n}(pcie_tx_tready),\n"
+        f"    .{tx_data}({tx_data}), .{tx_last_n}(pcie_tx_tlast),\n"
+        f"    .{rx_valid_n}(pcie_rx_tvalid), .{rx_ready_n}(pcie_rx_tready),\n"
+        f"    .{rx_data}({rx_data}), .{rx_last_n}(pcie_rx_tlast),\n"
+        f"    .{link_up_n}(pcie_link_up), .{spd}({spd}), .{lns}({lns})\n"
         "  );\n"
         f"  always #5 {clk} = ~{clk};\n"
         "\n"

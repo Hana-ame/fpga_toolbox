@@ -358,6 +358,11 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
             if req and not any(x in sigs for x in req):
                 continue
             claimed.update(v.port.name for v in bi.signals.values())
+            # 双向拆分的「另一半」也属于这个接口：不加进 claimed 的话它会被
+            # 当成 out_of_scope 再 tie 一次，与 TB 里的驱动/观察冲突。
+            for _v in bi.signals.values():
+                if _v.twin is not None:
+                    claimed.add(_v.twin.name)
 
             aw_name = next((c for c in ("paddr", "awaddr", "araddr", "haddr",
                                         "addr", "adr") if c in sigs), None)
@@ -381,6 +386,11 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
                 "addr_width": aw_p.width if aw_p else None,
                 "data_width": dw_p.width if dw_p else None,
                 "port_map": bi.port_map(),
+                # 双向 canonical（DDR 的 dq）在真实 RTL 里常被拆成 in/out 两个
+                # 端口，`port_map` 只能表达其中一个。`split_port_map` 给出
+                # {canonical: {"in": 端口, "out": 端口}}，下游 TB 模板据此同时
+                # 驱动写数据、观察读数据。
+                "split_port_map": bi.split_port_map(),
                 "port_details": bi.port_details(),
                 "missing_signals": [x for x in req if x not in sigs],
                 # 绑定证据：命名风格不再决定识别成功率，但调用方仍应能看到
