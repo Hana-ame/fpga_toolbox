@@ -510,7 +510,7 @@ python3 -m fpga_toolbox audit_harness
 {
   "ok": true,
   "data": {
-    "total": 18, "passed": 18, "failed": 0,
+    "total": 19, "passed": 19, "failed": 0,
     "checks": [
       {"id": "A1_LINT_FAULT_CATCH", "passed": true, "detail": "ok=False codes=['C1', 'R2']"},
       {"id": "A2_MUTATION_RESIDUAL_GUARD", "passed": true, "detail": "ok=False codes=['E030']"},
@@ -540,6 +540,7 @@ python3 -m fpga_toolbox audit_harness
 | A16 | 套件打印 PASS 后崩溃不算通过 |
 | A17 | 审计报告 `summary`/`overall_status` 与 `checks` 矛盾必须可见（W052/W053）|
 | A18 | 畸形 results（非对象元素、无名 testcase）必须报错/判 FAIL，不静默 NO_RESULTS |
+| A19 | `REQUIRED_TB_PORTS` 覆盖各协议模板**实际硬连**的每个端口（防模板加连线而漏同步表格 → PINNOTFOUND 却报 ok）|
 
 ---
 

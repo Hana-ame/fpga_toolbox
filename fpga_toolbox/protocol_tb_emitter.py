@@ -45,13 +45,20 @@ REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
     # 声明不一致（如 DUT 用 `inout [15:0] ddr3_dq` 而模板声明的是
     # ddr3_dq_in/ddr3_dq_out），`.*` 会报 "Can't find definition of variable"
     # 编译失败，而工具仍返回 ok=True。这里按模板声明的实际端口名校验。
+    # 注意 *_dq_in 必须一起校验：模板对 DUT 是**双向**语义 —— dq_in 由 TB 驱动
+    # （写入数据），dq_out 由 DUT 驱动（读回数据）。旧表只列了 dq_out，于是
+    # 一个没有 dq_in 端口的 DDR3 DUT 通过了生成前校验，产出的 TB 带
+    # `.ddr3_dq_in(...)` 连线，Verilator 报 PINNOTFOUND 编译失败而工具报 ok=True
+    # （实测复现）。ddr4 同理。
     "ddr3": (
         "ddr3_ck_p", "ddr3_ck_n", "ddr3_cke", "ddr3_cs_n", "ddr3_ras_n",
-        "ddr3_cas_n", "ddr3_we_n", "ddr3_ba", "ddr3_addr", "ddr3_dq_out", "ddr3_rd_valid",
+        "ddr3_cas_n", "ddr3_we_n", "ddr3_ba", "ddr3_addr",
+        "ddr3_dq_in", "ddr3_dq_out", "ddr3_rd_valid",
     ),
     "ddr4": (
         "ddr4_ck_t", "ddr4_ck_c", "ddr4_act_n", "ddr4_bg", "ddr4_ba", "ddr4_adr",
-        "ddr4_cs_n", "ddr4_odt", "ddr4_dq_out", "ddr4_dm_dbi_n", "ddr4_rd_valid",
+        "ddr4_cs_n", "ddr4_odt", "ddr4_dq_in", "ddr4_dq_out",
+        "ddr4_dm_dbi_n", "ddr4_rd_valid",
     ),
     "hbm": (
         "hbm_awid", "hbm_awaddr", "hbm_awvalid", "hbm_awready",

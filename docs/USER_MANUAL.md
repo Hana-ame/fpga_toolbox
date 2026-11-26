@@ -73,7 +73,7 @@ python3 -m fpga_toolbox audit_harness
 | 10 | `normalize_sim_result` | `--module-name [--cocotb-results-json] [--verilator-log-path] [--sva-log-path]` | 归一化所有仿真日志与逐笔 `[CHECK]` 为统一 JSON 报告 |
 | 11 | `render_visual_report` | `--report --dep-graph --extracted-interfaces --out-html-path` | 生成带 SV 语法高亮、方向/位宽标签与分项目标签页的离线 HTML+SVG |
 | 12 | `clean_pt_netlist` | `--in-verilog --out-verilog [--blackbox-modules]` | 清理 DC 网表中的参数化黑盒并插入标量 `assign = 1'b0;` 供 PT 读取 |
-| 13 | `audit_harness` | `[--strict]` | 运行 18 项故障注入自审计，验证工具链所有护栏未被破坏 |
+| 13 | `audit_harness` | `[--strict]` | 运行 19 项故障注入自审计，验证工具链所有护栏未被破坏 |
 
 ---
 

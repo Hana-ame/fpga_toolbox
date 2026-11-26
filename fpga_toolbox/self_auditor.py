@@ -504,6 +504,53 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - 自审计要观察任意失败形态
                 return None, f"{type(exc).__name__}: {exc}"
 
+        # ---- A19: REQUIRED_TB_PORTS 必须覆盖模板真正硬连的每个端口 ----
+        # 缺陷 121：DDR3/DDR4 模板会连 `.ddr3_dq_in(...)`，但必需端口表只列了
+        # dq_out，于是缺 dq_in 的 DUT 通过了生成前校验，产出的 TB 在 Verilator
+        # 里 PINNOTFOUND、工具却报 ok=True。这条自检从模板源码里抽出**实际
+        # 硬连**的端口名，与必需表做差集 —— 以后模板加连线而忘了同步表格，
+        # 自审计会立刻报出来。
+        import inspect as _inspect
+
+        from . import protocol_tb_emitter as _pte
+
+        _a19_bad: List[str] = []
+        _fn_map = {
+            "apb": "_emit_apb_tb", "axi4": "_emit_axi4_tb",
+            "ahb_lite": "_emit_ahb_tb", "ddr3": "_emit_ddr3_tb",
+            "ddr4": "_emit_ddr4_tb", "hbm": "_emit_hbm_tb",
+            "pcie": "_emit_pcie_tb",
+        }
+        for _proto, _fname in _fn_map.items():
+            _fn = getattr(_pte, _fname, None)
+            if _fn is None:
+                _a19_bad.append(f"{_proto}: emitter missing")
+                continue
+            _src = _inspect.getsource(_fn)
+            # 只认「同名成对」的连线：`.foo(foo)` / `.foo({foo})`。模板里的端口
+            # 连接一律是这个形态；而 `.format(` / `.protocol_tb_emitter(` 这类
+            # 是 docstring 或辅助调用，不会把同一个名字当实参，因此天然被排除
+            # （早期版本只匹配 `.name(` 前缀，把注释里的模块名也算成端口，
+            # 自己报了假 gap —— 自审计探针本身也要防误报）。
+            _connected = {
+                _n for _n, _arg in re.findall(
+                    r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\{?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}?\s*\)",
+                    _src)
+                if _n == _arg
+            }
+            # PCIe 模板的参数覆盖 `.GEN(GEN)` 等是参数不是端口，按经验名剔除
+            _connected -= {"GEN", "LANES", "DW"}
+            _required = set(_pte.REQUIRED_TB_PORTS.get(_proto, ()))
+            _gap = sorted(_connected - _required)
+            if _gap:
+                _a19_bad.append(f"{_proto}: template connects {_gap} not in REQUIRED_TB_PORTS")
+        a19_ok = not _a19_bad
+        checks.append({
+            "id": "A19_REQUIRED_PORTS_COVER_TEMPLATE",
+            "passed": a19_ok,
+            "detail": f"gaps={_a19_bad[:3]}",
+        })
+
         # ---- A15: run_mutation 必须有 baseline 预检（缺陷 113）----
         # 坏掉的 test_cmd（永远非零）不能让每个变异都判 KILLED 从而报假 100%。
         _bm = root / "mut_baseline"

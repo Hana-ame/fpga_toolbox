@@ -105,6 +105,8 @@
 
 - [67-self-audit-covers-new-guardrails.md](67-self-audit-covers-new-guardrails.md) — `audit_harness` 是「护栏的护栏」，但最近几轮修的缺陷（变异 baseline / 套件身份 / 报告自洽 / 畸形 results）**都不在矩阵里** —— 这些护栏将来被回退，自审计本身发现不了。新增 **A15–A18**（矩阵 14 → 18 项，18/18 通过）。更关键的是加完 A18 后做回退验证时发现：探针在被测护栏坏掉时会**抛异常把整个 `audit_harness` 打崩**，调用方拿到 traceback 而不是「A18 失败」—— 而自审计的全部价值就是「护栏被回退时必须报 FAIL」。加 `_audit_call` 包装器把任意异常折算成 `(None, "Type: msg")`，A15/A17/A18 全部改用；两次回退验证现在都干净报 FAIL 并指名异常。顺带补全 FEATURES.md 能力表里一直缺失的 A11–A14
 
+- [68-ddr-required-ports-dq-in.md](68-ddr-required-ports-dq-in.md) — `emit_testbench` 的生成前端口校验表 `REQUIRED_TB_PORTS` 里 ddr3/ddr4 **只列了 `dq_out`、漏了 `dq_in`**，而模板对 DUT 是双向语义（dq_in 由 TB 驱动写数据、dq_out 由 DUT 驱动读数据）。于是一个没有 `dq_in` 端口的 DDR3 DUT 通过了校验，产出的 TB 硬连 `.ddr3_dq_in(...)` → `%Error-PINNOTFOUND: Pin not found: 'ddr3_dq_in'` 而工具报 `ok=True`（与缺陷 14/15 同类）。补表后拒绝并点名端口，参考 DUT 仍全绿。**另加自审计 A19**：从模板源码抽「同名成对」的 `.foo(foo)` 连线与必需表做差集，以后模板加连线忘同步表格会被当场抓到（已验证生效；实现时第一版只匹配 `.name(` 前缀导致七协议全假 gap，改成同名匹配才正确 —— 探针自身也要防误报）
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

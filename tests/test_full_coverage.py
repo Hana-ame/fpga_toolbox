@@ -1884,6 +1884,63 @@ def test_visual_renderer_consistency_and_shape_validation() -> None:
         assert label.split(" ")[0] in err, (label, err[:160])
 
 
+def test_ddr_required_ports_cover_dq_in() -> None:
+    """Defect 121: DDR3/DDR4 模板硬连 `*_dq_in`，但 REQUIRED_TB_PORTS 漏了这一项。
+
+    模板对 DUT 是双向语义：`dq_in` 由 TB 驱动（写入数据）、`dq_out` 由 DUT 驱动
+    （读回数据）。旧必需端口表只列了 `dq_out`，于是**没有 dq_in 端口**的 DDR3
+    DUT 通过了生成前校验，产出的 TB 带 `.ddr3_dq_in(...)` 连线：
+
+        %Error-PINNOTFOUND: tb.sv:17:29: Pin not found: 'ddr3_dq_in'
+        %Error: Exiting due to 1 error(s)
+
+    而 `emit_testbench` 返回 ok=True —— DUT 一点没验到。
+
+    另外加了一条结构自检 A19：从模板源码抽出**同名成对**的 `.foo(foo)` 连线，
+    与 REQUIRED_TB_PORTS 做差集，保证「模板加连线而忘了同步表格」以后会被抓到
+    （已验证：临时删掉表格里的 ddr3_dq_in，A19 立刻报
+    `ddr3: template connects ['ddr3_dq_in'] not in REQUIRED_TB_PORTS`）。
+    """
+    print("coverage: DDR3/DDR4 required-port table covers dq_in (template really drives it)")
+    from fpga_toolbox.protocol_tb_emitter import REQUIRED_TB_PORTS
+
+    for proto, in_port, out_port in (("ddr3", "ddr3_dq_in", "ddr3_dq_out"),
+                                     ("ddr4", "ddr4_dq_in", "ddr4_dq_out")):
+        req = set(REQUIRED_TB_PORTS[proto])
+        assert in_port in req, (proto, sorted(req))
+        assert out_port in req, (proto, sorted(req))
+
+    # 端到端：缺 dq_in 的 DUT 必须被拒，且错误里点名该端口
+    ddr3_rtl = """`timescale 1ns/1ps
+module ddr3_no_dqin (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        ddr3_ck_p,
+  input  logic        ddr3_ck_n,
+  output logic        ddr3_cke,
+  output logic        ddr3_cs_n,
+  output logic        ddr3_ras_n,
+  output logic        ddr3_cas_n,
+  output logic        ddr3_we_n,
+  output logic [2:0]  ddr3_ba,
+  output logic [13:0] ddr3_addr,
+  output logic [15:0] ddr3_dq_out,
+  output logic        ddr3_rd_valid
+);
+  assign ddr3_cke = 1; assign ddr3_cs_n = 1; assign ddr3_ras_n = 1;
+  assign ddr3_cas_n = 1; assign ddr3_we_n = 1; assign ddr3_ba = '0;
+  assign ddr3_addr = '0; assign ddr3_dq_out = '0; assign ddr3_rd_valid = 1'b1;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        rtl = Path(td) / "dut.sv"
+        rtl.write_text(ddr3_rtl, encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(rtl), "out_dir": str(Path(td) / "out"), "protocol": "ddr3"})
+        assert r["ok"] is False, "DUT without ddr3_dq_in must be rejected"
+        assert "ddr3_dq_in" in str(r["error"]), str(r["error"])[:200]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1917,6 +1974,7 @@ def main() -> int:
     test_mutation_rejects_empty_old_pattern()
     test_normalizer_rejects_malformed_and_unnamed_results()
     test_visual_renderer_consistency_and_shape_validation()
+    test_ddr_required_ports_cover_dq_in()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
