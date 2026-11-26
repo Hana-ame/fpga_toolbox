@@ -3354,6 +3354,79 @@ def test_package_imports_are_part_of_the_dependency_closure() -> None:
         assert rs["data"]["rtl_files"] == ["solo.sv"], rs["data"]["rtl_files"]
 
 
+def test_detected_but_unsupported_protocol_is_distinguished() -> None:
+    """Defect 148: 区分「协议没识别到」与「识别到了但没有 TB 模板」。
+
+    分类器能认 11 种协议，emitter 只有 7 种模板（apb/axi4/ahb_lite/ddr3/
+    ddr4/hbm/pcie），`axi4_lite` 在分类器里但不在 emitter 里。旧错误信息对
+    两种情况一律说「not found」：
+
+      No supported multi-bus interface found ...
+      modules: {'axi_master_dut': ['axi4_lite']}
+
+    用户会以为分类器没认出总线，实际是认出了、只是没有对应模板。
+    """
+    print("coverage: detected-but-unsupported protocols are distinguished")
+    from fpga_toolbox.protocol_tb_emitter import SUPPORTED_MULTI_PROTOCOLS, emit_protocol_testbench
+
+    # axi4_lite 必须在分类器里但不在 emitter 支持列表里（前提校验）
+    assert "axi4_lite" not in SUPPORTED_MULTI_PROTOCOLS, SUPPORTED_MULTI_PROTOCOLS
+
+    rtl = (
+        "module axi_master_dut (\n"
+        "  input  logic        aclk,\n"
+        "  input  logic        aresetn,\n"
+        "  output logic [7:0]  awaddr,\n"
+        "  output logic        awvalid,\n"
+        "  input  logic        awready,\n"
+        "  output logic [31:0] wdata,\n"
+        "  output logic [3:0]  wstrb,\n"
+        "  output logic        wvalid,\n"
+        "  input  logic        wready,\n"
+        "  input  logic [1:0]  bresp,\n"
+        "  input  logic        bvalid,\n"
+        "  output logic        bready,\n"
+        "  output logic [7:0]  araddr,\n"
+        "  output logic        arvalid,\n"
+        "  input  logic        arready,\n"
+        "  input  logic [31:0] rdata,\n"
+        "  input  logic [1:0]  rresp,\n"
+        "  input  logic        rvalid,\n"
+        "  output logic        rready\n"
+        ");\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "axi_master_dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+
+        # auto 模式
+        r = emit_protocol_testbench(str(f), str(root / "a"), None)
+        assert r["ok"] is False
+        err = str(r.get("error"))
+        assert "no testbench template" in err, err[:300]
+        assert "axi4_lite" in err, err[:300]
+        assert "Supported protocols:" in err, err[:300]
+        # 不能再说 "not found"（分类器明明找到了）
+        assert "No supported multi-bus interface found" not in err, err[:300]
+        d = r.get("data") or {}
+        assert d["unsupported_protocols"] == ["axi4_lite"], d
+        assert d["detected_protocols"] == ["axi4_lite"], d
+
+        # 显式指定该协议也要给出同样清楚的解释
+        r2 = emit_protocol_testbench(str(f), str(root / "b"), "axi4_lite")
+        assert r2["ok"] is False
+        err2 = str(r2.get("error"))
+        assert "no testbench template" in err2, err2[:300]
+
+        # 支持的协议照常工作
+        ok_src = Path(__file__).resolve().parent.parent / "examples/multi_bus_ref/apb_slave.sv"
+        if ok_src.is_file():
+            r3 = emit_protocol_testbench(str(ok_src), str(root / "c"), "apb")
+            assert r3["ok"] is True, str(r3.get("error"))[:300]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3408,6 +3481,7 @@ def main() -> int:
     test_numeric_bounds_are_enforced_at_entry()
     test_eda_remote_tag_cannot_escape_staging_dir()
     test_package_imports_are_part_of_the_dependency_closure()
+    test_detected_but_unsupported_protocol_is_distinguished()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

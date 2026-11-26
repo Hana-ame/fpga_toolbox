@@ -1261,6 +1261,34 @@ def emit_protocol_testbench(
             break
     if m is None or chosen is None:
         found = {cand.get("module_name"): [i.get("protocol") for i in (cand.get("interfaces") or [])] for cand in mods}
+        # 「识别到了协议」与「有对应 TB 模板」是两件事。分类器能认出 11 种协议，
+        # emitter 只有 SUPPORTED_MULTI_PROTOCOLS 这 7 种模板。旧错误信息对两者
+        # 一律说「not found」，于是 `axi4_lite` 的 DUT 会得到
+        # 「No supported multi-bus interface found ... modules: {m: ['axi4_lite']}」
+        # —— 用户会以为分类器没认出来，而实际是 分类器认出了、模板不支持。
+        detected = sorted({p for protos in found.values() for p in protos if p})
+        no_template = [p for p in detected if p not in SUPPORTED_MULTI_PROTOCOLS]
+        if want is None and detected and no_template:
+            return err_result(
+                "emit_testbench",
+                f"Cannot emit a testbench for {rp.name}: the RTL's bus protocol(s) "
+                f"{no_template} were detected but this emitter has no testbench template "
+                f"for them. Supported protocols: {list(SUPPORTED_MULTI_PROTOCOLS)}. "
+                f"Detected per module: {found}.",
+                data={"detected_protocols": detected,
+                      "unsupported_protocols": no_template,
+                      "supported_protocols": list(SUPPORTED_MULTI_PROTOCOLS)},
+            )
+        if want is not None and want in detected:
+            return err_result(
+                "emit_testbench",
+                f"Protocol {want!r} was detected in {rp.name} but this emitter has no "
+                f"testbench template for it. Supported protocols: "
+                f"{list(SUPPORTED_MULTI_PROTOCOLS)}. Detected per module: {found}.",
+                data={"detected_protocols": detected,
+                      "unsupported_protocols": [want],
+                      "supported_protocols": list(SUPPORTED_MULTI_PROTOCOLS)},
+            )
         return err_result(
             "emit_testbench",
             f"{'Protocol ' + repr(want) + ' not found' if want else 'No supported multi-bus interface found'} "
@@ -1381,7 +1409,13 @@ def emit_protocol_testbench(
             dut_params=rtl_params, port_widths=rtl_widths,
         )
     else:
-        return err_result("emit_testbench", f"Unsupported protocol: {proto}")
+        return err_result(
+            "emit_testbench",
+            f"Unsupported protocol: {proto}. This emitter has no testbench template "
+            f"for it. Supported protocols: {list(SUPPORTED_MULTI_PROTOCOLS)}.",
+            data={"unsupported_protocols": [proto],
+                  "supported_protocols": list(SUPPORTED_MULTI_PROTOCOLS)},
+        )
 
     # 复位极性：active-low 的模板形态是「声明 `, rst = 0` + 释放时 `rst = 1;`」。
     # active-high 时必须反过来。
