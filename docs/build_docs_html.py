@@ -132,12 +132,21 @@ def _render_fence(lines: list[str], start: int) -> tuple[str, int]:
     围栏当普通文本，导致代码内容整段丢失并泄漏 \\x00 占位符（实测踩坑 ——
     文档里"引用块内嵌代码块"一出现，FEATURES.html 自检就报残留占位符）。
     """
-    m = re.match(r"^```(\w*)\s*$", lines[start])
-    lang = m.group(1) if m else ""
+    # 围栏可能带缩进（列表项内的代码块），用非捕获前导 \s* 匹配，同时把这
+    # 个缩进从代码内容里剥掉，避免生成物里出现「代码块左侧悬空缩进」。
+    m = re.match(r"^(\s*)```(\w*)\s*$", lines[start])
+    lead = m.group(1) if m else ""
+    langm = m.group(2) if m else ""
+    lang = langm
     i = start + 1
     buf: list[str] = []
-    while i < len(lines) and not re.match(r"^```\s*$", lines[i]):
-        buf.append(lines[i])
+    close_re = re.compile(r"^\s*```\s*$")
+    while i < len(lines) and not close_re.match(lines[i]):
+        row = lines[i]
+        # 剥掉与围栏一致的缩进前缀（缩进不足时按实际缩进剥）
+        if lead and row.startswith(lead):
+            row = row[len(lead):]
+        buf.append(row)
         i += 1
     i += 1  # 跳过结束围栏
     label = LANG_LABEL.get(lang, lang or "text")
@@ -161,8 +170,8 @@ def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
     while i < n:
         line = lines[i]
 
-        # ---- 围栏代码块 ----
-        m = re.match(r"^```(\w*)\s*$", line)
+        # ---- 围栏代码块（允许缩进：列表项内的围栏）----
+        m = re.match(r"^\s*```(\w*)\s*$", line)
         if m:
             block, i = _render_fence(lines, i)
             out.append(block)
@@ -227,28 +236,66 @@ def convert(md: str) -> tuple[str, list[tuple[int, str, str]]]:
             out.append('<blockquote>' + inner_body + '</blockquote>')
             continue
 
-        # ---- 列表（含嵌套一层）----
+        # ---- 列表（含嵌套一层，且支持项内嵌围栏代码块）----
         if re.match(r"^\s*([-*]|\d+\.)\s+", line):
             ordered = bool(re.match(r"^\s*\d+\.", line))
-            items: list[tuple[int, str]] = []
-            while i < n and re.match(r"^\s*([-*]|\d+\.)\s+", lines[i]):
-                raw = lines[i]
-                indent = len(raw) - len(raw.lstrip())
-                content = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", raw)
-                items.append((indent, content))
+            # 列表项既可以是一行文字，也可以带**缩进的延续内容**：段落、以及
+            # 围栏代码块。旧实现只把匹配 `^\s*[-*]` 的行当列表项，续行与围栏
+            # 一律落到外层，于是
+            #     1. **标题**：
+            #        ```python
+            #        code
+            #        ```
+            # 里的围栏被当成普通文本送进 _inline，行内代码正则吞掉反引号后
+            # 留下 \x00CODEn\x00 占位符 —— 生成物里出现 NUL 字节，docs 自检
+            # 报「残留占位符」（缺陷 178）。
+            items: list[tuple[int, str, list[str]]] = []
+            base_indent = 0
+            while i < n:
+                m_item = re.match(r"^(\s*)([-*]|\d+\.)\s+(.*)$", lines[i])
+                if m_item:
+                    if not items:
+                        base_indent = len(m_item.group(1))
+                    indent = len(m_item.group(1))
+                    items.append((indent, m_item.group(3), []))
+                    i += 1
+                    continue
+                # 非列表行：只有在它属于当前列表项（缩进 > 基准，或为空行后
+                # 紧跟缩进内容）时才作为续行收集。
+                if not items:
+                    break
+                nxt = lines[i]
+                if not nxt.strip():
+                    # 空行：只有后面还跟着缩进内容才继续收集，否则列表结束
+                    j = i + 1
+                    while j < n and not lines[j].strip():
+                        j += 1
+                    if j < n and len(lines[j]) - len(lines[j].lstrip()) > base_indent:
+                        items[-1][2].append("")
+                        i += 1
+                        continue
+                    break
+                indent = len(nxt) - len(nxt.lstrip())
+                if indent <= base_indent:
+                    break
+                items[-1][2].append(nxt)
                 i += 1
             tag = "ol" if ordered else "ul"
             parts = [f"<{tag}>"]
             depth = 0
-            base_indent = items[0][0]
-            for indent, content in items:
+            for indent, content, cont in items:
                 if indent > base_indent and depth == 0:
                     parts.append("<ul>")
                     depth = 1
                 elif indent <= base_indent and depth == 1:
                     parts.append("</ul>")
                     depth = 0
-                parts.append(f"<li>{_inline(content)}</li>")
+                body = _inline(content)
+                if cont:
+                    # 续行按块级规则渲染（围栏代码块、段落、嵌套列表）
+                    inner_html, _ = convert("\n".join(cont).strip("\n"))
+                    body += inner_html
+                parts.append(f"<li>{body}</li>")
             if depth == 1:
                 parts.append("</ul>")
             parts.append(f"</{tag}>")

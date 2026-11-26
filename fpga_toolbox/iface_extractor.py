@@ -17,6 +17,7 @@ if __package__ in (None, ""):
 
 from .canonical_iface import (
     CANONICAL_INTERFACES,
+    bind_order,
     bind_protocol,
     interface_score,
 )
@@ -315,8 +316,9 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
     # 拼接 == canonical 名」匹配，剩余前导 token 作为通道/实例前缀分组。
     # TB 仍只面向 canonical 信号生成，再经 port_map 连到真实端口名。
     # ------------------------------------------------------------------
-    _BIND_ORDER = ("hbm", "pcie", "ddr4", "ddr3", "ahb_lite", "axi4_lite",
-                   "axi4_stream", "apb", "spi", "ethernet")
+    # 顺序由 canonical_iface.bind_order() 派生：新增协议只改
+    # CANONICAL_INTERFACES 一处即自动可绑定，不会出现「声明了但忘了接线」。
+    _BIND_ORDER = bind_order()
     _REQ_FALLBACK: Dict[str, Tuple[str, ...]] = {
         "apb": REQUIRED_APB_SIGNALS,
         "axi4_lite": REQUIRED_AXIL_SIGNALS,

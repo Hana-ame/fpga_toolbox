@@ -366,8 +366,7 @@ findings:
                              The simulation can only pass; it never expresses failure.
 error: Lint failed with 2 error(s) and 0 warning(s).</code></pre></div>
 <p>两个发现对应 TB 的两个独立问题：</p>
-<ul><li><code>C1</code> — 时钟竞争（行为可能不稳）</li><li><code>S4</code> — <strong>静默通过</strong>：这个 TB 打印了 <code>TEST DONE</code> 就 <code>$finish</code>，从头到尾没有</li></ul>
-<p>任何判定。它跑一百次都是"通过"，因为它从未表达过失败。</p>
+<ul><li><code>C1</code> — 时钟竞争（行为可能不稳）</li><li><code>S4</code> — <strong>静默通过</strong>：这个 TB 打印了 <code>TEST DONE</code> 就 <code>$finish</code>，从头到尾没有<p>任何判定。它跑一百次都是"通过"，因为它从未表达过失败。</p></li></ul>
 <p>反过来，带真实判定的 TB 不会被误报。以下 4 种形态都返回 <code>ok=True</code>：</p>
 <div class="code-block"><div class="code-lang">systemverilog</div><pre><code>assert (dout == 8'h12) else $error("bad");        // 内联断言
 if (dout !== 8'h12) $error("mismatch");           // if + $error
@@ -403,10 +402,7 @@ verilator --binary -j 0 -Wno-fatal --top-module tb_dut tb_dut.sv dut.sv -o sim &
   M02  KILLED  returncode=1  drop b</code></pre></div>
 <blockquote><p><code>--test-cmd</code> 收的是 <strong>argv JSON 数组</strong>，不走 shell。直接写 <code>--test-cmd "test -f dut.sv"</code> 会被当成单个可执行文件名并报 <code>[Errno 2] No such file or directory: 'test -f dut.sv'</code>。</p></blockquote>
 <p>两个关键保证：</p>
-<ol><li><strong><code>try/finally</code> 强还原</strong> — 无论测试命令成功、失败还是抛异常，<code>dut.sv</code> 都会</li></ol>
-<p>被恢复。实测验证过：运行前后 <code>sha256sum /tmp/ex5/dut.sv</code> 完全一致。</p>
-<ol><li><strong>残留变异拦截（<code>E030</code>）</strong> — 如果进程被 kill 导致 finally 没跑完，</li></ol>
-<p>下次进入时会检测到工作区残留变异并直接报错，不会在脏状态上继续。</p>
+<ol><li><strong><code>try/finally</code> 强还原</strong> — 无论测试命令成功、失败还是抛异常，<code>dut.sv</code> 都会<p>被恢复。实测验证过：运行前后 <code>sha256sum /tmp/ex5/dut.sv</code> 完全一致。</p></li><li><strong>残留变异拦截（<code>E030</code>）</strong> — 如果进程被 kill 导致 finally 没跑完，<p>下次进入时会检测到工作区残留变异并直接报错，不会在脏状态上继续。</p></li></ol>
 <p>变异分数低于阈值时返回 <code>ok=false</code> + <code>E031</code>：</p>
 <div class="code-block"><div class="code-lang">text</div><pre><code>$ # 若 test_cmd 不真正校验（如 '["test","-f","dut.sv"]' 恒为 0）
 ok: False | killed: 0 | survived: 2 | mutation_score: 0.0
@@ -546,12 +542,7 @@ ok: True | removed: 2 | tied: ['dout[15:0]', 'dout[16]']</code></pre></div>
   assign dout[16] = 1'b0;
 endmodule</code></pre></div>
 <p>关键点：</p>
-<ul><li><strong>参数化实例也能匹配</strong> — <code>RDBUS #(.WIDTH(32)) u0 (...)</code> 的 <code>#(...)</code> 嵌套括号</li></ul>
-<p>被正确处理。旧实现用非贪婪 <code>\((.*?)\)</code>，遇到 <code>#(</code> 里第一个 <code>)</code> 就截断， <code>removed_instances</code> 恒为 0。</p>
-<ul><li><strong>标量 tie-off</strong> — 输出 <code>assign dout[15:0] = 1'b0;</code> 而非</li></ul>
-<p><code>assign {a,b} = 0;</code>（PT 拒收后者）。</p>
-<ul><li><strong>产物自检</strong> — 清理后若输出里仍有黑盒实例（如实例缺分号导致没匹配到），</li></ul>
-<p>返回 <code>E051</code> 而不是静默报成功：</p>
+<ul><li><strong>参数化实例也能匹配</strong> — <code>RDBUS #(.WIDTH(32)) u0 (...)</code> 的 <code>#(...)</code> 嵌套括号<p>被正确处理。旧实现用非贪婪 <code>\((.*?)\)</code>，遇到 <code>#(</code> 里第一个 <code>)</code> 就截断， <code>removed_instances</code> 恒为 0。</p></li><li><strong>标量 tie-off</strong> — 输出 <code>assign dout[15:0] = 1'b0;</code> 而非<p><code>assign {a,b} = 0;</code>（PT 拒收后者）。</p></li><li><strong>产物自检</strong> — 清理后若输出里仍有黑盒实例（如实例缺分号导致没匹配到），<p>返回 <code>E051</code> 而不是静默报成功：</p></li></ul>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>$ python3 -m fpga_toolbox clean_pt_netlist --in-verilog bad.v --out-verilog o.v
 ok: False
 diagnostics: E051  pt.netlist  Unremoved blackbox instance(s) ['RDBUS']; netlist is not PT-clean.

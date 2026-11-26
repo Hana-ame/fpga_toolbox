@@ -198,9 +198,86 @@ python3 -m fpga_toolbox extract_interfaces --rtl-file examples/multi_bus_ref/pci
 ```
 
 支持的协议：`axi4_lite` · `axi4`（Full）· `axi4_stream` · `apb` · `ahb_lite` ·
-`ddr3` · `ddr4` · `hbm` · `pcie` · `spi` · `ethernet`，外加 SV `interface`/`modport`。
+`ddr3` · `ddr4` · `ddr5` · `hbm` · `pcie` · `spi` · `ethernet`，外加 SV
+`interface`/`modport`。
 
-时钟/复位识别支持常见命名：`clk`/`aclk`/`pclk`/`hclk`、`rst_n`/`aresetn`/`hresetn`/`presetn`。
+时钟/复位识别支持常见命名：`clk`/`aclk`/`pclk`/`hclk`（含 `clk_extra`/`clk2`/
+`clk_i` 等第二时钟）、`rst_n`/`aresetn`/`hresetn`/`presetn`（含 `rst_extra`/
+`rst_async` 等第二复位）。
+
+##### 标准接口 + 绑定层（`canonical_iface`）
+
+识别**不再靠逐信号正则**。命名风格是开放集合（`psel` / `p_sel` / `psel_i` /
+`s0_psel` / `s_apb_psel` / `PSel` …），为每种风格维护一条正则必然会漏（历史上
+三种不同缺陷都源于此）。现在的两层结构：
+
+1. **标准接口**（`fpga_toolbox/canonical_iface.py`）：
+
+   ```python
+   CanonSignal(name="pwdata", direction="in", width_role="data", required=True)
+   CanonSignal(name="pstrb",  direction="in", width_role="strb", required=False)
+   ```
+
+   每个协议只声明**协议语义**（信号名、从设备视角方向、位宽含义、是否必需），
+   不描述拼写。另有 `min_signals`、`role_probes`、`burst_probes`、
+   `required_tokens`/`forbidden_tokens`（`ddr3_`/`hbm_`/`pcie_` 这类强制前缀，
+   防止 HBM 与 AXI4 互抢）、`group_neutral_tokens`（PCIe 的 `rx`/`tx` 不拆组）。
+
+2. **绑定层**：把任意端口名 token 化后，按 **token 后缀拼接**匹配 canonical 名：
+
+   | DUT 端口 | token | 绑定 |
+   |---|---|---|
+   | `i_psel` | `[i, psel]` | `psel`（`i` 是方向词，剔除） |
+   | `psel_i` | `[psel, i]` | `psel` |
+   | `PSlvErr` | `[p, slv, err]` | `pslverr` |
+   | `p_sel` / `p_enable` | `[p, sel]` | `psel` / `penable` |
+   | `s_apb_psel` | `[s, apb, psel]` | `psel`，组 `s_apb` |
+   | `mem_ddr3_dq_out` | `[mem, ddr3, dq, out]` | `dq`，组 `mem_ddr3` |
+   | `pcie_rx_tvalid` | `[pcie, rx, tvalid]` | `rx_tvalid`，组 `pcie` |
+   | `awlen_o` | `[awlen, o]` | `awlen` → 升级为 `axi4` |
+
+   方向词（`i`/`o`/`in`/`out`）**永不进入通道前缀**，所以一个接口不会被拆成两半。
+   多个端口绑到同一 canonical 时，`binding.ambiguous` 记录被拒绝者与原因
+   （错误映射**可见**而非静默丢弃）。
+
+返回体中的绑定证据：
+
+```json
+{
+  "port_map": {"psel": "i_psel", "pready": "o_pready"},
+  "split_port_map": {"dq": {"in": "mem_ddr3_dq_in", "out": "mem_ddr3_dq_out"}},
+  "binding": {
+    "matched": {"psel": "psel", "pready": "pready"},
+    "ambiguous": [{"canonical": "paddr", "chosen": "paddr",
+                   "rejected": ["p_addr"], "reason": "..."}]
+  }
+}
+```
+
+`split_port_map` 表达**双向信号被拆成 in/out 两半**的常见写法（DDR 控制器的
+`ddr3_dq_in` / `ddr3_dq_out`）；只有单个 `inout` 端口时为空。
+
+##### 扩展新协议
+
+只需在 `CANONICAL_INTERFACES` 里声明一次，绑定顺序由
+`bind_order()` 自动派生，**不需要**改 `classify_module` 或写任何正则：
+
+```python
+"mybus": CanonInterface(
+    protocol="mybus",
+    min_signals=3,
+    role_probes=("req",),
+    required_tokens=("mybus",),          # 端口名必须含该 token
+    signals=(
+        _sig("req",  "in"), _sig("gnt", "out"),
+        _sig("addr", "in", "addr"), _sig("data", "inout", "data"),
+    ),
+),
+```
+
+若 `emit_testbench` 尚无该协议的模板，会明确报告
+「detected but this emitter has no testbench template」，而不是误用其它协议的
+模板生成一个错误的 TB。
 
 #### `validate_contract` — 契约校验
 

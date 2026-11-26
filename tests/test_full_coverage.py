@@ -4554,6 +4554,88 @@ def test_nonstandard_prefix_dut_ports_are_bound_and_wired() -> None:
         assert ".ddr3_dq_out(" not in tb, tb[:800]
 
 
+def test_bind_order_is_derived_from_canonical_declarations() -> None:
+    """Extensibility: declaring a CanonInterface must be enough to make it bind.
+
+    `_BIND_ORDER` used to be a literal tuple inside classify_module, i.e. TWO
+    hand-maintained lists (CANONICAL_INTERFACES + the priority tuple) that had to
+    agree.  Adding a protocol to one and forgetting the other would silently make
+    it undetectable.
+
+    `bind_order()` now derives the sequence: explicit priority first (most
+    specific buses first, otherwise HBM/PCIe AXI-style channels get eaten by
+    axi4_lite), then any remaining declared protocol appended.
+    """
+    print("coverage: bind order derived from canonical declarations")
+    from fpga_toolbox.canonical_iface import (
+        _BIND_PRIORITY,
+        CANONICAL_INTERFACES,
+        CanonInterface,
+        CanonSignal,
+        bind_order,
+    )
+
+    order = bind_order()
+    # every declared protocol appears exactly once
+    assert set(order) == set(CANONICAL_INTERFACES), (order, sorted(CANONICAL_INTERFACES))
+    assert len(order) == len(set(order)), order
+    # declared priority protocols keep their relative order
+    declared = [p for p in _BIND_PRIORITY if p in CANONICAL_INTERFACES]
+    assert list(order[:len(declared)]) == declared, (order, declared)
+    # specificity: prefixed memory buses must precede the generic AXI/APB ones
+    for specific in ("hbm", "pcie", "ddr5", "ddr4", "ddr3"):
+        if specific in order and "axi4_lite" in order:
+            assert order.index(specific) < order.index("axi4_lite"), (specific, order)
+
+    # a dynamically declared protocol becomes bindable without touching the
+    # priority tuple -- this is the extensibility guarantee
+    probe = "unit_probe_bus"
+    assert probe not in CANONICAL_INTERFACES
+    CANONICAL_INTERFACES[probe] = CanonInterface(
+        protocol=probe, min_signals=2,
+        signals=(CanonSignal("pclk_o", "out"), CanonSignal("pdata_o", "out")))
+    try:
+        assert probe in bind_order(), bind_order()
+    finally:
+        del CANONICAL_INTERFACES[probe]
+
+    # DDR5 is declared and detected, but has no TB template: emitting must say so
+    # explicitly instead of silently mis-using the DDR4 template.
+    ddr5 = (
+        "module ddr5_ctrl (\n"
+        "  input  logic        clk,\n  input  logic rst_n,\n"
+        "  output logic        ddr5_ck_t,\n  output logic ddr5_ck_c,\n"
+        "  output logic        ddr5_cs_n,\n  output logic ddr5_act_n,\n"
+        "  output logic [1:0]  ddr5_ca,\n  output logic [2:0] ddr5_ba,\n"
+        "  output logic [1:0]  ddr5_bg,\n  inout  wire [31:0] ddr5_dq,\n"
+        "  output logic [3:0]  ddr5_dqs_t,\n  output logic [3:0] ddr5_dqs_c,\n"
+        "  output logic        ddr5_rd_valid\n"
+        ");\nendmodule\n")
+    from fpga_toolbox.protocol_tb_emitter import (
+        SUPPORTED_MULTI_PROTOCOLS,
+        emit_protocol_testbench,
+    )
+    from fpga_toolbox.registry import call_tool
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "ddr5.sv"
+        f.write_text(ddr5, encoding="utf-8")
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        mod = ex["data"]["modules"][0]
+        ifaces = mod["interfaces"]
+        assert len(ifaces) == 1, [(i["protocol"], len(i["port_map"])) for i in ifaces]
+        # one declaration was enough: 11 signals bound, nothing out of scope
+        assert ifaces[0]["protocol"] == "ddr5", ifaces[0]["protocol"]
+        assert len(ifaces[0]["port_map"]) == 11, sorted(ifaces[0]["port_map"])
+        assert mod["out_of_scope_ports"] == [], mod["out_of_scope_ports"]
+        assert "ddr5" not in SUPPORTED_MULTI_PROTOCOLS, SUPPORTED_MULTI_PROTOCOLS
+        em = emit_protocol_testbench(str(f), str(Path(td) / "tb"), None)
+        assert em["ok"] is False
+        err = str(em.get("error"))
+        assert "no testbench template" in err, err[:300]
+        assert "ddr5" in err, err[:300]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4628,6 +4710,7 @@ def main() -> int:
     test_wrong_requested_protocol_names_the_detected_one()
     test_canonical_interface_binding_engine()
     test_nonstandard_prefix_dut_ports_are_bound_and_wired()
+    test_bind_order_is_derived_from_canonical_declarations()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

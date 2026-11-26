@@ -167,6 +167,35 @@ class CanonInterface:
         return {s.name: s for s in self.signals}
 
 
+#: Order in which protocols are attempted when binding a module.
+#:
+#: Order matters and cannot be alphabetical: buses that share signal names must
+#: be tried most-specific first, otherwise a generic protocol claims the ports
+#: (HBM/PCIe AXI-style channels would be eaten by axi4_lite; DDR3/DDR4 share
+#: cs_n/ba/addr/dq but carry a mandatory ddr3_/ddr4_ token that the forbidden
+#: token lists enforce).
+#:
+#: **Derived from CANONICAL_INTERFACES** so a newly declared protocol can never be
+#: silently forgotten here -- the previous version kept this list as a literal
+#: inside classify_module, i.e. two hand-maintained lists that had to agree.
+_BIND_PRIORITY = (
+    "hbm", "pcie", "ddr5", "ddr4", "ddr3", "ahb_lite", "axi4_lite",
+    "axi4_stream", "apb", "spi", "ethernet",
+)
+
+
+def bind_order() -> Tuple[str, ...]:
+    """Protocols in bind order: explicit priority first, then the remainder.
+
+    Any protocol declared in :data:`CANONICAL_INTERFACES` but missing from
+    :data:`_BIND_PRIORITY` is appended (sorted for determinism) instead of being
+    dropped, so declaring an interface is sufficient to make it bindable.
+    """
+    known = [p for p in _BIND_PRIORITY if p in CANONICAL_INTERFACES]
+    rest = sorted(p for p in CANONICAL_INTERFACES if p not in known)
+    return tuple(known + rest)
+
+
 def _sig(name: str, direction: str, role: Optional[str] = None,
          required: bool = True, aliases: Tuple[str, ...] = ()) -> CanonSignal:
     return CanonSignal(name=name, direction=direction, width_role=role,
@@ -266,6 +295,27 @@ CANONICAL_INTERFACES: Dict[str, CanonInterface] = {
             _sig("cs_n", "out"), _sig("odt", "out", required=False),
             _sig("dq", "inout", "data"),
             _sig("dm_dbi_n", "out", required=False),
+            _sig("rd_valid", "out", required=False),
+        ),
+    ),
+    # DDR5: like DDR4 but with a narrower CA bus and per-byte DQS pairs.  Declared
+    # here so the binder recognises it; the testbench emitter does not have a DDR5
+    # template yet, and will report that explicitly (rather than pretending the
+    # DUT's bus is DDR4).
+    "ddr5": CanonInterface(
+        protocol="ddr5",
+        min_signals=5,
+        role_probes=("cs_n",),
+        required_tokens=("ddr5",),
+        forbidden_tokens=("ddr3", "ddr4", "hbm", "pcie"),
+        signals=(
+            _sig("ck_t", "out"), _sig("ck_c", "out"),
+            _sig("cs_n", "out"), _sig("act_n", "out"),
+            _sig("ca", "out", "addr"), _sig("ba", "out"),
+            _sig("bg", "out", required=False),
+            _sig("dq", "inout", "data"),
+            _sig("dqs_t", "out", required=False),
+            _sig("dqs_c", "out", required=False),
             _sig("rd_valid", "out", required=False),
         ),
     ),

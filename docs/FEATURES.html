@@ -124,6 +124,8 @@ blockquote ul { margin:8px 0; }
     <a class="lv4" href="#copy_sandbox-隔离沙箱">copy_sandbox — 隔离沙箱</a>
     <a class="lv3" href="#32-接口与契约46">3.2 接口与契约（4–6）</a>
     <a class="lv4" href="#extract_interfaces-多协议接口识别">extract_interfaces — 多协议接口识别</a>
+    <a class="lv5" href="#标准接口-绑定层canonical_iface">标准接口 + 绑定层（canonical_iface）</a>
+    <a class="lv5" href="#扩展新协议">扩展新协议</a>
     <a class="lv4" href="#validate_contract-契约校验">validate_contract — 契约校验</a>
     <a class="lv4" href="#emit_testbench-两条路径">emit_testbench — 两条路径</a>
     <a class="lv3" href="#33-结果归一化与可视化78">3.3 结果归一化与可视化（7–8）</a>
@@ -264,8 +266,39 @@ if not r["ok"]:
     }]
   }
 }</code></pre></div>
-<p>支持的协议：<code>axi4_lite</code> · <code>axi4</code>（Full）· <code>axi4_stream</code> · <code>apb</code> · <code>ahb_lite</code> · <code>ddr3</code> · <code>ddr4</code> · <code>hbm</code> · <code>pcie</code> · <code>spi</code> · <code>ethernet</code>，外加 SV <code>interface</code>/<code>modport</code>。</p>
-<p>时钟/复位识别支持常见命名：<code>clk</code>/<code>aclk</code>/<code>pclk</code>/<code>hclk</code>、<code>rst_n</code>/<code>aresetn</code>/<code>hresetn</code>/<code>presetn</code>。</p>
+<p>支持的协议：<code>axi4_lite</code> · <code>axi4</code>（Full）· <code>axi4_stream</code> · <code>apb</code> · <code>ahb_lite</code> · <code>ddr3</code> · <code>ddr4</code> · <code>ddr5</code> · <code>hbm</code> · <code>pcie</code> · <code>spi</code> · <code>ethernet</code>，外加 SV <code>interface</code>/<code>modport</code>。</p>
+<p>时钟/复位识别支持常见命名：<code>clk</code>/<code>aclk</code>/<code>pclk</code>/<code>hclk</code>（含 <code>clk_extra</code>/<code>clk2</code>/ <code>clk_i</code> 等第二时钟）、<code>rst_n</code>/<code>aresetn</code>/<code>hresetn</code>/<code>presetn</code>（含 <code>rst_extra</code>/ <code>rst_async</code> 等第二复位）。</p>
+<h5 id="标准接口-绑定层canonical_iface">标准接口 + 绑定层（<code>canonical_iface</code>）</h5>
+<p>识别<strong>不再靠逐信号正则</strong>。命名风格是开放集合（<code>psel</code> / <code>p_sel</code> / <code>psel_i</code> / <code>s0_psel</code> / <code>s_apb_psel</code> / <code>PSel</code> …），为每种风格维护一条正则必然会漏（历史上 三种不同缺陷都源于此）。现在的两层结构：</p>
+<ol><li><strong>标准接口</strong>（<code>fpga_toolbox/canonical_iface.py</code>）：<div class="code-block"><div class="code-lang">python</div><pre><code>CanonSignal(name="pwdata", direction="in", width_role="data", required=True)
+CanonSignal(name="pstrb",  direction="in", width_role="strb", required=False)</code></pre></div>
+<p>每个协议只声明<strong>协议语义</strong>（信号名、从设备视角方向、位宽含义、是否必需）， 不描述拼写。另有 <code>min_signals</code>、<code>role_probes</code>、<code>burst_probes</code>、 <code>required_tokens</code>/<code>forbidden_tokens</code>（<code>ddr3_</code>/<code>hbm_</code>/<code>pcie_</code> 这类强制前缀， 防止 HBM 与 AXI4 互抢）、<code>group_neutral_tokens</code>（PCIe 的 <code>rx</code>/<code>tx</code> 不拆组）。</p></li></ol>
+<ol><li><strong>绑定层</strong>：把任意端口名 token 化后，按 <strong>token 后缀拼接</strong>匹配 canonical 名：<p>| DUT 端口 | token | 绑定 | |---|---|---| | <code>i_psel</code> | <code>[i, psel]</code> | <code>psel</code>（<code>i</code> 是方向词，剔除） | | <code>psel_i</code> | <code>[psel, i]</code> | <code>psel</code> | | <code>PSlvErr</code> | <code>[p, slv, err]</code> | <code>pslverr</code> | | <code>p_sel</code> / <code>p_enable</code> | <code>[p, sel]</code> | <code>psel</code> / <code>penable</code> | | <code>s_apb_psel</code> | <code>[s, apb, psel]</code> | <code>psel</code>，组 <code>s_apb</code> | | <code>mem_ddr3_dq_out</code> | <code>[mem, ddr3, dq, out]</code> | <code>dq</code>，组 <code>mem_ddr3</code> | | <code>pcie_rx_tvalid</code> | <code>[pcie, rx, tvalid]</code> | <code>rx_tvalid</code>，组 <code>pcie</code> | | <code>awlen_o</code> | <code>[awlen, o]</code> | <code>awlen</code> → 升级为 <code>axi4</code> |</p>
+<p>方向词（<code>i</code>/<code>o</code>/<code>in</code>/<code>out</code>）<strong>永不进入通道前缀</strong>，所以一个接口不会被拆成两半。 多个端口绑到同一 canonical 时，<code>binding.ambiguous</code> 记录被拒绝者与原因 （错误映射<strong>可见</strong>而非静默丢弃）。</p></li></ol>
+<p>返回体中的绑定证据：</p>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "port_map": {"psel": "i_psel", "pready": "o_pready"},
+  "split_port_map": {"dq": {"in": "mem_ddr3_dq_in", "out": "mem_ddr3_dq_out"}},
+  "binding": {
+    "matched": {"psel": "psel", "pready": "pready"},
+    "ambiguous": [{"canonical": "paddr", "chosen": "paddr",
+                   "rejected": ["p_addr"], "reason": "..."}]
+  }
+}</code></pre></div>
+<p><code>split_port_map</code> 表达<strong>双向信号被拆成 in/out 两半</strong>的常见写法（DDR 控制器的 <code>ddr3_dq_in</code> / <code>ddr3_dq_out</code>）；只有单个 <code>inout</code> 端口时为空。</p>
+<h5 id="扩展新协议">扩展新协议</h5>
+<p>只需在 <code>CANONICAL_INTERFACES</code> 里声明一次，绑定顺序由 <code>bind_order()</code> 自动派生，<strong>不需要</strong>改 <code>classify_module</code> 或写任何正则：</p>
+<div class="code-block"><div class="code-lang">python</div><pre><code>"mybus": CanonInterface(
+    protocol="mybus",
+    min_signals=3,
+    role_probes=("req",),
+    required_tokens=("mybus",),          # 端口名必须含该 token
+    signals=(
+        _sig("req",  "in"), _sig("gnt", "out"),
+        _sig("addr", "in", "addr"), _sig("data", "inout", "data"),
+    ),
+),</code></pre></div>
+<p>若 <code>emit_testbench</code> 尚无该协议的模板，会明确报告 「detected but this emitter has no testbench template」，而不是误用其它协议的 模板生成一个错误的 TB。</p>
 <h4 id="validate_contract-契约校验"><code>validate_contract</code> — 契约校验</h4>
 <p>校验 YAML/JSON 边界契约与寄存器位域规则。</p>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox validate_contract --spec-path /tmp/bad_spec.yaml</code></pre></div>
@@ -300,10 +333,7 @@ VERILOG_SOURCES = reg_slave_axil_wrap.sv reg_slave_axil_sva_checker.sv \
                   reg_slave_axil_bind.sv dut.sv
 COCOTB_PLUSARGS = +WAVE     # 不加则 --trace 编了也拿不到波形
 include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre></div>
-<ul><li><code>cocotb-config</code> 在 cocotb 2.x 里属于 <code>cocotb_tools</code>，不在 <code>cocotb</code>；</li><li>cocotb 要求 Verilator ≥ 5.036，系统自带 5.020 会被 <code>$(error)</code> 拦住，</li></ul>
-<p>需 <code>VERILATOR_BIN_DIR=/path/to/verilator/bin</code> 指向自建 5.040+；</p>
-<ul><li>波形要用 <code>VERILATOR_TRACE=1</code>（<strong>不是</strong> <code>VERILATOR_EXTRA_ARGS=--trace</code>，</li></ul>
-<p>后者传给 verilator 的 <code>--trace</code> 会被 cocotb 的参数拼装吞掉，实测无波形）。 生成的 Makefile 已内置 <code>COCOTB_PLUSARGS = +WAVE</code>，所以 <code>make SIM=verilator VERILATOR_TRACE=1</code> 一条命令即可拿到 145 信号波形。</p></blockquote>
+<ul><li><code>cocotb-config</code> 在 cocotb 2.x 里属于 <code>cocotb_tools</code>，不在 <code>cocotb</code>；</li><li>cocotb 要求 Verilator ≥ 5.036，系统自带 5.020 会被 <code>$(error)</code> 拦住，<p>需 <code>VERILATOR_BIN_DIR=/path/to/verilator/bin</code> 指向自建 5.040+；</p></li><li>波形要用 <code>VERILATOR_TRACE=1</code>（<strong>不是</strong> <code>VERILATOR_EXTRA_ARGS=--trace</code>，<p>后者传给 verilator 的 <code>--trace</code> 会被 cocotb 的参数拼装吞掉，实测无波形）。 生成的 Makefile 已内置 <code>COCOTB_PLUSARGS = +WAVE</code>，所以 <code>make SIM=verilator VERILATOR_TRACE=1</code> 一条命令即可拿到 145 信号波形。</p></li></ul></blockquote>
 <p><strong>路径 B：多协议直出</strong>（从 RTL 直接生成自检 SV TB）</p>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox emit_testbench \
   --rtl-file examples/multi_bus_ref/apb_slave.sv \
@@ -319,11 +349,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre></div>
 ...
 PASS: apb all 8 checks passed</code></pre></div>
 <p><strong>生成前的三道闸门</strong>（每个都是实测缺陷的产物）：</p>
-<ol><li><strong>端口存在性</strong> — DUT 缺模板要连的端口时 fail-fast（否则生成 <code>.pstrb(pstrb)</code></li></ol>
-<p>连到不存在的端口，Verilator 报 <code>PINNOTFOUND</code>）；</p>
-<ol><li><strong>端口方向</strong> — DUT 把 <code>pready</code> 写成 <code>input</code> 时 fail-fast。这个比编译失败更危险：</li></ol>
-<p>方向错<strong>不会</strong>编译失败，但 TB 的 <code>while (!pready)</code> 会<strong>永久挂起</strong>，CI 表现为超时；</p>
-<ol><li><strong>端口位宽</strong> — 窄总线上测试向量按 <code>dw</code> 缩放，避免 <code>8'h12345678</code> 被静默截断。</li></ol>
+<ol><li><strong>端口存在性</strong> — DUT 缺模板要连的端口时 fail-fast（否则生成 <code>.pstrb(pstrb)</code><p>连到不存在的端口，Verilator 报 <code>PINNOTFOUND</code>）；</p></li><li><strong>端口方向</strong> — DUT 把 <code>pready</code> 写成 <code>input</code> 时 fail-fast。这个比编译失败更危险：<p>方向错<strong>不会</strong>编译失败，但 TB 的 <code>while (!pready)</code> 会<strong>永久挂起</strong>，CI 表现为超时；</p></li><li><strong>端口位宽</strong> — 窄总线上测试向量按 <code>dw</code> 缩放，避免 <code>8'h12345678</code> 被静默截断。</li></ol>
 <hr>
 <h3 id="33-结果归一化与可视化78">3.3 结果归一化与可视化（7–8）</h3>
 <h4 id="normalize_sim_result-三源合一"><code>normalize_sim_result</code> — 三源合一</h4>
@@ -457,15 +483,7 @@ mcp_tools = list_tool_schemas()    # 直接喂给 MCP server 注册</code></pre>
 <hr>
 <h2 id="6-边界与已知限制">6. 边界与已知限制</h2>
 <p>诚实记录，避免误用：</p>
-<ul><li><strong><code>emit_testbench</code> 契约路径</strong>只生成 AXI4-Lite wrapper。纯 APB 设备会明确拒绝</li></ul>
-<p>（<code>Spec has no AXI4-Lite boundary</code>），不会生成坏产物。</p>
-<ul><li><strong>多协议 TB 是定宽模型</strong>：<code>ddr4</code> 模板固定 64 位数据总线（地址高 3 位编码命令，</li></ul>
-<p>与位宽强耦合）；<code>ddr3</code> 的地址/数据位宽可随接口推断。DUT 位宽严重不符时会 被端口校验拦下，但不会自动适配全部协议变体。</p>
-<ul><li><strong><code>eda_campaign</code></strong> 是库模块（不注册为工具），面向 Synopsys VCS/DC/PT 的论文</li></ul>
-<p>复跑流程，需要远端环境，本地只做日志解析与网表处理。</p>
-<ul><li><strong><code>copy_sandbox</code> 不解析 include 依赖</strong>，只复制调用方显式列出的文件；</li></ul>
-<p>缺依赖时通过 <code>include_warnings</code>（<code>W101</code>）提醒，不自动补全。</p>
-<ul><li><strong>Verilator &lt; 5.040</strong> 的跨文件 virtual interface 有缺陷，<code>run_sim</code> 会拒绝。</li></ul>
+<ul><li><strong><code>emit_testbench</code> 契约路径</strong>只生成 AXI4-Lite wrapper。纯 APB 设备会明确拒绝<p>（<code>Spec has no AXI4-Lite boundary</code>），不会生成坏产物。</p></li><li><strong>多协议 TB 是定宽模型</strong>：<code>ddr4</code> 模板固定 64 位数据总线（地址高 3 位编码命令，<p>与位宽强耦合）；<code>ddr3</code> 的地址/数据位宽可随接口推断。DUT 位宽严重不符时会 被端口校验拦下，但不会自动适配全部协议变体。</p></li><li><strong><code>eda_campaign</code></strong> 是库模块（不注册为工具），面向 Synopsys VCS/DC/PT 的论文<p>复跑流程，需要远端环境，本地只做日志解析与网表处理。</p></li><li><strong><code>copy_sandbox</code> 不解析 include 依赖</strong>，只复制调用方显式列出的文件；<p>缺依赖时通过 <code>include_warnings</code>（<code>W101</code>）提醒，不自动补全。</p></li><li><strong>Verilator &lt; 5.040</strong> 的跨文件 virtual interface 有缺陷，<code>run_sim</code> 会拒绝。</li></ul>
 <hr>
 <h2 id="7-相关文档">7. 相关文档</h2>
 <ul><li><a href="EXAMPLES.html"><code>docs/EXAMPLES.md</code></a> — 端到端可运行示例（含真实输出）</li><li><a href="EXAMPLES.html"><code>docs/EXAMPLES.html</code></a> — 示例集 HTML 版（侧栏目录 + 页内搜索，可离线打开）</li><li><a href="TEST_REPORT_AND_PLAN.md"><code>docs/TEST_REPORT_AND_PLAN.md</code></a> — 全工具实测结果</li><li><a href="eda-tutorials/"><code>docs/eda-tutorials/</code></a> — Synopsys 工具手册与论文复跑指南</li><li><a href="../changelog/INDEX.md"><code>changelog/INDEX.md</code></a> — 缺陷修复记录（每篇含现象 / 根因 / 修复 / 验证）</li><li><a href="../README.md"><code>README.md</code></a> — 项目概览与快速开始</li></ul>
