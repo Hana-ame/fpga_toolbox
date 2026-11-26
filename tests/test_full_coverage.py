@@ -821,6 +821,111 @@ def test_s1_sv_literal_constant_stub() -> None:
         assert "S1" not in codes, (body, codes)
 
 
+
+def test_pcie_tb_matches_dut_parameterization() -> None:
+    """Defect 108: PCIe TB 模板写死参数覆盖与网线位宽，产出编译不过的 TB 却报 ok。
+
+    三个同根变体（工具都报 ok=True，但 Verilator 直接 %Error）：
+      1. DUT 未声明 GEN/LANES/DW（固定配置 endpoint 很常见）—— 模板仍无条件
+         实例化 `dut #(.GEN(GEN), .LANES(LANES), .DW(DW))`，Verilator 报
+         `Parameter not found: 'GEN'`（3 条 PINNOTFOUND），9 个 suite 全编译失败。
+      2. DUT 声明 GEN/LANES 但 tdata 位宽固定、无 DW 参数 —— 仍覆盖不存在的 DW。
+      3. cfg 端口不是 4/6 位（如 8 位）—— TB 网线写死 [3:0]/[5:0]，生成
+         WIDTHEXPAND，而 Verilator 默认警告即错误，构建失败。
+
+    修复口径：参数覆盖只对 DUT 真实声明的参数发出；网线位宽取 RTL 真实端口位宽；
+    只有 GEN+LANES 都声明时才跑 9 配置矩阵，且仅在 DW 真的把 LANES 映射到 tdata
+    位宽时才覆盖 DW；run 脚本的 -GGEN/-GLANES 与矩阵保持一致（固定配置不得传）。
+    """
+    print("coverage: pcie TB parameterization follows the DUT (no blind .GEN/.LANES/.DW)")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+
+    body = """(
+  input  logic             clk,
+  input  logic             rst_n,
+  input  logic             pcie_rx_tvalid,
+  output logic             pcie_rx_tready,
+  input  logic [%(rwd)s]   pcie_rx_tdata,
+  input  logic             pcie_rx_tlast,
+  output logic             pcie_tx_tvalid,
+  input  logic             pcie_tx_tready,
+  output logic [%(rwd)s]   pcie_tx_tdata,
+  output logic             pcie_tx_tlast,
+  output logic             pcie_link_up,
+  output logic [%(swd)s]   pcie_cfg_speed,
+  output logic [%(lwd)s]   pcie_cfg_lanes
+);
+  logic [31:0] bar_mem [0:15];
+  assign pcie_link_up   = rst_n;
+  assign pcie_cfg_speed = %(spd)s;
+  assign pcie_cfg_lanes = %(lns)s;
+  assign pcie_rx_tready = !pcie_tx_tvalid;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      pcie_tx_tvalid <= 1'b0; pcie_tx_tdata <= '0; pcie_tx_tlast <= 1'b0;
+    end else begin
+      if (pcie_tx_tvalid && pcie_tx_tready) begin
+        pcie_tx_tvalid <= 1'b0; pcie_tx_tlast <= 1'b0;
+      end
+      if (pcie_rx_tvalid && pcie_rx_tready) begin
+        if (pcie_rx_tdata[63:56] == 8'h40) begin
+          bar_mem[pcie_rx_tdata[5:2]] <= pcie_rx_tdata[31:0];
+        end else if (pcie_rx_tdata[63:56] == 8'h00) begin
+          pcie_tx_tvalid <= 1'b1; pcie_tx_tlast <= 1'b1; pcie_tx_tdata <= '0;
+          pcie_tx_tdata[63:0] <= {8'h4A, pcie_rx_tdata[55:48],
+                                  pcie_rx_tdata[47:32],
+                                  bar_mem[pcie_rx_tdata[5:2]]};
+        end
+      end
+    end
+  end
+endmodule
+"""
+
+    def _emit(mod: str, header: str, rwd: str, swd: str, lwd: str) -> tuple:
+        src = "`timescale 1ns/1ps\nmodule " + mod + header + (
+            body % {"rwd": rwd, "swd": swd, "lwd": lwd, "spd": "4'd3", "lns": "6'd1"}
+        )
+        with tempfile.TemporaryDirectory() as td:
+            rtl = Path(td) / "dut.sv"
+            rtl.write_text(src, encoding="utf-8")
+            r = emit_protocol_testbench(str(rtl), str(Path(td) / "out"), "pcie")
+            assert r["ok"], (mod, r.get("error"))
+            tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+            sh = Path(r["data"]["artifacts"]["sim_script"]).read_text(encoding="utf-8")
+            return r["data"]["suites"], tb, sh
+
+    # 1) 固定配置：无任何 parameter 声明 —— 单 suite、零参数覆盖、零 -G 传参
+    suites, tb, sh = _emit("pcie_fixed_ep", " ", "63:0", "3:0", "5:0")
+    assert suites == ["pcie"], suites
+    inst = [ln for ln in tb.splitlines() if " dut (" in ln][0]
+    assert inst.strip() == "pcie_fixed_ep dut (", inst
+    assert "-GGEN" not in sh and "pcie_g3x1" not in sh, sh[:300]
+    assert "localparam int DW = 64" in tb, tb[:500]
+
+    # 2) 有 GEN/LANES 但无 DW —— 9 配置矩阵 + 覆盖 GEN/LANES，但绝不覆盖 DW
+    suites, tb, sh = _emit(
+        "pcie_nodw_ep",
+        " #(\n  parameter int GEN = 4,\n  parameter int LANES = 4\n)",
+        "63:0", "3:0", "5:0",
+    )
+    assert len(suites) == 9, suites
+    assert ".GEN(GEN)" in tb and ".LANES(LANES)" in tb, tb[:600]
+    assert ".DW(" not in tb, tb[:600]
+    assert "-GGEN=3" in sh and "-GLANES=1" in sh, sh[:400]
+
+    # 3) cfg 端口 8 位 —— TB 网线必须跟着 8 位（旧模板写死 [3:0]/[5:0]）
+    suites, tb, sh = _emit(
+        "pcie_wide_ep",
+        " #(\n  parameter int GEN = 4,\n  parameter int LANES = 4,\n"
+        "  parameter int DW = 64\n)",
+        "63:0", "7:0", "7:0",
+    )
+    assert "logic [7:0] pcie_cfg_speed" in tb, tb[:800]
+    assert "logic [7:0] pcie_cfg_lanes" in tb, tb[:800]
+    assert "logic [3:0] pcie_cfg_speed" not in tb, tb[:800]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -841,6 +946,7 @@ def main() -> int:
     test_handshake_r2_r4_case_insensitive()
     test_ready_raised_before_case_insensitive()
     test_s1_sv_literal_constant_stub()
+    test_pcie_tb_matches_dut_parameterization()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

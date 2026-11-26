@@ -85,6 +85,8 @@
 - [56-ready-raised-before-case-insensitive.md](56-ready-raised-before-case-insensitive.md) — `_ready_raised_before` 被 R1/R3/R2 三条规则共用，`ready_sig` 是规范大写但源码可能是小写，`\b{ready_sig}\b` 大小写敏感。实测 `bready = 1; wait(axi.bvalid);` 仍报假 R3（READY 已拉高却判「未拉高」）。缺陷 104/105 改了各自位置漏了这个共用 helper。两处搜索加 `re.IGNORECASE`，并验证拉低/无 READY 仍报 R3（不假通过）
 - [57-s1-sv-literal-constant-stub.md](57-s1-sv-literal-constant-stub.md) — `lint_tb` S1（验证 helper 只返回常量 = stub）旧正则 `^return [-]?\d+;` 只认纯整数，漏掉 SV 最地道的常量 stub `return 1'b0 / '0 / 8'hFF / 0.0` —— 语义与 `return 0;` 等价（helper 无任何真实判定，静默通过的根源）。假阴性，与 105 同向。扩成覆盖纯整数/位宽字面量/未位宽 '0/'1/实数，保留无分支守卫，表达式 `return a+1` 与含分支函数不误报
 
+- [58-pcie-tb-parameterization.md](58-pcie-tb-parameterization.md) — `emit_testbench(protocol="pcie")` 模板把参数覆盖与网线位宽全部写死，DUT 稍不同形就产出**编译不过**的 TB 却报 `ok=True` + 9 个 suite。三个同根变体实测（Verilator 5.054 全部非零退出）：① 固定配置 DUT 未声明 `GEN/LANES/DW` → 3 条 `Parameter not found`；② 有 `GEN/LANES` 但无 `DW` → `Parameter not found: 'DW'`；③ cfg 端口 8 位 → TB 网线写死 `[3:0]/[5:0]` 触发 `WIDTHEXPAND`（Verilator 默认警告即错误）。修复：参数覆盖只对 DUT **真实声明**的参数发出，网线位宽取 RTL 真实端口位宽，只有 `GEN`+`LANES` 都声明才算 9 配置矩阵（且仅当 `DW` 真映射 `tdata` 位宽时覆盖它），固定配置退化单 suite 且 run 脚本不再传 `-GGEN/-GLANES`。四种 DUT 形态实测全 `rc=0`
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
