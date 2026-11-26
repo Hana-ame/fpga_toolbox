@@ -465,11 +465,35 @@ def tool_render_visual_report(
     cov = report.get("coverage_summary")
     mut = report.get("mutation_summary")
     cov_kpi = f"{cov.get('rtl_pct', cov.get('rtl_line_pct', cov.get('line_pct', 'n/a')))}%" if isinstance(cov, dict) else "N/A"
-    mut_score_val = (
-        mut.get("mutation_score", mut.get("mutation_score_pct", mut.get("score_pct", round(100.0 * mut.get("killed", 0) / max(1, mut.get("total", 1)), 1))))
-        if isinstance(mut, dict)
-        else None
-    )
+    def _num_or_none(v):
+        """把 mutation score 字段安全转成 float；非数字返回 None。
+
+        旧实现直接 `round(100.0 * float(killed)/max(1,total))`，且把
+        mut.get("mutation_score", ...) 作为**默认值表达式**求值 —— 于是只要
+        mutation_score 缺省且 killed/total 是非数字字符串（外部 JSON 里很常见，
+        例如 "n/a" 或写错的类型），就会抛
+        `TypeError: can't multiply sequence by non-int of type 'float'`，
+        整个报告渲染失败（这是渲染器，本应对任意输入都能出图）。
+        """
+        if isinstance(v, bool) or v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        try:
+            return float(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+
+    mut_score_val = None
+    if isinstance(mut, dict):
+        for _k in ("mutation_score", "mutation_score_pct", "score_pct"):
+            mut_score_val = _num_or_none(mut.get(_k))
+            if mut_score_val is not None:
+                break
+        if mut_score_val is None:
+            _k = _num_or_none(mut.get("killed")) or 0.0
+            _t = _num_or_none(mut.get("total")) or 0.0
+            mut_score_val = round(100.0 * _k / max(1.0, _t), 1)
     mut_kpi = f"{mut_score_val}% ({mut.get('killed', 0)}/{mut.get('total', 0)})" if isinstance(mut, dict) else "N/A"
     cap_html = _render_capability_section(report.get("capability_matrix") or [])
     mut_html = _render_mutation_section(mut) if isinstance(mut, dict) else ""
@@ -489,7 +513,12 @@ def tool_render_visual_report(
         extra_badges.append(f"rtl_cov={cov.get('rtl_pct', cov.get('rtl_line_pct', cov.get('line_pct', 'n/a')))}%")
     if isinstance(mut, dict):
         extra_badges.append(f"mutation={mut_score_val}%")
-    extra_meta = (" · " + " · ".join(extra_badges)) if extra_badges else ""
+    # extra_badges 的值来自 coverage_summary / mutation_summary（外部 JSON，
+    # 可能含任意字符串）。旧实现把 extra_meta 直接插进 HTML —— 实测
+    # `<img src=x onerror=alert(1)>` 被原样写入，构成存储型 XSS。
+    # 这里对每个 badge **先转义再拼接**（拼接分隔符是常量 " · "，安全）。
+    extra_meta = (html.escape(" · ".join(extra_badges)) and
+                  " · " + html.escape(" · ".join(extra_badges))) if extra_badges else ""
 
     overview_body = f"""
 {cap_html}

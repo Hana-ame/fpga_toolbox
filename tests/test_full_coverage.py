@@ -2286,6 +2286,101 @@ def test_no_user_data_destruction_and_valid_cocotb_json() -> None:
         assert target.read_bytes() == before, "user RTL was overwritten"
 
 
+def test_security_hardening_injection_xss_verilator_hijack() -> None:
+    """Defect 127: 命令注入绕道、/tmp verilator 劫持、审计报告存储型 XSS。
+
+    1. `generate_remote_run_script` 的四个白名单用 `$` 结尾 —— Python 的 `$` 也
+       匹配「末尾换行之前」，于是 `tag='t\\n'` / `host='h\\n'` 能通过校验，
+       插入脚本后把 `HOST="..."` 的字符串字面量从换行处截断，后续内容成为独立
+       shell 命令（实测生成的脚本里 `HOST="host1` + 换行）。
+    2. 同一个函数只做**字符**白名单，不查路径语义：`remote_work_dir='/'` 生成
+       `WORK="//t"`、`'~/work/..'` 生成 `~/work/../t`，而脚本末尾是
+       `rm -rf $WORK` —— 「清理临时目录」会删掉主目录下的同名目录。
+    3. `find_verilator()` 把 `/tmp/verilator/bin/verilator` 排在 `shutil.which`
+       **之前**。`/tmp` 通常是 1777，多用户机器上他人可预置同路径二进制来劫持
+       本工具实际调用的仿真器。
+    4. `render_visual_report` 把 `extra_meta`（源自 coverage_summary /
+       mutation_summary）未转义插入 HTML：`<img src=x onerror=...>` 原样落盘，
+       构成存储型 XSS；且 `mutation_score` 为非数字时
+       `round(100.0*float(...))` 抛 `TypeError: can't multiply sequence ...`
+       让整个报告渲染失败。
+    """
+    print("coverage: injection ($ vs \\Z, '..' paths), /tmp verilator hijack, report XSS")
+    from fpga_toolbox.eda_campaign import generate_remote_run_script
+    from fpga_toolbox.eda_env import _is_owned_by_me, find_verilator
+
+    # ---- 1) 末尾换行注入：四个参数都必须被拒 ----
+    for args in (("host1\n", "t", "run.sh"), ("host1", "t\n", "run.sh"),
+                 ("host1", "t", "run.sh\n"), ("host1\nrm -rf ~\n", "t", "run.sh")):
+        try:
+            generate_remote_run_script(*args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"trailing-newline injection accepted: {args!r}")
+
+    # ---- 2) 路径语义：'..' 与根路径必须被拒，合法子目录仍可用 ----
+    for wd in ("/", "//", "~", "~/work/..", "/dev/shm/..", "/tmp/../home"):
+        try:
+            generate_remote_run_script("h", "t", "run.sh", wd, use_dev_shm=False)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"dangerous remote_work_dir accepted: {wd!r}")
+    for wd in ("~/work", "/tmp/foo", "~/a/b", "/dev/shm"):
+        s = generate_remote_run_script("h", "t", "run.sh", wd, use_dev_shm=False)
+        assert 'WORK="' in s, wd
+
+    # ---- 3) /tmp verilator 劫持：不应优先于 ~/.local 或 PATH ----
+    v = find_verilator()
+    assert v != "/tmp/verilator/bin/verilator", v
+    # _is_owned_by_me 对非 /tmp 路径直接放行；对不存在的路径返回 False
+    assert _is_owned_by_me("/nonexistent/verilator") is False
+
+    # ---- 4a) XSS：所有输入字段都不得原样落进 HTML ----
+    with tempfile.TemporaryDirectory() as td:
+        payload = "<img src=x onerror=alert(1)>"
+        rep = {
+            "module": payload, "overall_status": "PASS", "generated_at": payload,
+            "summary": {"total": 1, "passed": 1, "failed": 0},
+            "checks": [{"rule_id": payload, "status": "PASS", "category": payload,
+                        "protocol": payload, "tx": payload, "expected": payload,
+                        "observed": payload, "engine": payload, "detail": payload}],
+            "coverage_summary": {"rtl_pct": payload},
+            "mutation_summary": {"killed": 1, "total": 1, "results": []},
+            "capability_matrix": [{"protocol": payload, "dut": payload,
+                                   "extract": payload, "emit_tb": payload,
+                                   "sim_engine": payload, "checks_summary": payload,
+                                   "mutation": payload}],
+            "raw_log_excerpt": payload,
+        }
+        r = call_tool("render_visual_report", {
+            "report": rep, "dep_graph": {"dependency_closure": [payload]},
+            "extracted_interfaces": [], "out_html_path": str(Path(td) / "x.html")})
+        assert r["ok"], str(r.get("error"))[:200]
+        page = (Path(td) / "x.html").read_text(encoding="utf-8")
+        svg = (Path(td) / "x.svg").read_text(encoding="utf-8")
+        for doc in (page, svg):
+            # 判据是「未转义的标签」而不是裸文本：转义后的
+            # `&lt;img src=x onerror=alert(1)&gt;` 里仍含 onerror 字样，
+            # 但不会被执行。真正危险的是 `<img` / `<svg` 这类开标签。
+            assert "<img src=x" not in doc, "unescaped <img> injected into output"
+            assert "<svg onload" not in doc, "unescaped <svg> injected into output"
+
+    # ---- 4b) mutation_score 非数字不能让渲染崩 ----
+    with tempfile.TemporaryDirectory() as td:
+        for bad in ("<svg onload=alert(1)>", "n/a", None, 42.5, {"x": 1}, [1]):
+            rep = {"module": "m", "overall_status": "PASS",
+                   "summary": {"total": 1, "passed": 1, "failed": 0},
+                   "checks": [{"rule_id": "A", "status": "PASS"}],
+                   "mutation_summary": {"mutation_score": bad, "killed": 1,
+                                        "total": 1, "results": []}}
+            r = call_tool("render_visual_report", {
+                "report": rep, "dep_graph": {}, "extracted_interfaces": [],
+                "out_html_path": str(Path(td) / "y.html")})
+            assert r["ok"], (bad, str(r.get("error"))[:160])
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2324,6 +2419,7 @@ def main() -> int:
     test_ahb_trans_size_resp_widths_follow_port()
     test_ddr_control_widths_follow_port()
     test_no_user_data_destruction_and_valid_cocotb_json()
+    test_security_hardening_injection_xss_verilator_hijack()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

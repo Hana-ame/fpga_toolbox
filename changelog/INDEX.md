@@ -115,6 +115,8 @@
 
 - [72-data-destruction-and-cocotb-json.md](72-data-destruction-and-cocotb-json.md) — 三处**工具报 `ok=True` 的同时毁掉用户东西**的缺陷，优先级最高。① 生成的 cocotb 用 `json.loads(repr(...))`：repr 是 Python 字面量（单引号）不是合法 JSON，**只要 spec 里有任何寄存器，测试一导入就 JSONDecodeError 必崩**（这是我上一轮修「描述含三引号」时引入的回归 —— 修 A 引入 B；正解是 `repr(json.dumps(...))`，repr 只负责安全嵌入、JSON 合法性由 json.dumps 保证）；② `emit_testbench` 无条件 `rmtree(od/"inc")`：`out_dir` 恰为 RTL 目录时把**用户源码 inc/ 目录永久删除**（实测 `inc/defs.svh` 消失、工具仍报 ok）；③ `emit_protocol_testbench` 不检查产物与输入同名：用户把上次的 `tb_*.sv` 当 RTL 传回时**静默覆盖用户 RTL**。均已修复并加断言
 
+- [73-security-hardening.md](73-security-hardening.md) — review 第二类（安全漏洞）逐条复现确认 4 项。① `generate_remote_run_script` 四个白名单用 `$` 结尾，Python 的 `$` 也匹配末尾换行**之前**，于是 `host='host1\\n'` 能通过校验、生成的 `HOST="host1` + 换行把字符串字面量截断成命令注入（实测纯末尾换行才是真入口，带内容的换行被字符类挡下容易误判为安全）；② `remote_work_dir` 只查字符不查语义，`'/'`→`WORK="//t"`、`'~/work/..'`→`~/work/../t`，而脚本末尾是 `rm -rf $WORK`，会删预期范围外的目录；③ `find_verilator()` 把 `/tmp/verilator/bin/verilator`（`/tmp` 是 1777）排在 `shutil.which` **之前**，共享服务器上可被劫持；④ `extra_meta` 未转义插入 HTML（`<img src=x onerror=...>` 原样落盘）构成存储型 XSS，且 `mutation_score` 非数字时渲染器抛 TypeError 整个失败。全部修复并加断言
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

@@ -432,13 +432,19 @@ def clean_netlist_for_pt(
 # host / tag / 文件名允许的字符。生成的脚本会被 scp 到远端执行，参数若含
 # shell 元字符就能注入任意命令（实测 host='x"; touch /tmp/PWNED; "' 会真的
 # 执行 touch）。这里做白名单校验，从源头挡住注入。
-_HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+$")
-_TAG_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# 注意必须用 `\Z` 而不是 `$`：Python 的 `$` 也匹配「末尾换行符之前」的位置，
+# 于是 `tag='t\n'` 能通过校验，插入脚本后变成
+#   TAG="t
+#   "
+# —— 换行把字符串字面量截断，后续内容成为独立 shell 命令（实测 host='h\n'
+# 生成 HOST="host1 后接换行）。这是可用的命令注入绕道，四个白名单全部改成 \Z。
+_HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+\Z")
+_TAG_RE = re.compile(r"^[A-Za-z0-9_.-]+\Z")
 # remote_work_dir 允许目录分隔符（~/work、/tmp/foo），但绝不允许 shell 元字符：
 # 它会被原文插进**远端执行**的脚本里（use_dev_shm=False 路径的
 # `mkdir -p {remote_work_dir}/{tag}`）。漏校验它会让 host/tag/script 三道白名单
 # 形同虚设 —— 攻击面从另一条参数绕进来。
-_REMOTE_WORK_DIR_RE = re.compile(r"^[A-Za-z0-9_./~\-]+$")
+_REMOTE_WORK_DIR_RE = re.compile(r"^[A-Za-z0-9_./~\-]+\Z")
 
 
 def generate_remote_run_script(
@@ -475,8 +481,23 @@ def generate_remote_run_script(
             "rejected because remote_work_dir is interpolated verbatim into the "
             "script executed on the remote side (use_dev_shm=False path)."
         )
+    # 字符白名单挡不住**语义**危险：`..` 和根路径都能构造出远超预期范围的
+    # 删除命令。旧实现只查字符，实测：
+    #   remote_work_dir='/'                -> WORK="//t"        -> rm -rf //t  (= /t)
+    #   remote_work_dir='~/work/..'        -> WORK="~/work/../t" -> rm -rf ~/t
+    #   remote_work_dir='/dev/shm/..'      -> WORK="/dev/shm/../t" -> rm -rf /t
+    # 生成脚本末尾是 `$SSH_CMD "bash -c 'rm -rf $WORK'"`，于是「清理临时目录」
+    # 会变成删除主目录下的任意同名目录。这里显式拒绝 `..` 段与根路径。
+    _wd_norm = remote_work_dir.rstrip("/")
+    if ".." in remote_work_dir.split("/") or _wd_norm in ("", "~", "/"):
+        raise ValueError(
+            f"Invalid remote_work_dir {remote_work_dir!r}: must be a concrete "
+            "sub-directory, not a root/'~' or a path containing '..'. The generated "
+            "script ends with `rm -rf $WORK`, so a path that escapes the intended "
+            "staging directory would delete unrelated files on the remote host."
+        )
     base = Path(local_script_name).name
-    if base != local_script_name or not re.match(r"^[A-Za-z0-9_.-]+$", base):
+    if base != local_script_name or not re.match(r"^[A-Za-z0-9_.-]+\Z", base):
         raise ValueError(
             f"Invalid local_script_name {local_script_name!r}: must be a bare file "
             "name with only [A-Za-z0-9_.-] (no directories, no shell metacharacters)."
