@@ -120,6 +120,8 @@ python3 -m fpga_toolbox resolve_deps --target-module axi_apb_bridge --project-ro
     "dependency_closure": ["axi_apb_bridge", "apb_slave_regs"],
     "dependency_edges": [{"from": "axi_apb_bridge", "to": "apb_slave_regs"}],
     "rtl_files": ["axi/sv/axi_apb_bridge_sv.sv", "..."],
+    "header_files": ["inc/defs.svh", "inc/base.svh"],
+    "all_files": ["axi/sv/axi_apb_bridge_sv.sv", "...", "inc/defs.svh", "inc/base.svh"],
     "unresolved_instantiations": {},
     "closure_is_complete": true
   }
@@ -128,6 +130,16 @@ python3 -m fpga_toolbox resolve_deps --target-module axi_apb_bridge --project-ro
 
 `closure_is_complete: false` 是给调用方的**单点信号**：这份文件清单不完整，
 别直接拿去建沙箱。
+
+**`header_files` 是传递闭包**：header 之间可以互相 `` `include ``（`defs.svh`
+里 include `base.svh` 很常见），工具会深度优先展开到最底层，不会只给模块
+直接 include 的那一层——否则拿 `all_files` 去复制沙箱会缺文件，编译报
+`Cannot find include file`。
+
+**`rtl_files` 只含真正的编译单元**：被 `` `include "defs.sv" `` 引进来的
+`.sv` 文件不会出现在 `rtl_files`（否则其中定义的 module 会被编译两次，
+Verilator 默认 warning-as-error 直接失败），但仍保留在 `all_files` 里供沙箱
+复制。`index_repo` 的 `included_files` 字段列出这些文件。
 
 #### `copy_sandbox` — 隔离沙箱
 

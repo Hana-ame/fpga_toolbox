@@ -2795,6 +2795,52 @@ def test_resolve_deps_transitive_headers() -> None:
         assert ("W101", "ghost.svh") in codes, codes
 
 
+def test_included_source_not_treated_as_compilation_unit() -> None:
+    """Defect 133: 被 `include 的 .sv 不能被当成独立编译单元。
+
+    ``include "defs.sv"`` 里放 helper module 是老项目常见写法。旧实现把
+    defs.sv 和 top.sv 都列进 resolve_deps 的 rtl_files，调用方拿这份清单
+    去编译 → module 被看到两次，Verilator 报
+    ``%Error: Exiting due to 1 warning(s)``（MODDUP: Duplicate declaration of
+    module）。这是默认配置下的**硬失败**（Verilator 默认 warning-as-error）。
+    """
+    print("coverage: included .sv source is not a compilation unit")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "defs.sv").write_text(
+            "module helper_mod (input logic a, output logic b);\n"
+            "  assign b = a;\n"
+            "endmodule\n", encoding="utf-8")
+        (root / "top.sv").write_text(
+            '`include "defs.sv"\n'
+            "module dupinc_top (input logic clk, output logic q);\n"
+            "  helper_mod u (.a(clk), .b(q));\n"
+            "endmodule\n", encoding="utf-8")
+
+        idx = call_tool("index_repo", {"project_root": str(root)})
+        assert idx["ok"], str(idx.get("error"))[:200]
+        assert idx["data"]["included_files"] == ["defs.sv"], idx["data"]["included_files"]
+
+        r = call_tool("resolve_deps", {"project_root": str(root), "target_module": "dupinc_top"})
+        assert r["ok"], str(r.get("error"))[:200]
+        data = r["data"]
+        # 编译单元只有 top.sv；defs.sv 通过 include 展开拿到
+        assert data["rtl_files"] == ["top.sv"], data["rtl_files"]
+        # 但沙箱清单必须仍然包含 defs.sv（否则 include 找不到）
+        assert data["all_files"] == ["defs.sv", "top.sv"], data["all_files"]
+        assert data["dependency_closure"] == ["dupinc_top", "helper_mod"], \
+            data["dependency_closure"]
+
+        # .vh/.svh 天生是 header，不该被算进 included_files
+        (root / "defs_h.svh").write_text("`define D 1\n", encoding="utf-8")
+        (root / "top2.sv").write_text(
+            '`include "defs_h.svh"\nmodule top2(input logic clk); endmodule\n', encoding="utf-8")
+        idx2 = call_tool("index_repo", {"project_root": str(root)})
+        assert idx2["data"]["included_files"] == ["defs.sv"], idx2["data"]["included_files"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2839,6 +2885,7 @@ def main() -> int:
     test_sv_parser_tokenizer_and_header_fixes()
     test_iface_direction_prefix_and_ahb_ready_split()
     test_resolve_deps_transitive_headers()
+    test_included_source_not_treated_as_compilation_unit()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

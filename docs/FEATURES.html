@@ -224,11 +224,15 @@ if not r["ok"]:
     "dependency_closure": ["axi_apb_bridge", "apb_slave_regs"],
     "dependency_edges": [{"from": "axi_apb_bridge", "to": "apb_slave_regs"}],
     "rtl_files": ["axi/sv/axi_apb_bridge_sv.sv", "..."],
+    "header_files": ["inc/defs.svh", "inc/base.svh"],
+    "all_files": ["axi/sv/axi_apb_bridge_sv.sv", "...", "inc/defs.svh", "inc/base.svh"],
     "unresolved_instantiations": {},
     "closure_is_complete": true
   }
 }</code></pre></div>
 <p><code>closure_is_complete: false</code> 是给调用方的<strong>单点信号</strong>：这份文件清单不完整， 别直接拿去建沙箱。</p>
+<p><strong><code>header_files</code> 是传递闭包</strong>：header 之间可以互相 `<code> </code>include `<code>（</code>defs.svh<code> 里 include </code>base.svh<code> 很常见），工具会深度优先展开到最底层，不会只给模块 直接 include 的那一层——否则拿 </code>all_files<code> 去复制沙箱会缺文件，编译报 </code>Cannot find include file`。</p>
+<p><strong><code>rtl_files</code> 只含真正的编译单元</strong>：被 `<code> </code>include "defs.sv" `<code> 引进来的 </code>.sv<code> 文件不会出现在 </code>rtl_files<code>（否则其中定义的 module 会被编译两次， Verilator 默认 warning-as-error 直接失败），但仍保留在 </code>all_files<code> 里供沙箱 复制。</code>index_repo<code> 的 </code>included_files` 字段列出这些文件。</p>
 <h4 id="copy_sandbox-隔离沙箱"><code>copy_sandbox</code> — 隔离沙箱</h4>
 <p>带 SHA-256 校验的复制，且拒绝越界。</p>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox copy_sandbox \

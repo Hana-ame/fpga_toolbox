@@ -18,6 +18,7 @@ from .core.sv_parser import SVModuleAST, parse_sv_file, slang_instantiation_targ
 from .core.types import err_result, ok_result
 
 RTL_EXTS = {".v", ".sv", ".vh", ".svh"}
+HDR_EXTS = {".vh", ".svh"}
 _INC_RE = re.compile(r'^\s*`include\s+"([^"]+)"', re.MULTILINE)
 _IFACE_DEF_RE = re.compile(r"\binterface\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)")
 
@@ -117,6 +118,31 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
     # `%Error: inc/c.svh:1:10: Cannot find include file: 'b.svh'`，而工具全程
     # ok=True。这里按 header 的仓库相对路径记录它自己的 include 列表，供
     # resolve_deps 做传递闭包。
+    # `.sv` 文件也可能被 `include（`include "defs.sv" 里放 helper module 是老项目
+    # 常见写法）。这类文件不能同时作为**编译单元**参与构建，否则其中定义的
+    # module 会被看到两次：实测 resolve_deps 把 defs.sv 和 top.sv 都列进
+    # rtl_files，Verilator 报 `%Error: Exiting due to 1 warning(s)`
+    # （MODDUP: Duplicate declaration of module）。旧实现完全不区分「被 include
+    # 的源文件」与「独立编译单元」。
+    # 这里收集所有被任何文件 `include 的相对路径，rtl_files 里剔除它们；
+    # they still appear in all_files (sandbox 需要复制它们)。
+    included_files: Set[str] = set()
+    _all_inc_targets: List[str] = []
+    for _p in rtl_files:
+        _all_inc_targets.extend(_INC_RE.findall(sources[_p]))
+    _by_name: Dict[str, List[str]] = {}
+    for _p in rtl_files:
+        _by_name.setdefault(_p.name, []).append(str(_p.relative_to(root)))
+    _rel_to_path = {str(q.relative_to(root)): q for q in rtl_files}
+    for _inc in _all_inc_targets:
+        _bn = _inc.replace("\\", "/").rsplit("/", 1)[-1]
+        _hit = _rel_to_path.get(_inc) or (_rel_to_path.get(_by_name[_bn][0]) if _bn in _by_name else None)
+        if _hit is None:
+            continue
+        # 只有「非 header 扩展名的源文件被 include」才算异常用法；
+        # .vh/.svh 天生就是 header，已经由 header_files 表达。
+        if _hit.suffix.lower() not in HDR_EXTS:
+            included_files.add(str(_hit.relative_to(root)))
     header_includes: Dict[str, List[str]] = {}
     for p in rtl_files:
         if p.suffix.lower() not in {".vh", ".svh"}:
@@ -211,6 +237,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         "total_rtl_files": len(rtl_files),
         "headers": headers,
         "header_includes": header_includes,
+        "included_files": sorted(included_files),
         "modules": modules,
         "unresolved_instantiations": unresolved,
     }, diagnostics=diags)
@@ -287,6 +314,7 @@ def tool_resolve_deps(
 
     mods, hdrs = repo_index.get("modules", {}), repo_index.get("headers", {})
     hdr_includes = repo_index.get("header_includes") or {}
+    incl_targets = set(repo_index.get("included_files") or [])
     if target_module not in mods:
         return err_result("resolve_deps", f"Module '{target_module}' not found. Available: {sorted(mods)}")
 
@@ -338,7 +366,9 @@ def tool_resolve_deps(
         "dependency_edges": edges,
         "unresolved_instantiations": unresolved_in_closure,
         "closure_is_complete": not unresolved_in_closure,
-        "rtl_files": sorted(rtl_set),
+        # 被 include 进来的「源文件型 header」（如 `include "defs.sv"）不能作为
+        # 独立编译单元，否则重复定义 module。
+        "rtl_files": sorted(rtl_set - incl_targets),
         "header_files": sorted(hdr_set),
         "all_files": sorted(rtl_set | hdr_set),
     }, diagnostics=diags)
