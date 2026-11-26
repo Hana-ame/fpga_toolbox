@@ -44,8 +44,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "project_root": {"type": "string", "description": "Path to the source RTL project root."},
                 "relative_files": {"type": "array", "items": {"type": "string"}, "description": "Project-relative paths of the RTL/header files to stage into the sandbox."},
                 "sandbox_dir": {"type": "string", "description": "Target sandbox directory (must not be the project root or an ancestor)."},
-                "clean": {"type": "boolean", "description": "Clean an existing marked sandbox directory before copying (default false)."},
-                "force": {"type": "boolean", "description": "Allow cleaning a directory that carries the sandbox marker."},
+                "clean": {"type": "boolean", "description": "Clean an existing MARKED sandbox directory before copying (default TRUE: omitting this parameter wipes stale files from a previously created marked sandbox). Unmarked non-empty directories are always refused unless force=true."},
+                "force": {"type": "boolean", "description": "DESTRUCTIVE: allow cleaning a non-empty directory that has NO sandbox marker (i.e. possibly the user's own files). Only pass when you truly intend to wipe that directory."},
             },
             "required": ["project_root", "relative_files", "sandbox_dir"],
             "additionalProperties": False

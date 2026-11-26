@@ -3723,6 +3723,60 @@ def test_mutation_spec_non_object_entries_are_rejected() -> None:
         assert r4["data"]["results"][0]["id"] == "M01", r4["data"]["results"]
 
 
+def test_tool_schema_descriptions_match_signature_defaults() -> None:
+    """Defect 157/158: schema 描述必须与函数签名默认值一致。
+
+    157: copy_sandbox 的 `force` 描述写成「Allow cleaning a directory that
+         carries the sandbox marker」——实际行为是「清理**没有**标记的目录
+        也需要 force」，方向完全反了。用户照描述理解会以为 force 只影响
+         已标记沙箱，而它可以清空用户自己的未标记目录。
+    158: copy_sandbox 的 `clean` 描述写「default false」，而函数签名是
+         `clean: bool = True`：不传该参数时**会清空**已标记沙箱里的旧文件。
+         这直接误导用户。
+
+    这里做通用审计：凡描述里写了 `default <bool/int>` 的参数，都必须与签名
+    默认值一致，防止同类偏差再次出现。
+    """
+    print("coverage: schema descriptions match signature defaults")
+    import inspect
+    import re
+
+    from fpga_toolbox.registry import TOOL_REGISTRY
+
+    mismatches = []
+    for tool, entry in TOOL_REGISTRY.items():
+        fn = entry["fn"]
+        props = entry["inputSchema"]["properties"]
+        sig = inspect.signature(fn)
+        for pname, spec in props.items():
+            desc = spec.get("description", "") or ""
+            m = re.search(r"default\s+(true|false)", desc, re.IGNORECASE)
+            if m and pname in sig.parameters:
+                claimed = m.group(1).lower() == "true"
+                actual = sig.parameters[pname].default
+                if isinstance(actual, bool) and actual != claimed:
+                    mismatches.append((tool, pname, "bool", claimed, actual))
+            m2 = re.search(r"default\s+([0-9]+(?:\.[0-9]+)?)", desc)
+            if m2 and pname in sig.parameters:
+                claimed_n = float(m2.group(1))
+                actual_n = sig.parameters[pname].default
+                if isinstance(actual_n, (int, float)) and not isinstance(actual_n, bool):
+                    if abs(float(actual_n) - claimed_n) > 1e-9:
+                        mismatches.append((tool, pname, "num", claimed_n, actual_n))
+
+    assert not mismatches, f"schema description/signature default mismatches: {mismatches}"
+
+    # copy_sandbox 的两个具体参数（缺陷 157/158）必须描述正确
+    from fpga_toolbox.registry import list_tool_schemas
+    cs = next(x for x in list_tool_schemas() if x["name"] == "copy_sandbox")
+    props = cs["inputSchema"]["properties"]
+    force_desc = props["force"]["description"]
+    assert "DESTRUCTIVE" in force_desc, force_desc
+    assert "NO sandbox marker" in force_desc, force_desc
+    clean_desc = props["clean"]["description"]
+    assert "default TRUE" in clean_desc, clean_desc
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3783,6 +3837,7 @@ def main() -> int:
     test_json_results_unnamed_entries_are_not_pass_evidence()
     test_check_lines_and_suite_summary_precedence()
     test_mutation_spec_non_object_entries_are_rejected()
+    test_tool_schema_descriptions_match_signature_defaults()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
