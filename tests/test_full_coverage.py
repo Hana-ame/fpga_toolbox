@@ -926,6 +926,108 @@ endmodule
     assert "logic [3:0] pcie_cfg_speed" not in tb, tb[:800]
 
 
+def test_module_name_not_used_as_unsafe_filename() -> None:
+    """Defect 109: 契约的 module_name 原样拼进产物文件名与 cocotb Makefile。
+
+    `module_name` 看着只是个名字，实际被拼进每个产物路径
+    （`<mod>_axil_wrap.sv` / `test_<mod>_axil.py`）和 Makefile 的
+    `MODULE` / `TOPLEVEL`。契约 spec 由用户/AI 手写，于是两类真实后果：
+
+      1. `module_name: ../../EVILMOD` —— Path 拼接里的 `..` 直接生效，4 个产物
+         里 3 个被写到 out_dir **之外**（实测落在 out_dir 的祖父目录），
+         工具仍返回 ok=True。写文件的位置由调用方数据决定，不是调用方能选的。
+      2. `module_name: m$(shell touch PWNEDMK)_x` —— Makefile 里出现
+         `MODULE = test_m$(shell touch PWNEDMK)_x_axil`，用户一执行 `make`
+         就执行任意命令（实测文件被真实创建：这条是命令注入，不只是路径问题）。
+
+    修复：validator 在契约层按 SV 标识符
+    `[A-Za-z_][A-Za-z0-9_$]*` 收口（诊断 E016，覆盖 boundary 与
+    apb-regfile-spec/v2 两个入口），tb_emitter 再按同一口径做一次写前
+    纵深防御（防 build_and_validate_ir 被直接调用的路径）。
+    """
+    print("coverage: module_name is a safe SV identifier (no path traversal / make injection)")
+    pm = {
+        "awaddr": "s_axil_awaddr", "awvalid": "s_axil_awvalid", "awready": "s_axil_awready",
+        "wdata": "s_axil_wdata", "wstrb": "s_axil_wstrb", "wvalid": "s_axil_wvalid",
+        "wready": "s_axil_wready", "bresp": "s_axil_bresp", "bvalid": "s_axil_bvalid",
+        "bready": "s_axil_bready", "araddr": "s_axil_araddr", "arvalid": "s_axil_arvalid",
+        "arready": "s_axil_arready", "rdata": "s_axil_rdata", "rresp": "s_axil_rresp",
+        "rvalid": "s_axil_rvalid", "rready": "s_axil_rready",
+    }
+
+    def _spec(mod_name: str) -> dict:
+        return {
+            "schema_version": "1.0",
+            "boundary": {
+                "module_name": mod_name, "clock": {"port": "clk"},
+                "reset": {"port": "rst_n"}, "axi4_lite": {"port_map": pm},
+            },
+            "registers": [{"rule_id": "REG_001", "name": "CTRL", "offset": 0,
+                           "access": "RW", "reset_value": 0}],
+            "test_plan": {"regression": [{"id": "T1", "category": "reg_rw",
+                                          "description": "rw"}]},
+        }
+
+    def _emit(mod_name: str):
+        """返回 (result, created_labels, maketext)；临时目录销毁前把信息取出来。
+
+        注意不能把 Path 直接返回出去 —— TemporaryDirectory 一退出目录就没了，
+        后续 is_file() 会抛 FileNotFoundError（本测试第一版就这么踩的）。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sp = base / "spec.json"
+            sp.write_text(json.dumps(_spec(mod_name)), encoding="utf-8")
+            out = base / "deep" / "out"
+            r = call_tool("emit_testbench", {"spec_path": str(sp), "out_dir": str(out)})
+            out_r = out.resolve()
+            files = [p for p in base.rglob("*") if p.is_file() and p.name != "spec.json"]
+            escaped = [
+                str(p.relative_to(base))
+                for p in files
+                if out_r not in p.resolve().parents
+            ]
+            mk = [p for p in base.rglob("Makefile")]
+            mk_text = mk[0].read_text(encoding="utf-8") if mk else ""
+            marker = [p.name for p in base.rglob("*PWNED*")]
+            return r, escaped, mk_text, marker
+
+    # 1) 路径穿越：必须拒绝，且绝不能有任何产物落到 out_dir 之外
+    for bad in ("../../EVILMOD", "x/../../../../tmp/PWNED109", "../esc"):
+        r, escaped, _mk, _marker = _emit(bad)
+        assert r["ok"] is False, (bad, r.get("data"))
+        assert "E016" in str(r.get("error")), (bad, str(r["error"])[:200])
+        assert escaped == [], (bad, escaped)
+
+    # 2) Makefile 命令注入：`$(shell ...)` 绝不能进 spec 产出的 Makefile
+    r, escaped, mk_text, marker = _emit("m$(shell touch PWNEDMK)_x")
+    assert r["ok"] is False, r.get("data")
+    assert "E016" in str(r.get("error")), str(r["error"])[:200]
+    assert mk_text == "", "Makefile was generated for a rejected module_name"
+    assert "shell" not in mk_text, mk_text[:300]
+    assert marker == [], f"injection marker created: {marker}"
+
+    # 3) 合法 SV 标识符（含 $，SV 允许）仍照常生成，不能过度收紧
+    for good in ("reg_slave", "apb_dut", "M1_x", "a$b"):
+        r, escaped, mk_text, _marker = _emit(good)
+        assert r["ok"] is True, (good, str(r.get("error"))[:200])
+        assert escaped == [], (good, escaped)
+        assert Path(r["data"]["artifacts"]["unit_isolation_wrapper"]).name == f"{good}_axil_wrap.sv", \
+            (good, r["data"]["artifacts"])
+        assert f"TOPLEVEL = {good}_axil_wrap" in mk_text, (good, mk_text[:400])
+
+    # 4) v2 schema（apb-regfile-spec）入口同样收口：它的 module 也会进文件名
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        sp = base / "spec.json"
+        sp.write_text(json.dumps({
+            "$schema": "apb-regfile-spec/v2", "module": "../../V2EVIL",
+            "registers": [{"name": "CTRL", "offset": 0, "attr": "RW", "reset": 0}],
+        }), encoding="utf-8")
+        r = call_tool("emit_testbench", {"spec_path": str(sp), "out_dir": str(base / "out")})
+        assert r["ok"] is False and "E016" in str(r["error"]), str(r.get("error"))[:200]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -947,6 +1049,7 @@ def main() -> int:
     test_ready_raised_before_case_insensitive()
     test_s1_sv_literal_constant_stub()
     test_pcie_tb_matches_dut_parameterization()
+    test_module_name_not_used_as_unsafe_filename()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

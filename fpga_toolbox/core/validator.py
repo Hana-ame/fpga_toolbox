@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,9 @@ from .types import (
     StressProfileIR,
     TestPlanIR,
 )
+
+# SystemVerilog 标识符（用于校验会被拼进文件名的名字，见 E016）。
+_SV_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def _to_int(val: Any, default: int = 0) -> int:
@@ -182,6 +186,25 @@ def build_and_validate_ir(
     mod_name = str(b_raw.get("module_name", "")).strip()
     if not mod_name:
         diags.append(Diagnostic("ERROR", "E000", "boundary.module_name", "module_name is required."))
+    elif not _SV_IDENT_RE.match(mod_name):
+        # module_name 不只是一个字符串：它会被拼进**生成产物的文件名**
+        # （`<mod>_axil_wrap.sv` / `test_<mod>_axil.py` / `Makefile` 的
+        # TOPLEVEL+MODULE），而契约 spec 由用户/AI 手写。实测两类真实后果：
+        #   * `../../EVILMOD` → 3 个产物被写到 out_dir **之外**
+        #     （Path 拼接里的 `..` 直接生效，工具仍报 ok=True）；
+        #   * `m$(shell touch PWNEDMK)_x` → Makefile 里出现 `$(shell ...)`，
+        #     用户执行 `make` 即执行任意命令（实测文件被真实创建）。
+        # SV 标识符本身只允许 [A-Za-z_][A-Za-z0-9_$]，因此按该集合收口即可，
+        # 既不误伤合法模块名（含 `$` 的 SV 标识符是合法的），也堵死路径分隔符、
+        # 空白、shell/Make 元字符与点号。
+        diags.append(Diagnostic(
+            "ERROR", "E016", "boundary.module_name",
+            f"Invalid module_name {mod_name!r}: must be a SystemVerilog identifier "
+            "([A-Za-z_][A-Za-z0-9_$]*). It is interpolated into generated artifact "
+            "filenames and the cocotb Makefile, so path separators, '..', spaces, "
+            "dots and shell/Make metacharacters are rejected (path traversal / "
+            "command injection).",
+        ))
 
     clk_raw, rst_raw = b_raw.get("clock", {}), b_raw.get("reset", {})
     axil_raw = b_raw.get("axi4_lite")

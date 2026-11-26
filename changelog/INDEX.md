@@ -87,6 +87,8 @@
 
 - [58-pcie-tb-parameterization.md](58-pcie-tb-parameterization.md) — `emit_testbench(protocol="pcie")` 模板把参数覆盖与网线位宽全部写死，DUT 稍不同形就产出**编译不过**的 TB 却报 `ok=True` + 9 个 suite。三个同根变体实测（Verilator 5.054 全部非零退出）：① 固定配置 DUT 未声明 `GEN/LANES/DW` → 3 条 `Parameter not found`；② 有 `GEN/LANES` 但无 `DW` → `Parameter not found: 'DW'`；③ cfg 端口 8 位 → TB 网线写死 `[3:0]/[5:0]` 触发 `WIDTHEXPAND`（Verilator 默认警告即错误）。修复：参数覆盖只对 DUT **真实声明**的参数发出，网线位宽取 RTL 真实端口位宽，只有 `GEN`+`LANES` 都声明才算 9 配置矩阵（且仅当 `DW` 真映射 `tdata` 位宽时覆盖它），固定配置退化单 suite 且 run 脚本不再传 `-GGEN/-GLANES`。四种 DUT 形态实测全 `rc=0`
 
+- [59-module-name-unsafe-filename.md](59-module-name-unsafe-filename.md) — 契约 `boundary.module_name` 被原样拼进产物文件名与 cocotb Makefile，validator 只查了「非空」。两类实测后果：① `../../EVILMOD` 让 4 个产物里 **3 个写到 `out_dir` 之外**（`Path/..` 静默越界），仍报 `ok=True`；② `m$(shell touch PWNEDMK)_x` 让生成的 Makefile 出现 `$(shell ...)`，用户一 `make` 就**执行任意命令**（实测文件被真实创建）。新增诊断 **E016** 按 SV 标识符 `[A-Za-z_][A-Za-z0-9_$]*` 收口（v1 与 `apb-regfile-spec/v2` 两入口共用同一 validator，一处覆盖两路），tb_emitter 再在写产物前做一次纵深防御。`$` 在 SV 标识符里合法故不误伤 `a$b`
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

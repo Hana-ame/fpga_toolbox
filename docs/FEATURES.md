@@ -222,9 +222,16 @@ python3 -m fpga_toolbox validate_contract --spec-path /tmp/bad_spec.yaml
 | `E013` | 位域重叠 |
 | `E014` | 位域超宽 |
 | `E015` | 位域 `bits` 顺序写反（`hi<lo`）|
+| `E016` | `module_name` 不是合法 SV 标识符（会拼进产物文件名与 Makefile，故拒绝路径穿越/命令注入）|
 
 `E015` 值得一提：`bits: "7:0"` 写成 `"0:7"` 时，旧实现报 `E014 越界`，
 误导用户去改宽度。现在专门报"顺序反了"。
+
+`E016` 值得一提：`module_name` 不只是名字，它被拼进每个产物文件名
+（`<mod>_axil_wrap.sv`、`test_<mod>_axil.py`）和生成 Makefile 的
+`MODULE`/`TOPLEVEL`。`../../EVIL` 会把产物写到 `out_dir` 之外，
+`m$(shell ...)` 会让用户执行 `make` 时执行任意命令 —— 两者实测可复现。
+现在按 SV 标识符 `[A-Za-z_][A-Za-z0-9_$]*` 收口（`$` 在 SV 里合法，不误伤）。
 
 #### `emit_testbench` — 两条路径
 

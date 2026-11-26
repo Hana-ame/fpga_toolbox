@@ -26,6 +26,9 @@ from .core.types import (
 )
 from .core.validator import build_and_validate_ir, load_raw_spec
 
+# module_name 会成为产物文件名的一部分，必须是合法 SV 标识符（见缺陷 109 / E016）。
+_MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
 _APB_CANON_WIDTH = {
     "psel": "1",
     "penable": "1",
@@ -598,6 +601,21 @@ def tool_emit_testbench(
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)
     mod = unit.boundary.module_name
+    # 纵深防御：validator 的 E016 已在契约层拒绝非 SV 标识符的 module_name
+    # （它会被拼进产物文件名与 cocotb Makefile —— `../` 越界写、`$(shell ...)`
+    # 命令注入）。但 build_and_validate_ir 也可能被直接调用（测试/内部复用），
+    # 这里按同一口径再核一次，且在**写任何产物之前**返回结构化错误，而不是让
+    # pathlib 抛裸的 FileNotFoundError（实测 `../x` 时那句
+    # "No such file or directory: .../test_../x_axil.py" 完全没指向真因）。
+    if not _MODULE_NAME_RE.match(str(mod)):
+        return err_result(
+            "emit_testbench",
+            f"Refusing to emit artifacts for module_name {mod!r}: it must be a "
+            "SystemVerilog identifier ([A-Za-z_][A-Za-z0-9_$]*). The name becomes part "
+            "of every artifact filename and of the generated cocotb Makefile, so "
+            "path separators, '..', spaces and shell/Make metacharacters are unsafe.",
+            diagnostics=dd,
+        )
     artifacts = {
         "unit_isolation_wrapper": str((od / f"{mod}_axil_wrap.sv").resolve()),
         "sva_protocol_checker": str((od / f"{mod}_axil_sva_checker.sv").resolve()),
