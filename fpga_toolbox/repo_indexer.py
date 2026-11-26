@@ -359,6 +359,38 @@ def tool_resolve_deps(
                         "the dependency closure does not cover it (vendor/encrypted IP?)."
                     ),
                 })
+    # 语义：rtl_files = 闭包模块的归属文件，**去掉那些已经被闭包内其它
+    # 编译单元 include 展开的**。
+    #
+    # 为什么不是简单地「去掉所有 included_files」：
+    # - 目标是 dupinc_top（top.sv include defs.sv，defs.sv 定义 helper_mod，
+    #   top 例化 helper_mod）：编译 top.sv 时 include 已把 helper_mod 展开，
+    #   再把 defs.sv 当编译单元 → MODDUP 硬失败。所以 defs.sv 应剔除。
+    # - 目标是 dup_mod（它只定义在 real.sv 里，而 real.sv 被 wrapper include）：
+    #   闭包内**没有**其它编译单元会展开它（wrapper 不在闭包里），剔除会让
+    #   rtl_files 变成空列表，调用方拿空清单编译必然失败。此时必须保留。
+    #
+    # 判据：rtl_files = 闭包归属文件 - (被 include 的文件 ∩ 被其它闭包归属
+    # 文件 include 的文件)。
+    _closure_files = {mods[_m]["file_path"] for _m in closure if _m in mods}
+    # `include 目标既可能是 header（.vh/.svh，在 hdrs 里），也可能是被 include
+    # 的源文件（`include "defs.sv"），后者不在 hdrs 里。这里用同一条
+    # 「先按相对路径、再按 basename」规则，把两类都解析出来。
+    _all_rel = set(incl_targets) | {_p for _p in hdrs.values()}
+    _inc_by_closure: Set[str] = set()
+    for _m in closure:
+        _info = mods.get(_m) or {}
+        _owner = _info.get("file_path")
+        for _inc in _info.get("includes") or []:
+            _resolved = _resolve_include(_inc, hdrs)
+            if _resolved is None:
+                _bn = _inc.replace("\\", "/").rsplit("/", 1)[-1]
+                for _cand in _all_rel:
+                    if _cand == _inc or _cand.rsplit("/", 1)[-1] == _bn:
+                        _resolved = _cand
+                        break
+            if _resolved and _resolved != _owner:
+                _inc_by_closure.add(_resolved)
     return ok_result("resolve_deps", {
         "target_module": target_module,
         "target_file": mods[target_module]["file_path"],
@@ -366,9 +398,13 @@ def tool_resolve_deps(
         "dependency_edges": edges,
         "unresolved_instantiations": unresolved_in_closure,
         "closure_is_complete": not unresolved_in_closure,
-        # 被 include 进来的「源文件型 header」（如 `include "defs.sv"）不能作为
-        # 独立编译单元，否则重复定义 module。
-        "rtl_files": sorted(rtl_set - incl_targets),
+        # 被 include 进来的「源文件型 header」（如 `include "defs.sv"）通常不能
+        # 作为独立编译单元，否则重复定义 module。但**例外**：当闭包里某个模块
+        # 的定义文件本身就是被 include 的那个文件时（目标是 `dup_mod`，它只
+        # 定义在 `real.sv` 里，而 `real.sv` 恰好被 wrapper include），把它剔除
+        # 会让 rtl_files 变成**空列表** —— 调用方拿空清单去编译必然失败。
+        # 因此只剔除「不属于任何闭包模块定义文件」的 include 目标。
+        "rtl_files": sorted(rtl_set - (_inc_by_closure & _closure_files)),
         "header_files": sorted(hdr_set),
         "all_files": sorted(rtl_set | hdr_set),
     }, diagnostics=diags)

@@ -142,3 +142,4 @@
 - [77 · 方向前缀拆组与 AHB HREADY/HREADYOUT 键冲突](77-iface-prefix-ahb-ready-split.md)
 - [78 · resolve_deps 丢失 header 之间的传递 include](78-resolve-deps-transitive-headers.md)
 - [79 · 被 include 的 .sv 被当成独立编译单元](79-included-source-not-compilation-unit.md)
+- [80 · 剔除被 include 的源文件时保留了独立可编译的目标](80-rtl-files-keep-independent-modules.md)

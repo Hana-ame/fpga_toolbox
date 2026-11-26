@@ -2841,6 +2841,61 @@ def test_included_source_not_treated_as_compilation_unit() -> None:
         assert idx2["data"]["included_files"] == ["defs.sv"], idx2["data"]["included_files"]
 
 
+def test_rtl_files_keeps_independently_compilable_modules() -> None:
+    """Defect 135: 剔除被 include 的源文件时必须保留「独立可编译」的目标。
+
+    133 的修法「rtl_files = rtl_set - included_files」过于粗暴：当目标模块
+    **本身只定义在被 include 的文件里**时（`dup_mod` 定义在 `real.sv`，而
+    `real.sv` 恰好被 `wrapper.sv` include），rtl_files 会变成**空列表** ——
+    调用方拿空清单编译必然失败。
+
+    正确判据：只剔除「被闭包内其它编译单元 include 展开」的文件。
+    - 目标 = dupinc_top（top.sv include defs.sv，defs.sv 定义 helper_mod）：
+      defs.sv 应剔除（否则 MODDUP），rtl_files == ["top.sv"]
+    - 目标 = dup_mod（只定义在 real.sv，real.sv 被 wrapper include 但
+      wrapper 不在闭包内）：real.sv 必须保留，rtl_files == ["rtl/real.sv"]
+    """
+    print("coverage: rtl_files keeps independently compilable modules")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "defs.sv").write_text(
+            "module helper_mod (input logic a, output logic b);\n  assign b = a;\nendmodule\n",
+            encoding="utf-8")
+        (root / "top.sv").write_text(
+            '`include "defs.sv"\nmodule dupinc_top (input logic clk, output logic q);\n'
+            "  helper_mod u (.a(clk), .b(q));\nendmodule\n", encoding="utf-8")
+
+        r = call_tool("resolve_deps", {"project_root": str(root), "target_module": "dupinc_top"})
+        assert r["ok"], str(r.get("error"))[:200]
+        assert r["data"]["rtl_files"] == ["top.sv"], r["data"]["rtl_files"]
+
+        # 目标正是被 include 文件里定义的模块：不能把清单清空
+        rh = call_tool("resolve_deps", {"project_root": str(root), "target_module": "helper_mod"})
+        assert rh["ok"], str(rh.get("error"))[:200]
+        assert rh["data"]["rtl_files"] == ["defs.sv"], rh["data"]["rtl_files"]
+
+        # 子目录 + 目标在 include 目标文件中
+        rtl = root / "rtl"
+        rtl.mkdir()
+        (rtl / "real.sv").write_text(
+            "module dup_mod (input logic clk, output logic [7:0] q);\n"
+            "  assign q = 8'hAA;\nendmodule\n", encoding="utf-8")
+        (rtl / "wrapper.sv").write_text(
+            '`include "real.sv"\nmodule wrapper (input logic clk, output logic [7:0] q);\n'
+            "  dup_mod u (.clk(clk), .q(q));\nendmodule\n", encoding="utf-8")
+
+        rw = call_tool("resolve_deps", {"project_root": str(root), "target_module": "wrapper"})
+        assert rw["ok"], str(rw.get("error"))[:200]
+        assert rw["data"]["rtl_files"] == ["rtl/wrapper.sv"], rw["data"]["rtl_files"]
+        rm = call_tool("resolve_deps", {"project_root": str(root), "target_module": "dup_mod"})
+        assert rm["ok"], str(rm.get("error"))[:200]
+        assert rm["data"]["rtl_files"] == ["rtl/real.sv"], rm["data"]["rtl_files"]
+        # 沙箱清单始终完整
+        assert rm["data"]["all_files"] == ["rtl/real.sv"], rm["data"]["all_files"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2886,6 +2941,7 @@ def main() -> int:
     test_iface_direction_prefix_and_ahb_ready_split()
     test_resolve_deps_transitive_headers()
     test_included_source_not_treated_as_compilation_unit()
+    test_rtl_files_keeps_independently_compilable_modules()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
