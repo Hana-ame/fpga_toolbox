@@ -3483,6 +3483,71 @@ def test_master_role_is_explained_on_direction_mismatch() -> None:
             assert rs["ok"] is True, str(rs.get("error"))[:300]
 
 
+def test_regfile_spec_type_and_value_validation() -> None:
+    """Defect 150/151/152: 手写 regfile spec 的类型与数值错误不能静默/崩栈。
+
+    150: `registers` 写成 mapping（`{"CTRL": {...}}`）时，归一化代码
+         `for idx, r in enumerate(...)` 迭代到**键字符串**，随后 `r.get(...)`
+         抛裸 `AttributeError: 'str' object has no attribute 'get'` —— 未捕获
+         异常漏出，错误信息与真正原因（registers 类型不对）毫无关联。
+    151: `offset: "zzz"` 经宽容 `_to_int` 静默回退到 `idx*4`，validate_contract
+         返回 ok=true + 零诊断，寄存器被悄悄挪位。
+    152: `reset: "zz"` 同样静默变成 0。
+    """
+    print("coverage: regfile spec type and value validation")
+    from fpga_toolbox.registry import call_tool
+
+    base = {"$schema": "apb-regfile-spec/v2", "module": "x",
+            "bus": {"protocol": "APB", "addr_width": 8, "data_width": 32,
+                    "wait_cycles": 0}}
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+
+        def _write(name: str, obj) -> str:
+            fp = root / name
+            fp.write_text(json.dumps(obj), encoding="utf-8")
+            return str(fp)
+
+        # 150: registers 不是列表 → 结构化错误，不能是裸 AttributeError
+        p1 = _write("bad_regs.json", {**base, "registers": {"CTRL": {"offset": "0x0"}}})
+        r1 = call_tool("validate_contract", {"spec_path": p1})
+        assert r1["ok"] is False
+        e1 = str(r1.get("error"))
+        assert "must be a list" in e1, e1[:200]
+        assert "AttributeError" not in e1, e1[:200]
+
+        # 元素不是对象 → 也要有明确信息
+        p1b = _write("bad_elem.json", {**base, "registers": ["oops"]})
+        r1b = call_tool("validate_contract", {"spec_path": p1b})
+        assert r1b["ok"] is False
+        assert "must be an object" in str(r1b.get("error")), str(r1b.get("error"))[:200]
+
+        # 151: 非法 offset → E005
+        p2 = _write("bad_off.json", {**base, "registers": [
+            {"name": "R", "offset": "zzz", "attr": "RW", "reset": "0x0"}]})
+        r2 = call_tool("validate_contract", {"spec_path": p2})
+        assert r2["ok"] is False, r2
+        codes2 = [(d["code"], d["message"]) for d in (r2.get("diagnostics") or [])]
+        assert any(c == "E005" and "offset" in m for c, m in codes2), codes2
+
+        # 152: 非法 reset → E005
+        p3 = _write("bad_rst.json", {**base, "registers": [
+            {"name": "R", "offset": "0x0", "attr": "RW", "reset": "zz"}]})
+        r3 = call_tool("validate_contract", {"spec_path": p3})
+        assert r3["ok"] is False, r3
+        codes3 = [(d["code"], d["message"]) for d in (r3.get("diagnostics") or [])]
+        assert any(c == "E005" and "reset" in m for c, m in codes3), codes3
+
+        # 合法 spec 不受影响
+        p4 = _write("ok.json", {**base, "registers": [
+            {"name": "VERSION", "offset": "0x00", "attr": "RO", "reset": "0x00010203"},
+            {"name": "CTRL", "offset": "0x04", "attr": "RW", "reset": "0x0"}]})
+        r4 = call_tool("validate_contract", {"spec_path": p4})
+        assert r4["ok"] is True, str(r4.get("error"))[:200]
+        assert r4["data"]["register_count"] == 2, r4["data"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3539,6 +3604,7 @@ def main() -> int:
     test_package_imports_are_part_of_the_dependency_closure()
     test_detected_but_unsupported_protocol_is_distinguished()
     test_master_role_is_explained_on_direction_mismatch()
+    test_regfile_spec_type_and_value_validation()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

@@ -110,19 +110,63 @@ def _normalize_regfile_spec_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     addr_w = _to_int(bus.get("addr_width"), 8)
     data_w = _to_int(bus.get("data_width"), 32)
     wait_cycles = _to_int(bus.get("wait_cycles"), 0)
+    # `registers` 必须是列表。旧实现直接 `for idx, r in enumerate(data.get(...))`：
+    # 用户把 registers 写成 mapping（`{"CTRL": {...}}`）时，迭代得到的是**键
+    # 字符串**，随后 `r.get(...)` 抛裸 `AttributeError: 'str' object has no
+    # attribute 'get'` —— 未捕获异常漏出，ok=false 但错误信息与"registers 类型
+    # 不对"毫无关联。
+    _regs = data.get("registers", [])
+    if not isinstance(_regs, list):
+        raise ValueError(
+            "apb-regfile-spec: 'registers' must be a list of register objects, got "
+            f"{type(_regs).__name__}. Use a JSON/YAML array (e.g. registers: [...])."
+        )
     regs_out: List[Dict[str, Any]] = []
-    for idx, r in enumerate(data.get("registers", [])):
+    _bad_offset: List[str] = []
+    _bad_reset: List[str] = []
+    for idx, r in enumerate(_regs):
+        if not isinstance(r, dict):
+            raise ValueError(
+                f"apb-regfile-spec: registers[{idx}] must be an object, got "
+                f"{type(r).__name__}."
+            )
+        # offset / reset 是**必须能解析**的字段：静默回退到默认值会让
+        # `offset: "zzz"`（应为 0x 开头或十进制）被判成合法，寄存器被悄悄
+        # 挪到 idx*4 的位置；`reset: "zz"` 同样被当成 0。实测两者都返回
+        # ok=true + 零诊断。改为收集后统一报 E005。
+        _off_raw = r.get("offset")
+        _off = _to_int_or_none(_off_raw) if _off_raw is not None else idx * 4
+        if _off is None:
+            _bad_offset.append(f"{r.get('name', f'REG_{idx}')}={_off_raw!r}")
+            _off = idx * 4
+        _rst_raw = r.get("reset")
+        _rst = _to_int_or_none(_rst_raw) if _rst_raw is not None else 0
+        if _rst is None:
+            _bad_reset.append(f"{r.get('name', f'REG_{idx}')}={_rst_raw!r}")
+            _rst = 0
         entry: Dict[str, Any] = {
             "rule_id": f"REG_{idx:03d}",
             "name": str(r.get("name", f"REG_{idx}")),
-            "offset": _to_int(r.get("offset"), idx * 4),
-            "reset_value": _to_int(r.get("reset"), 0),
+            "offset": _off,
+            "reset_value": _rst,
             "access": str(r.get("attr", "RW")).upper(),
         }
         if isinstance(r.get("fields"), list):
             entry["fields"] = r["fields"]
         regs_out.append(entry)
+    # 无法解析的字段通过 `_spec_warnings` 通道带回（load_raw_spec 之后会转成
+    # diagnostics）。放在 boundary 之外的自定义键上，不影响 IR 结构。
+    _warn: List[str] = []
+    if _bad_offset:
+        _warn.append("BitfieldSpec: invalid offset value(s) "
+                     + ", ".join(_bad_offset)
+                     + " — expected an integer or 0x-prefixed hex; fell back to index*4.")
+    if _bad_reset:
+        _warn.append("BitfieldSpec: invalid reset value(s) "
+                     + ", ".join(_bad_reset)
+                     + " — expected an integer or 0x-prefixed hex; fell back to 0.")
     return {
+        "__spec_warnings__": _warn,
         "boundary": {
             "module_name": str(data.get("module", "apb_slave_regfile")),
             "rtl_files": [],
@@ -157,7 +201,14 @@ def load_raw_spec(spec_path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Specification must be a YAML/JSON mapping.")
     if str(data.get("$schema", "")).startswith("apb-regfile-spec/") and "boundary" not in data:
-        return _normalize_regfile_spec_v2(data)
+        normalized = _normalize_regfile_spec_v2(data)
+        # 归一化过程中发现的可疑字段（非法 offset/reset）通过保留键带回，
+        # 由 build_and_validate_ir 转成诊断。不直接在这里 append diags 是因为
+        # load_raw_spec 的返回类型是裸 dict（无 diags 通道）。
+        _warns = normalized.pop("__spec_warnings__", [])
+        if _warns:
+            normalized["__spec_warnings__"] = _warns
+        return normalized
     return data
 
 
@@ -196,6 +247,10 @@ def build_and_validate_ir(
     raw: Dict[str, Any], rtl_path: Optional[Path] = None
 ) -> Tuple[Optional[CompiledUnitIR], List[Diagnostic]]:
     diags: List[Diagnostic] = []
+    # 归一化阶段（_normalize_regfile_spec_v2）发现的非法字段：offset/reset
+    # 解析失败时曾静默回退到默认值，导致 ok=true + 零诊断。这里统一转成 E005。
+    for _w in raw.pop("__spec_warnings__", []) or []:
+        diags.append(Diagnostic("ERROR", "E005", "registers", str(_w)))
     b_raw, t_raw = raw.get("boundary"), raw.get("test_plan")
     if not isinstance(b_raw, dict):
         diags.append(Diagnostic("ERROR", "E000", "boundary", "Missing 'boundary' section."))
