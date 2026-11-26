@@ -3610,6 +3610,61 @@ def test_json_results_unnamed_entries_are_not_pass_evidence() -> None:
         assert d5["overall_status"] == "PASS", d5
 
 
+def test_check_lines_and_suite_summary_precedence() -> None:
+    """Defect 154/155: `[CHECK]` 明细行不能静默消失，也不能篡改套件结论。
+
+    154: `_parse_verilator_checks` 对没有 `id` 的 `[CHECK]` 行直接 `continue`
+         静默丢弃。`[CHECK] status=FAIL exp=1 got=2` 这条明确的失败证据凭空
+         消失（与 XML/JSON 无名项口径不一致）。
+    155: `verify_suite_identities` 把 `\bFAIL\b` 关键词检查放在**汇总行之前**，
+         于是逐事务明细 `[CHECK] ... | status=FAIL | ...` 会让整个套件判 FAIL，
+         即使套件自己的汇总行是 `PASS:` —— 实测得到
+         observed={'apb':'FAIL'} 而 summaries={'apb':'PASS'} 的自相矛盾。
+         汇总行才是套件级结论的权威；无汇总行时 CHECK FAIL 仍是失败证据。
+    """
+    print("coverage: CHECK lines and suite summary precedence")
+    from fpga_toolbox.result_normalizer import _parse_verilator_checks
+    from fpga_toolbox.sim_runner import verify_suite_identities
+
+    # 154: 无 id 的 CHECK 行必须保留为 UNNAMED_TESTCASE FAIL
+    checks = _parse_verilator_checks("[CHECK] status=FAIL exp=1 got=2\n")
+    assert len(checks) == 1, checks
+    assert checks[0]["rule_id"] == "UNNAMED_TESTCASE", checks[0]
+    assert checks[0]["status"] == "FAIL", checks[0]
+    # 有 id 的正常行不受影响
+    ok_checks = _parse_verilator_checks("[CHECK] id=C1 | status=PASS\n")
+    assert [c["rule_id"] for c in ok_checks] == ["C1"], ok_checks
+
+    # 155: 明细 FAIL + 汇总 PASS → 套件判 PASS（汇总权威）
+    log = ("== sim: apb (top=tb_apb) ==\n"
+           "[CHECK] id=C1 | status=FAIL | exp=1 | got=2\n"
+           "PASS: apb all 8 checks passed\n")
+    r = verify_suite_identities(log, ["apb"])
+    assert r["observed"]["apb"] == "PASS", r
+    assert r["all_verified"] is True, r
+
+    # 明细 FAIL + 汇总 FAIL → FAIL
+    log2 = ("== sim: apb ==\n"
+            "[CHECK] id=C1 | status=FAIL\n"
+            "FAIL: apb 1 errors\n")
+    r2 = verify_suite_identities(log2, ["apb"])
+    assert r2["observed"]["apb"] == "FAIL", r2
+
+    # 明细 FAIL 且**无**汇总行 → 仍是失败证据（不能因重排而放行）
+    log3 = "== sim: apb ==\n[CHECK] id=C1 | status=FAIL\n"
+    r3 = verify_suite_identities(log3, ["apb"])
+    assert r3["observed"]["apb"] == "FAIL", r3
+
+    # 崩溃痕迹 + 无汇总行 → FAIL
+    log4 = "== sim: apb ==\n[CHECK] id=C1 | status=PASS\nSegmentation fault\n"
+    r4 = verify_suite_identities(log4, ["apb"])
+    assert r4["observed"]["apb"] == "FAIL", r4
+
+    # 干净日志 → PASS
+    r5 = verify_suite_identities("== sim: apb ==\nPASS: apb all\n", ["apb"])
+    assert r5["all_verified"] is True, r5
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3668,6 +3723,7 @@ def main() -> int:
     test_master_role_is_explained_on_direction_mismatch()
     test_regfile_spec_type_and_value_validation()
     test_json_results_unnamed_entries_are_not_pass_evidence()
+    test_check_lines_and_suite_summary_precedence()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

@@ -59,21 +59,31 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
             summaries.pop(current, None)
             continue
         if current:
-            # 明确的失败信号优先（含崩溃/断言的痕迹）
-            if re.search(r"\bFAIL\b|\$fatal|ERROR:|Assertion failed|Segmentation fault",
-                         line, re.IGNORECASE):
-                results[current] = "FAIL"
-                continue
             # 该套件自己的结束汇总行：以该行开头、且套件名匹配（或首词不是套件名
             # 的通用汇总 `PASS: all N checks passed` 也认，见下）。
+            #
+            # **必须先在 FAIL 关键词之前判汇总行**：生成的 TB 会打印逐事务
+            # `[CHECK] id=... | status=FAIL | exp=... | got=...` 明细行，
+            # 里面含 `FAIL` 字样。旧实现把 FAIL 关键词检查放在前面，于是
+            # 「某条 JSON/CHECK 明细失败 + 套件汇总打印 PASS:」会直接把套件判
+            # FAIL —— 实测 `[CHECK] id=C1 | status=FAIL` + `PASS: apb all 8
+            # checks passed` 得到 observed={'apb':'FAIL'} 而
+            # summaries={'apb':'PASS'}，两者自相矛盾。
             m_sum = _SUITE_SUMMARY_RE.match(line)
             if m_sum:
                 verdict = m_sum.group(1)
                 summaries.setdefault(current, verdict)
                 if verdict == "FAIL":
                     results[current] = "FAIL"
-                elif results.get(current) != "FAIL":
+                else:
                     results[current] = "PASS"
+                continue
+            # 明确的失败信号（崩溃/断言痕迹，或套件级 FAIL 行）。CHECK 明细里
+            # 的 status=FAIL 也走这里 —— 在**没有**汇总行时它仍是失败证据。
+            if re.search(r"\bFAIL\b|\$fatal|ERROR:|Assertion failed|Segmentation fault",
+                         line, re.IGNORECASE):
+                if results.get(current) != "PASS" or current not in summaries:
+                    results[current] = "FAIL"
     # 启动过但没有**自己的**结束汇总行 => 中途崩溃，判 FAIL（不能沿用 PASS）
     for name, status in list(results.items()):
         if status == "PASS" and name not in summaries:

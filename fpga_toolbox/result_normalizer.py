@@ -301,6 +301,23 @@ def _parse_verilator_checks(log_txt: str) -> List[Dict[str, Any]]:
                 k, v = part.split("=", 1)
                 fields[k.strip()] = v.strip()
         if not fields.get("id"):
+            # `[CHECK]` 行没有 id 时旧实现直接 `continue` **静默丢弃**。于是
+            # `[CHECK] status=FAIL exp=1 got=2` 这条明确的失败证据凭空消失，
+            # 报告里既看不到失败、也没有任何提示。与 XML/JSON 分支的无名项
+            # 口径统一：不可归属的检查项算失败，不能算「没出现过」。
+            out.append({
+                "rule_id": "UNNAMED_TESTCASE",
+                "protocol": fields.get("proto", ""),
+                "category": fields.get("cat", "verilator_check"),
+                "engine": _detect_engine(log_txt),
+                "tx": fields.get("tx", ""),
+                "expected": fields.get("exp", ""),
+                "observed": fields.get("got", ""),
+                "status": "FAIL",
+                "detail": "Verilator [CHECK] line has no 'id' field; it cannot be "
+                          "attributed to a specific check (treated as failure, not "
+                          "silently dropped). Raw: " + payload[:200],
+            })
             continue
         out.append({
             "rule_id": fields["id"],
