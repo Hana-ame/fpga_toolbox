@@ -195,12 +195,26 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
                 f"element(s) at index {bad[:5]} are not objects "
                 f"(got types {[type(raw_checks[i]).__name__ for i in bad[:5]]})."
             )
-        checks = [{
-            "rule_id": str(c.get("rule_id", "UNKNOWN")),
-            "category": str(c.get("category", "functional")),
-            "status": _norm_status(c.get("status", "FAIL")),
-            "detail": str(c.get("detail", "")),
-        } for c in raw_checks]
+        # 同样与 XML 侧口径一致：没有 rule_id 的检查项不能归属，不算通过证据。
+        checks = []
+        for _c in raw_checks:
+            _cid = _c.get("rule_id")
+            if not (str(_cid).strip() if _cid is not None else ""):
+                checks.append({
+                    "rule_id": "UNNAMED_TESTCASE",
+                    "category": str(_c.get("category", "functional")),
+                    "status": "FAIL",
+                    "detail": "results entry has no 'rule_id'; it cannot be attributed "
+                              "to a specific check, so it is not evidence of passing "
+                              "(treated as failure, not silent pass).",
+                })
+                continue
+            checks.append({
+                "rule_id": str(_cid),
+                "category": str(_c.get("category", "functional")),
+                "status": _norm_status(_c.get("status", "FAIL")),
+                "detail": str(_c.get("detail", "")),
+            })
         return checks, raw.get("seed"), _norm_completed(raw.get("completed"))
 
     tests = None
@@ -223,12 +237,30 @@ def _from_json(raw: Any) -> Tuple[List[Dict[str, Any]], Optional[int], Optional[
                 f"element(s) at index {bad_tests[:5]} are not objects "
                 f"(got types {[type(tests[i]).__name__ for i in bad_tests[:5]]})."
             )
-        checks = [{
-            "rule_id": str(t.get("name", t.get("rule_id", "UNKNOWN"))),
-            "category": str(t.get("category", "cocotb")),
-            "status": _norm_status(t.get("status", t.get("result", "FAIL"))),
-            "detail": str(t.get("detail", "")),
-        } for t in tests]
+        # 与 XML 侧口径一致：没有标识的测试项不是「通过证据」。旧实现用
+        # `t.get("name", t.get("rule_id", "UNKNOWN"))` 兜底成 "UNKNOWN"，于是
+        # {"tests": [{"status":"passed"}, {"status":"passed"}]} 得到
+        # total=2/passed=2/overall_status=PASS —— 两条无从归属的通过项被当成
+        # 真实证据。XML 分支（缺陷 119）已改为 FAIL，这里补齐同样语义。
+        checks = []
+        for _t in tests:
+            _nm = _t.get("name", _t.get("rule_id"))
+            if not (str(_nm).strip() if _nm is not None else ""):
+                checks.append({
+                    "rule_id": "UNNAMED_TESTCASE",
+                    "category": str(_t.get("category", "cocotb")),
+                    "status": "FAIL",
+                    "detail": "cocotb results entry has no 'name'/'rule_id'; it cannot "
+                              "be attributed to a specific check, so it is not evidence "
+                              "of passing (treated as failure, not silent pass).",
+                })
+                continue
+            checks.append({
+                "rule_id": str(_nm),
+                "category": str(_t.get("category", "cocotb")),
+                "status": _norm_status(_t.get("status", _t.get("result", "FAIL"))),
+                "detail": str(_t.get("detail", "")),
+            })
         # tests 分支同样要透传 completed：旧实现直接 `return checks, seed, None`
         # 把它丢了，于是 {"tests": [...], "completed": false} 完全绕过
         # COCOTB_INCOMPLETE 完整性门禁（实测 overall_status=PASS）。

@@ -3548,6 +3548,68 @@ def test_regfile_spec_type_and_value_validation() -> None:
         assert r4["data"]["register_count"] == 2, r4["data"]
 
 
+def test_json_results_unnamed_entries_are_not_pass_evidence() -> None:
+    """Defect 153: cocotb JSON 里无名称的结果项不能算「通过证据」。
+
+    XML 分支（缺陷 119）已经改成：`<testcase />` 没有 name 时判
+    UNNAMED_TESTCASE FAIL。JSON 分支当时漏了 —— 用
+    `t.get("name", t.get("rule_id", "UNKNOWN"))` 兜底成字符串 "UNKNOWN"：
+
+        {"tests": [{"name":"t1","status":"passed"}, {"status":"passed"}]}
+        → total=2, passed=2, overall_status=PASS
+
+    一条无从归属的「通过」被当成真实证据。`checks` 分支同样问题。
+    """
+    print("coverage: unnamed JSON result entries are not pass evidence")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+
+        def _run(name: str, obj) -> dict:
+            fp = root / name
+            fp.write_text(json.dumps(obj), encoding="utf-8")
+            return call_tool("normalize_sim_result", {
+                "cocotb_results_json": str(fp), "module_name": "m"})
+
+        # tests 分支：无名项 → FAIL
+        r = _run("tests.json", {"tests": [
+            {"name": "t1", "status": "passed"}, {"status": "passed"}]})
+        assert r["ok"], str(r.get("error"))[:200]
+        d = r["data"]
+        assert d["overall_status"] == "FAIL", d["overall_status"]
+        rules = {c["rule_id"]: c["status"] for c in d["checks"]}
+        assert rules.get("UNNAMED_TESTCASE") == "FAIL", rules
+        assert d["summary"]["failed"] >= 1, d["summary"]
+
+        # 空白 name 同样算无名
+        r2 = _run("blank.json", {"tests": [
+            {"name": "t1", "status": "passed"}, {"name": "   ", "status": "passed"}]})
+        d2 = r2["data"]
+        assert d2["overall_status"] == "FAIL", d2["overall_status"]
+
+        # checks 分支：同样语义
+        r3 = _run("checks.json", {"checks": [
+            {"rule_id": "c1", "status": "PASS"}, {"status": "PASS"}]})
+        d3 = r3["data"]
+        assert d3["overall_status"] == "FAIL", d3["overall_status"]
+        rules3 = {c["rule_id"]: c["status"] for c in d3["checks"]}
+        assert rules3.get("UNNAMED_TESTCASE") == "FAIL", rules3
+
+        # 全部有名且通过 → 仍然 PASS（不能假报警）
+        r4 = _run("ok.json", {"tests": [
+            {"name": "t1", "status": "passed"}, {"name": "t2", "status": "passed"}]})
+        d4 = r4["data"]
+        assert d4["overall_status"] == "PASS", d4
+        assert d4["summary"]["passed"] == 2, d4["summary"]
+
+        # rule_id 作为标识是合法的（tests 分支）
+        r5 = _run("ruleid.json", {"tests": [
+            {"rule_id": "r1", "status": "passed"}]})
+        d5 = r5["data"]
+        assert d5["overall_status"] == "PASS", d5
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3605,6 +3667,7 @@ def main() -> int:
     test_detected_but_unsupported_protocol_is_distinguished()
     test_master_role_is_explained_on_direction_mismatch()
     test_regfile_spec_type_and_value_validation()
+    test_json_results_unnamed_entries_are_not_pass_evidence()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

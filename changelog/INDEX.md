@@ -154,3 +154,4 @@
 - [89 · 协议没识别到 vs 识别到了但没有 TB 模板](89-detected-but-unsupported-protocol.md)
 - [90 · 主设备配从设备模板时错误信息不指向角色反了](90-master-role-direction-mismatch.md)
 - [91 · regfile spec 类型错误崩栈、数值错误被静默吞掉](91-regfile-spec-type-value-validation.md)
+- [92 · cocotb JSON 里无名结果项被当成通过证据](92-json-unnamed-testcase.md)
