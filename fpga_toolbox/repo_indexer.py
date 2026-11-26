@@ -116,14 +116,23 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
     # datapath 错标成 top_proc.v。正确归属应是**原始文本里真正声明
     # `module <name>`** 的文件（_module_body 在该文件能定位到自身定义体）。
     owner: Dict[str, Path] = {}
+    # `_module_body` 每次调用都要 sv_tokenize 整份源码。旧实现是
+    # `for fpath: for mname in <全部模块名>` —— 即 O(文件数 × 模块数) 次重新
+    # tokenize 整个仓库；一个 200 模块 / 100 文件的项目要 tokenize 两万次。
+    # 改成每个文件只 tokenize 一次、直接取出它**原始文本里声明**的模块名集合。
+    defined_here: Dict[Path, Set[str]] = {}
     for fpath in rtl_files:
         if fpath.suffix.lower() not in {".v", ".sv"}:
             continue
-        for mname in {m.name for _, m in parsed}:
-            if mname in owner:
-                continue
-            if _module_body(mname, sources[fpath]):
-                owner[mname] = fpath
+        local: Set[str] = set()
+        toks = sv_tokenize(sources[fpath])
+        for k, t in enumerate(toks):
+            if (t.kind == "IDENT" and t.value == "module" and k + 1 < len(toks)
+                    and toks[k + 1].kind == "IDENT"):
+                local.add(toks[k + 1].value)
+        defined_here[fpath] = local
+        for mname in local:
+            owner.setdefault(mname, fpath)
 
     # 未知例化检测：token 启发式只能认出仓库内**已定义**的模块（value in known），
     # 例化一个仓库外的模块（厂商 IP / 加密 IP / 未克隆子模块）会被静默丢弃，
@@ -134,11 +143,23 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
     unresolved: Dict[str, List[str]] = {}
     modules = {}
     for fp, m in parsed:
+        # 只处理「本文件原始文本里真正声明了该 module」的解析结果。
+        # `include 让 slang 把子模块展开进顶层文件，于是同一模块会出现两次：
+        # (datapath.v, datapath) 和 (top.v, datapath)。旧实现两个都处理，后者
+        # 用 top.v 的源码算 instantiated_modules / includes，把 top 的例化与
+        # include 结果**覆盖**到 datapath 上（实测 datapath 被错标成
+        # includes=["datapath.v"]，而它自己并没有 include 任何东西）。
+        # 归属由 owner 决定；不属于本文件的解析结果直接跳过。
+        if owner.get(m.name, fp) != fp:
+            continue
         if fp not in cst_cache:
             cst_cache[fp] = slang_instantiation_targets(fp)
         cst_targets = cst_cache[fp]
-        insts = _find_instantiations(
-            _module_body(m.name, sources[fp]), known, m.name)
+        # _module_body 返回该 module 自身的定义体；对归属正确的文件不会是空串
+        # （owner 就是用「_module_body 非空」判定的），但仍保留回退以免空串
+        # 让实例化成静默丢失。
+        body = _module_body(m.name, sources[fp]) or sources[fp]
+        insts = _find_instantiations(body, known, m.name)
         unknown: List[str] = []
         if cst_targets is not None:
             unknown = [
@@ -152,6 +173,8 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             "parameters": m.parameters,
             "instantiated_modules": insts,
             "unresolved_instantiations": unknown,
+            # 归属已按 owner 收敛到「真正定义该 module 的文件」，所以这里的
+            # sources[fp] 就是该模块自己的文件，include 不会串味。
             "includes": list(dict.fromkeys(_INC_RE.findall(sources[fp]))),
         }
         if unknown:

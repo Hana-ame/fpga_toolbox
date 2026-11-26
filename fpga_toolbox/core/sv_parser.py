@@ -99,13 +99,23 @@ def _parse_sv_literal(val: str) -> Optional[int]:
     return int(val, 10) if val.isdigit() else None
 
 
+def _clog2(v: Optional[int]) -> int:
+    """IEEE 1800 $clog2：( 0 -> 0, 1 -> 0, 2 -> 1, 3..4 -> 2, 8 -> 3, 9 -> 4 )。"""
+    if v is None or v <= 1:
+        return 0
+    return (v - 1).bit_length()
+
+
 def eval_int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     expr = expr.strip()
     if not expr:
         return None
     expr = re.sub(
         r"\$clog2\s*\(([^()]+)\)",
-        lambda m: str(max(1, ((eval_int_expr(m.group(1), params) or 1) - 1).bit_length())),
+        # $clog2(n) = ceil(log2(n))，且 IEEE 1800 定义 $clog2(1) == 0
+        # （$clog2(0) 也定义为 0）。原式 max(1, (v-1).bit_length()) 在 v=1 时
+        # 得 1 —— 一个只需要 0 位索引的深度-1 存储器会被算成 1 位地址。
+        lambda m: str(_clog2(eval_int_expr(m.group(1), params))),
         expr,
     )
     expr = re.sub(
@@ -136,7 +146,12 @@ def eval_int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
 
 
 class SVModuleParser:
-    _TYPES = {"wire", "reg", "logic", "bit", "signed", "unsigned", "int", "integer", "var", "tri"}
+    _TYPES = {"wire", "reg", "logic", "bit", "signed", "unsigned", "int", "integer", "var", "tri",
+              "byte", "shortint", "longint"}
+    # SV 整数原子类型的固有位宽。`output int o` 没有 [n:m] 也不是 1 位标量 ——
+    # 旧实现把 int 归进 _TYPES 后只 idx+1，宽度保持默认 1，于是 int/byte/
+    # shortint/longint 端口全被报成 1 位（DUT 端口校验、位宽推断全部失真）。
+    _TYPE_WIDTH = {"byte": 8, "shortint": 16, "int": 32, "integer": 32, "longint": 64}
     _DIRS = {"input", "output", "inout"}
 
     def __init__(self, tokens: List[SVToken], file_path: str):
@@ -276,6 +291,10 @@ class SVModuleParser:
                     cur_dir, cur_wexpr, cur_w = v, "1", 1
                     idx += 1
                 elif v in self._TYPES:
+                    # 整数原子类型带固有位宽（int=32 等）；logic/bit/reg/wire
+                    # 无固有位宽，保持 1 位标量默认。
+                    if v in self._TYPE_WIDTH:
+                        cur_wexpr, cur_w = str(self._TYPE_WIDTH[v]), self._TYPE_WIDTH[v]
                     idx += 1
                 elif v == "[":
                     cur_wexpr, cur_w, idx = self._parse_range(item, idx, params)
@@ -311,6 +330,9 @@ class SVModuleParser:
                 idx, wexpr, w = 0, "1", 1
                 while idx < len(stmt):
                     if stmt[idx].value in self._TYPES:
+                        if stmt[idx].value in self._TYPE_WIDTH:
+                            wexpr = str(self._TYPE_WIDTH[stmt[idx].value])
+                            w = self._TYPE_WIDTH[stmt[idx].value]
                         idx += 1
                     elif stmt[idx].value == "[":
                         wexpr, w, idx = self._parse_range(stmt, idx, params)
@@ -526,7 +548,15 @@ def _parse_with_slang(
                     m_rng = re.search(r"\[(\d+):(\d+)\]", tstr)
                     if m_rng:
                         w = abs(int(m_rng.group(1)) - int(m_rng.group(2))) + 1
-                    elif re.search(r"\b(logic|bit|reg|wire|byte|int|shortint|longint)\b", tstr):
+                    elif re.search(r"\b(byte|shortint|int|integer|longint)\b", tstr):
+                        # SV 整数原子类型不是 1 位：byte=8 / shortint=16 / int=32 /
+                        # longint=64。旧实现把它们和 logic/bit 一起当成「明确的
+                        # 1 位标量」，于是 `output int o` 被报成 width=1 ——
+                        # emit_testbench / copy_sandbox 的位宽判断全部失真。
+                        w = {"byte": 8, "shortint": 16, "int": 32,
+                             "integer": 32, "longint": 64}[
+                            re.search(r"\b(byte|shortint|int|integer|longint)\b", tstr).group(1)]
+                    elif re.search(r"\b(logic|bit|reg|wire)\b", tstr):
                         w = 1  # 明确的 1 位标量类型
                     else:
                         # 参数化类型（T）等无法静态确定宽度，标记为 0 而非假装 1 位

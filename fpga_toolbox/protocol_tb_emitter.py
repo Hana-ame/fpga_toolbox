@@ -1254,11 +1254,37 @@ def emit_protocol_testbench(
     else:
         return err_result("emit_testbench", f"Unsupported protocol: {proto}")
 
-    # Honor detected reset polarity: active-high resets assert 1 then release 0
+    # 复位极性：active-low 的模板形态是「声明 `, rst = 0` + 释放时 `rst = 1;`」。
+    # active-high 时必须反过来。
+    #
+    # 这里**不再只靠**两处字符串 replace：模板缩进/写法一变（比如声明行不再是
+    # `, {rst} = 0`、initial 里不再是 4 空格缩进），replace 会静默匹配不到，
+    # 生成的 TB 就带着反相的复位跑下去 —— 仿真不报错，只是 DUT 永远停在复位
+    # （或永远不复位），表现为莫名其妙的 FAIL/超时。因此改成：
+    #   1) 先用正则按「语义」改写（容忍任意缩进/空格）；
+    #   2) 改写后断言确实改到了（否则这条证据链就是断的），改不到就返回错误，
+    #      绝不静默生成一份极性不可信的 TB。
     rst_active_low = bool((m.get("reset") or {}).get("active_low", True))
     if not rst_active_low:
-        tb_src = tb_src.replace(f", {rst} = 0", f", {rst} = 1", 1)
-        tb_src = tb_src.replace(f"    {rst} = 1;", f"    {rst} = 0;", 1)
+        _before = tb_src
+        # 声明处：`, rst = 0` -> `, rst = 1`（允许任意空白）
+        tb_src, _n1 = re.subn(
+            rf"(,\s*{re.escape(rst)}\s*=\s*)0\b", r"\g<1>1", tb_src, count=1)
+        # 释放处：行首缩进 + `rst = 1;` -> `rst = 0;`
+        tb_src, _n2 = re.subn(
+            rf"^([ \t]*){re.escape(rst)}\s*=\s*1\s*;",
+            lambda mm: f"{mm.group(1)}{rst} = 0;", tb_src, count=1, flags=re.M)
+        if _n1 == 0 or _n2 == 0:
+            return err_result(
+                "emit_testbench",
+                f"Cannot honour active-high reset '{rst}' for module {mod_name}: the "
+                f"'{proto}' template's reset declaration/release no longer matches the "
+                "expected shape, so the generated testbench would drive the reset with "
+                "the wrong polarity (simulation would hang or never leave reset). "
+                "Refusing to emit an unverified artifact.",
+                data={"protocol": proto, "reset": rst, "matched_decl": _n1,
+                      "matched_release": _n2, "template_changed": tb_src != _before},
+            )
 
     # 给生成的 TB 插入 PINMISSING lint_off：DUT 常有 TB 不关心的额外端口
     # （调试/测试/scan 模式），`.*` 通配覆盖不到，Verilator 会报 PINMISSING

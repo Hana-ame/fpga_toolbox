@@ -1,4 +1,4 @@
-"""Tool 12: Self-audit tool verifying that verification guardrails fail loudly (no silent passes).
+"""Tool 13: Self-audit tool verifying that verification guardrails fail loudly (no silent passes).
 
 Ported in spirit from agent/verilog/audit.sh: injects synthetic defects into isolated
 temp fixtures and confirms that lint_tb, run_mutation (residual guard), normalize_sim_result,

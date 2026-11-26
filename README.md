@@ -22,7 +22,7 @@
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
 | 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
-| 13 | `audit_harness` | 故障注入式自审计（A1–A11），证明验证护栏出错时不会静默通过 |
+| 13 | `audit_harness` | 故障注入式自审计（A1–A14），证明验证护栏出错时不会静默通过 |
 
 ### 多总线原生测试台（`protocol=`）
 

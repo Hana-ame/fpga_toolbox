@@ -124,7 +124,19 @@ def run_single_tool(tool_name: str, argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog=tool_name, description=meta["description"])
     _add_schema_args(p, meta["inputSchema"])
     ns = p.parse_args(argv)
-    params = _extract_params(ns, meta["inputSchema"])
+    # 与 main() 同构：@file 读取失败（路径不存在 / 非 UTF-8）、行内 JSON 语法错
+    # 都会从 _extract_params 抛 ValueError。单独以脚本方式调用工具模块时（
+    # `python3 -m fpga_toolbox.protocol_tb_emitter --rtl-file @bad.json`）若不接，
+    # 用户拿到的是裸 Python 堆栈，而同样的输入走 main() 得到的是结构化错误 ——
+    # 同一个函数、两种入口、两种体验。
+    try:
+        params = _extract_params(ns, meta["inputSchema"])
+    except ValueError as exc:
+        print(json.dumps({
+            "ok": False, "tool": tool_name, "data": {}, "diagnostics": [],
+            "error": f"Invalid argument: {exc}",
+        }, indent=2, ensure_ascii=False))
+        return 1
     res = call_tool(tool_name, params)
     print(json.dumps(res, indent=2, ensure_ascii=False))
     return 0 if res["ok"] else 1

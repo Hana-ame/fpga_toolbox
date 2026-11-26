@@ -455,8 +455,13 @@ def test_mutation_target_containment() -> None:
         spec_abs.write_text(
             f'mutations:\n  - id: M01\n    file: "{outside}"\n    old: "EXT_ORIG"\n    new: "MUT"\n',
             encoding="utf-8")
-        r_abs = tool_run_mutation(str(wd), str(spec_abs), ["false"], min_score=0.0)
-        assert r_abs["ok"], r_abs.get("error")
+        # 全部变异都越界 => 一个都评估不到 => 必须 ok=False（分数未定义），
+        # 而不是像旧实现那样报一个「0% 或 100%」的分数。这条同时锁住缺陷 113
+        # 的 evaluated==0 分支。
+        r_abs = tool_run_mutation(str(wd), str(spec_abs), ["true"], min_score=0.0)
+        assert not r_abs["ok"], "all-out-of-sandbox spec must not report a score"
+        assert "No mutation could be evaluated" in r_abs["error"], r_abs["error"]
+        assert r_abs["data"]["evaluated"] == 0
         assert any(x["status"] == "ERROR" for x in r_abs["data"]["results"]), r_abs["data"]["results"]
         assert outside.read_text(encoding="utf-8") == "EXT_ORIG\n"
 
@@ -465,8 +470,8 @@ def test_mutation_target_containment() -> None:
         spec_rel.write_text(
             'mutations:\n  - id: M01\n    file: "../ext_target.sv"\n    old: "EXT_ORIG"\n    new: "MUT"\n',
             encoding="utf-8")
-        r_rel = tool_run_mutation(str(wd), str(spec_rel), ["false"], min_score=0.0)
-        assert r_rel["ok"]
+        r_rel = tool_run_mutation(str(wd), str(spec_rel), ["true"], min_score=0.0)
+        assert not r_rel["ok"] and r_rel["data"]["evaluated"] == 0
         assert any(x["status"] == "ERROR" for x in r_rel["data"]["results"])
         assert outside.read_text(encoding="utf-8") == "EXT_ORIG\n"
 
@@ -478,8 +483,8 @@ def test_mutation_target_containment() -> None:
         spec_link.write_text(
             'mutations:\n  - id: M01\n    file: "link.sv"\n    old: "EXT2_ORIG"\n    new: "MUT"\n',
             encoding="utf-8")
-        r_link = tool_run_mutation(str(wd), str(spec_link), ["false"], min_score=0.0)
-        assert r_link["ok"]
+        r_link = tool_run_mutation(str(wd), str(spec_link), ["true"], min_score=0.0)
+        assert not r_link["ok"] and r_link["data"]["evaluated"] == 0
         assert any(x["status"] == "ERROR" and "inside the working directory" in x["detail"]
                    for x in r_link["data"]["results"]), r_link["data"]["results"]
         assert outside2.read_text(encoding="utf-8") == "EXT2_ORIG\n"
@@ -490,9 +495,17 @@ def test_mutation_target_containment() -> None:
         spec_ok.write_text(
             'mutations:\n  - id: M01\n    file: "good.sv"\n    old: "assign y = 1;"\n    new: "assign y = 0;"\n',
             encoding="utf-8")
-        r_ok = tool_run_mutation(str(wd), str(spec_ok), ["false"], min_score=100.0)
+        # 合法目标仍正常变异并还原。test_cmd 必须「baseline 通过、变异后失败」
+        # 才是真实可用的检测命令：grep 断言 good.sv 里仍是 assign y = 1。
+        # 旧测试用 ["false"]（永远失败）——那正是缺陷 113 里"坏 test_cmd 造出
+        # 假 100% 得分"的情形，现在会被 baseline 检查挡掉。
+        r_ok = tool_run_mutation(
+            str(wd), str(spec_ok),
+            ["grep", "-q", "assign y = 1;", "good.sv"], min_score=100.0)
         assert r_ok["ok"], r_ok.get("error")
-        assert r_ok["data"]["killed"] == 1
+        assert r_ok["data"]["killed"] == 1, r_ok["data"]
+        assert r_ok["data"]["evaluated"] == 1
+        assert r_ok["data"]["baseline"]["returncode"] == 0
         assert "assign y = 1;" in (wd / "good.sv").read_text(encoding="utf-8")  # 已还原
 
 
@@ -788,13 +801,15 @@ def test_s1_sv_literal_constant_stub() -> None:
     '0/'1 / 实数，同时保持「含标识符/运算符的表达式」不误报。
     """
     print("coverage: S1 catches SV literal constant stubs (1'b0 / '0 / 8'hFF / 0.0)")
-    from fpga_toolbox.tb_linter import scan_handshake
+    # S1 属 silent_pass 组（缺陷 113 从 scan_handshake 迁到 scan_sv_silent_pass）：
+    # 用 scan_handshake 测它等于在测一个"规则路由错了"的实现。
+    from fpga_toolbox.tb_linter import scan_sv_silent_pass
 
     def _scan(fn_body: str) -> list:
         with tempfile.TemporaryDirectory() as td:
             tb = Path(td) / "tb.sv"
             tb.write_text("module tb;\n" + fn_body + "\nendmodule\n", encoding="utf-8")
-            return [i["code"] for i in scan_handshake(tb)]
+            return [i["code"] for i in scan_sv_silent_pass(tb)]
 
     stubs = [
         ("function int chk();\nreturn 0;\nendfunction"),
@@ -1359,6 +1374,291 @@ def test_power_on_reset_names_detected() -> None:
         assert r["ok"], f"emit still blocked on por_n: {str(r.get('error'))[:200]}"
 
 
+def test_review_fixes_mutation_baseline_and_accounting() -> None:
+    """Defect 113: run_mutation 无 baseline 预检 + ERROR 计入 survived 分母。
+
+    旧实现只看「变异后 test_cmd 非零」就判 KILLED。若 test_cmd 本身是坏的
+    （写错名字 / 缺二进制 / 测试台本来就失败），每个变异都以非零退出 → 全部
+    KILLED → **假 100% 变异得分**（分数满格但一个故障都没验）。另外
+    survived = total - killed 把 status="ERROR"（缺文件/越界）也算成存活并
+    留在分母里，污染「测试台没杀掉的故障」这一语义。
+    """
+    print("coverage: run_mutation baseline precheck + ERROR/SKIP excluded from score")
+    from fpga_toolbox.mutation_runner import tool_run_mutation
+
+    with tempfile.TemporaryDirectory() as td:
+        wd = Path(td)
+        (wd / "dut.sv").write_text("assign q = clk;\n", encoding="utf-8")
+        (wd / "m.yaml").write_text(
+            'mutations:\n  - id: M1\n    file: "dut.sv"\n'
+            '    old: "assign q = clk;"\n    new: "assign q = 0;"\n', encoding="utf-8")
+
+        # 1) baseline 就失败 => 必须 fail-fast，且一个字节都不能改
+        r = tool_run_mutation(str(wd), str(wd / "m.yaml"), ["false"], min_score=0.0)
+        assert not r["ok"], "broken test_cmd must not produce a mutation score"
+        assert "Baseline" in r["error"], r["error"]
+        assert (wd / "dut.sv").read_text(encoding="utf-8") == "assign q = clk;\n"
+
+        # 2) 命令不存在 => 结构化错误而不是 FileNotFoundError 裸堆栈
+        r2 = tool_run_mutation(str(wd), str(wd / "m.yaml"),
+                               ["definitely_not_a_binary_xyz_113"], min_score=0.0)
+        assert not r2["ok"] and "not executable" in r2["error"], r2.get("error")
+
+        # 3) 正常路径：baseline 通过 -> 变异后检测命令失败 -> 真 KILLED
+        r3 = tool_run_mutation(str(wd), str(wd / "m.yaml"),
+                               ["grep", "-q", "assign q = clk;", "dut.sv"], min_score=0.0)
+        assert r3["ok"], r3.get("error")
+        d3 = r3["data"]
+        assert d3["killed"] == 1 and d3["evaluated"] == 1 and d3["survived"] == 0
+        assert d3["mutation_score"] == 100.0
+        assert d3["baseline"]["returncode"] == 0
+        assert (wd / "dut.sv").read_text(encoding="utf-8") == "assign q = clk;\n"
+
+        # 4) ERROR 的变异不进分母：1 个合法变异存活 + 1 个缺文件
+        (wd / "m2.yaml").write_text(
+            'mutations:\n'
+            '  - id: OK\n    file: "dut.sv"\n'
+            '    old: "assign q = clk;"\n    new: "assign q = 0;"\n'
+            '  - id: BAD\n    file: "nope.sv"\n'
+            '    old: "x"\n    new: "y"\n', encoding="utf-8")
+        r4 = tool_run_mutation(str(wd), str(wd / "m2.yaml"), ["true"], min_score=0.0)
+        d4 = r4["data"]
+        assert d4["total"] == 2 and d4["errors"] == 1 and d4["evaluated"] == 1, d4
+        assert d4["survived"] == 1, d4
+        assert d4["mutation_score"] == 0.0, d4
+
+        # 5) 全 ERROR => 分数未定义，必须 ok=False（不是 0% 或 100%）
+        (wd / "m3.yaml").write_text(
+            'mutations:\n  - id: B1\n    file: "nope.sv"\n'
+            '    old: "x"\n    new: "y"\n', encoding="utf-8")
+        r5 = tool_run_mutation(str(wd), str(wd / "m3.yaml"), ["true"], min_score=0.0)
+        assert not r5["ok"] and "No mutation could be evaluated" in r5["error"], r5.get("error")
+
+
+def test_review_fixes_index_repo_and_linter_routing() -> None:
+    """Defect 114: index_repo include 覆盖 + lint_tb 规则路由/前缀盲区/S4 字符串绕过。
+
+    * index_repo：`include 让子模块出现在多个文件的解析结果里，旧实现两个都处理，
+      后者用顶层文件源码算 instantiated_modules/includes，把顶层的例化与 include
+      **覆盖**到子模块上（实测 datapath 被错标 includes=["datapath.v"]）。
+    * lint_tb：S1 写在 scan_handshake 里（`rules=["silent_pass"]` 跳过它、
+      `rules=["handshake"]` 反而报它）；`_IFACE_RE` 的 `[sm]_[ap]x[i]` 匹配不了
+      s_apb/m_apb；R2/R4 写死 `axi.` 前缀，s_axi./m_axi./裸信号全部漏报；
+      S4 用朴素 `//` 剥离且不剥字符串，`$display("no error(s)")` 冒充判定。
+    """
+    print("coverage: index_repo include ownership + lint_tb rule routing/prefix/string")
+    from fpga_toolbox.repo_indexer import tool_index_repo
+    from fpga_toolbox.tb_linter import tool_lint_tb
+
+    # ---- index_repo：include 不得污染子模块 ----
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "rtl").mkdir()
+        (root / "rtl" / "datapath.v").write_text(
+            "module datapath(input logic a, output logic y);\nassign y = ~a;\nendmodule\n",
+            encoding="utf-8")
+        (root / "rtl" / "sub.v").write_text(
+            "module sub(input logic a, output logic y);\nassign y = a;\nendmodule\n",
+            encoding="utf-8")
+        (root / "rtl" / "top.v").write_text(
+            '`include "datapath.v"\n'
+            "module top(input logic a, output logic y);\n"
+            "  logic md;\n  datapath u_dp(.a(a), .y(md));\n  sub u_sub(.a(md), .y(y));\n"
+            "endmodule\n", encoding="utf-8")
+        r = tool_index_repo(str(root))
+        assert r["ok"], r.get("error")
+        mods = r["data"]["modules"]
+        assert mods["datapath"]["file_path"] == "rtl/datapath.v", mods["datapath"]
+        assert mods["datapath"]["instantiated_modules"] == [], mods["datapath"]
+        assert mods["datapath"]["includes"] == [], mods["datapath"]
+        assert mods["top"]["instantiated_modules"] == ["datapath", "sub"], mods["top"]
+        assert mods["top"]["includes"] == ["datapath.v"], mods["top"]
+
+    # ---- lint_tb：S1 必须路由到 silent_pass ----
+    def _lint(src: str, rules, suffix=".sv") -> list:
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / f"tb{suffix}"
+            f.write_text(src, encoding="utf-8")
+            res = tool_lint_tb(str(f), rules=rules)
+            return sorted({i["code"] for i in res["data"]["findings"]})
+
+    stub = "module tb;\nfunction int chk();\nreturn 0;\nendfunction\nendmodule\n"
+    assert "S1" in _lint(stub, ["silent_pass"]), "S1 missed when scanning silent_pass only"
+    assert "S1" not in _lint(stub, ["handshake"]), "S1 wrongly emitted by handshake scanner"
+
+    # ---- lint_tb：R2/R4 必须覆盖 s_axi./m_axi./裸信号 ----
+    for sig in ("axi", "s_axi", "m_axi"):
+        r4 = _lint(f"module tb;\ninitial begin\nwhile (!{sig}.bvalid) @(posedge clk);\n"
+                   f"{sig}.bready <= 1'b0;\nend\nendmodule\n", ["handshake"])
+        assert "R4" in r4, (sig, r4)
+        r2 = _lint(f"module tb;\nalways @(posedge clk) begin\nif ({sig}.bvalid) begin\n"
+                   f"{sig}.bready <= 1'b0;\nend\nend\nendmodule\n", ["handshake"])
+        assert "R2" in r2, (sig, r2)
+
+    # ---- lint_tb：S4 不能被字符串里的 "error(" 绕过 ----
+    bypass = ('module tb;\ninitial begin\n'
+              '$display("no error(s)");\n$finish;\nend\nendmodule\n')
+    assert "S4" in _lint(bypass, ["silent_pass"]), "string literal bypassed S4"
+    judged = ('module tb;\ninitial begin\n'
+              'if (1) $display("x"); else $error("bad");\n$finish;\nend\nendmodule\n')
+    assert "S4" not in _lint(judged, ["silent_pass"]), "real judge wrongly flagged S4"
+
+
+def test_review_fixes_registry_parser_and_types() -> None:
+    """Defect 115: call_tool 的 None/enum/bool 处理与 sv_parser 的整数类型宽度。
+
+    * `{"protocol": None}`（MCP 客户端把省略的可选字段序列化成 null）被 enum
+      校验拒成"非法枚举值"，而类型校验明确写了「显式 None 交给函数处理」。
+    * `{"out_dir": None}` 同时通过类型校验（None 跳过）和 required 校验（key 存在），
+      把 None 漏进函数体，报出与参数无关的下游错误。
+    * `"number"` 类型接受 bool（isinstance(True, (int, float)) 为真）。
+    * call_tool 原地改写调用方 dict（boolean 字符串强转）。
+    * sv_parser：byte/shortint/int/longint 被当成 1 位；`$clog2(1)` 返回 1（应为 0）。
+    """
+    print("coverage: call_tool None/enum/bool + sv_parser int-type widths and $clog2")
+    from fpga_toolbox.core.sv_parser import eval_int_expr, parse_sv_file
+
+    # ---- call_tool ----
+    r = call_tool("emit_testbench", {"rtl_file": "x.sv", "out_dir": "/tmp/o", "protocol": None})
+    assert "Invalid value None" not in str(r.get("error")), str(r["error"])[:160]
+
+    r = call_tool("emit_testbench", {"rtl_file": "x.sv", "out_dir": None, "protocol": "apb"})
+    assert not r["ok"] and "out_dir" in r["error"] and "required" in r["error"], r.get("error")
+
+    r = call_tool("run_mutation", {"workdir": "/tmp", "mutation_spec": "/tmp/x",
+                                   "test_cmd": ["true"], "min_score": True})
+    assert not r["ok"] and "boolean" in r["error"], r.get("error")
+
+    args = {"rtl_file": "x.sv", "out_dir": "/tmp/o", "protocol": "apb"}
+    snapshot = dict(args)
+    call_tool("emit_testbench", args)
+    assert args == snapshot, f"call_tool mutated caller dict: {args}"
+
+    # ---- sv_parser 整数类型宽度 ----
+    src = ("module intty(\n  input logic clk,\n  output int o1,\n  output byte o2,\n"
+           "  output shortint o3,\n  output longint o4\n);\nendmodule\n")
+    want = {"o1": 32, "o2": 8, "o3": 16, "o4": 64}
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(src, encoding="utf-8")
+        for backend in ("builtin", "slang"):
+            mods = parse_sv_file(f, backend=backend)
+            if not mods:
+                continue
+            got = {p.name: p.width for p in mods[0].ports}
+            for k, v in want.items():
+                assert got.get(k) == v, (backend, k, got)
+
+    # ---- $clog2 边界（IEEE 1800：clog2(0)=clog2(1)=0）----
+    for n, exp_v in ((0, 0), (1, 0), (2, 1), (3, 2), (4, 2), (8, 3), (9, 4), (16, 4), (17, 5)):
+        assert eval_int_expr(f"$clog2({n})", {}) == exp_v, (n, eval_int_expr(f"$clog2({n})", {}))
+
+
+
+def test_review_fixes_artifact_escaping_and_polarity() -> None:
+    """Defect 116: 生成产物里的插值未转义 + 复位极性靠脆弱字符串 replace。
+
+    * `_emit_cocotb` 用 `json.loads(r` + 三引号 + `{regs}` + 三引号 + `)` 嵌入契约 JSON：寄存器描述里
+      只要出现三引号（连续三个双引号）或结尾反斜杠，生成的 cocotb 测试台就是
+      SyntaxError，
+      而工具已报 ok=True。
+    * `_emit_wrap` 把 `os.environ["WAVE_FILE"]` 原文插进 `$dumpfile("...")`：
+      Windows 路径 `C:\tmp\w.vcd`（含反斜杠）或含引号的路径会生成非法 SV。
+    * active-high 复位靠两处 `tb_src.replace(", rst = 0", ...)` 打补丁，
+      模板缩进一变就静默匹配不到 —— TB 带着反相复位跑，表现为莫名 FAIL/超时。
+    """
+    print("coverage: artifact escaping (cocotb JSON / WAVE_FILE) + reset polarity")
+
+    pm = {k: f"s_axil_{k}" for k in (
+        "awaddr", "awvalid", "awready", "wdata", "wstrb", "wvalid", "wready",
+        "bresp", "bvalid", "bready", "araddr", "arvalid", "arready",
+        "rdata", "rresp", "rvalid", "rready")}
+
+    def _emit_contract(regs: list) -> dict:
+        spec = {
+            "schema_version": "1.0",
+            "boundary": {"module_name": "m", "clock": {"port": "clk"},
+                         "reset": {"port": "rst_n"}, "axi4_lite": {"port_map": pm}},
+            "test_plan": {"register_rules": regs},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / "s.json"
+            sp.write_text(json.dumps(spec), encoding="utf-8")
+            r = call_tool("emit_testbench", {"spec_path": str(sp), "out_dir": str(Path(td) / "out")})
+            arts = {}
+            if r["ok"]:
+                for k, v in r["data"]["artifacts"].items():
+                    p_ = Path(v)
+                    arts[k] = p_.read_text(encoding="utf-8") if p_.is_file() else ""
+            return r, arts
+
+    # 1) 描述里含三引号 + 结尾反斜杠：cocotb 源码必须仍是合法 Python
+    r, arts = _emit_contract([
+        {"rule_id": "R1", "name": "CTRL", "offset": 0, "access": "RW",
+         "reset_value": 0, "description": 'evil """ quote'},
+        {"rule_id": "R2", "name": "BACK", "offset": 4, "access": "RW",
+         "reset_value": 0, "description": "ends with backslash \\"},
+    ])
+    assert r["ok"], str(r.get("error"))[:200]
+    import ast as _ast
+    _ast.parse(arts["cocotb_testbench"])  # SyntaxError 会直接让测试失败
+    assert "json.loads(" in arts["cocotb_testbench"]
+
+    # 2) WAVE_FILE 含反斜杠/引号：$dumpfile 的参数必须是合法 SV 字符串
+    import os as _os
+    _old = _os.environ.get("WAVE_FILE")
+    try:
+        _os.environ["WAVE_FILE"] = 'C:\\tmp\\w"x.vcd'
+        _r2, _arts2 = _emit_contract(
+            [{"rule_id": "R1", "name": "CTRL", "offset": 0, "access": "RW", "reset_value": 0}])
+        assert _r2["ok"], str(_r2.get("error"))[:200]
+        wrap = _arts2["unit_isolation_wrapper"]
+        dump_lines = [ln.strip() for ln in wrap.splitlines() if "$dumpfile(" in ln]
+        assert dump_lines, wrap[:400]
+        for ln in dump_lines:
+            if ln.startswith('$dumpfile("'):
+                # 引号必须成对且中间没有未转义的裸引号/反斜杠。
+                # 合法形态形如 $dumpfile("C:/tmp/wx.vcd"); —— 剥掉首尾的引号后
+                # payload 里不能还有裸引号或反斜杠。
+                payload = ln[len('$dumpfile("'):]
+                payload = payload[:payload.rindex('"')]
+                assert '"' not in payload, ln
+                assert "\\" not in payload, ln
+    finally:
+        if _old is None:
+            _os.environ.pop("WAVE_FILE", None)
+        else:
+            _os.environ["WAVE_FILE"] = _old
+
+    # 3) active-high 复位：生成的 TB 必须「声明 =1 / 释放 =0」，且能真跑通
+    rtl = (
+        "`timescale 1ns/1ps\n"
+        "module apb_ah (\n"
+        "  input logic pclk, input logic preset,\n"
+        + "".join(f"  input logic {s_},\n" for s_ in ("psel", "penable", "pwrite"))
+        + "  input logic [7:0] paddr, input logic [31:0] pwdata,\n"
+        "  input logic [3:0] pstrb,\n"
+        "  output logic pready,\n  output logic [31:0] prdata,\n  output logic pslverr\n"
+        ");\n"
+        "  logic [31:0] r;\n"
+        "  always_ff @(posedge pclk) begin\n"
+        "    if (preset) r <= 32'h0;\n"
+        "    else if (psel && penable && pwrite) r <= pwdata;\n"
+        "  end\n"
+        "  assign prdata = r; assign pready = 1'b1; assign pslverr = 1'b0;\n"
+        "endmodule\n")
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+        r3 = call_tool("emit_testbench", {
+            "rtl_file": str(f), "out_dir": str(Path(td) / "out"), "protocol": "apb"})
+        assert r3["ok"], str(r3.get("error"))[:300]
+        tb = Path(r3["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        # 声明处：, preset = 1（断言态）；释放处：preset = 0;
+        assert "preset = 1" in tb, tb[:600]
+        assert "preset = 0;" in tb, tb[:600]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1384,6 +1684,10 @@ def main() -> int:
     test_ddr_hbm_templates_follow_port_widths()
     test_axi4_template_follows_id_len_widths()
     test_power_on_reset_names_detected()
+    test_review_fixes_mutation_baseline_and_accounting()
+    test_review_fixes_index_repo_and_linter_routing()
+    test_review_fixes_registry_parser_and_types()
+    test_review_fixes_artifact_escaping_and_polarity()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

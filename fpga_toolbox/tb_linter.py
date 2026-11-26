@@ -33,7 +33,11 @@ from .core.types import err_result, ok_result
 # interface 端口的 blocking drive：`instance.signal = value`（点号层次赋值）。
 # 覆盖常见 AXI/APB interface 实例命名约定：*_if / *_bus / axi / apb / s_axi /
 # m_axi / s_apb / u_axi / axi_m 等。C1/C2 只在 @(posedge) 上下文触发，误报风险可控。
-_IFACE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*_(?:if|bus)|[sm]_[ap]x[i]|axi|apb)\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)", re.IGNORECASE)
+# SV 字符串字面量（判定前要剥掉，防止 "no error(s)" 这类内容冒充判定构造）。
+_STR_LIT_RE = re.compile(r'"(?:[^"\\]|\\.)*"', re.S)
+_IFACE_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*_(?:if|bus)|[sm]_(?:axi|axil|apb)|axi|apb)"
+    r"\.[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)", re.IGNORECASE)
 _WAIT_RE = re.compile(r"@\s*\(\s*posedge|@\s*\(\s*negedge|repeat\s*\(|#\s*\d")
 _READY_OF = {
     "AWVALID": "AWREADY",
@@ -204,7 +208,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
         # R4：等 VALID 后立刻拉低 READY。大小写不敏感（与 R1/R3 分支一致，缺陷 104）：
         # 真实第三方 TB 大量用小写（axi.bvalid / bready），旧正则 [A-Z_]+ 只认大写，
         # 小写 TB 静默漏报 R4。
-        m4 = re.search(r"while\s*\(\s*!\s*(?:\()?\s*axi\.([A-Za-z_]+VALID)", ln, re.IGNORECASE)
+        m4 = re.search(r"while\s*\(\s*!\s*(?:\()?\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_]+VALID)", ln, re.IGNORECASE)
         if m4:
             sig4 = m4.group(1)
             ready4 = _READY_OF.get(sig4.upper())
@@ -237,7 +241,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                         break
         # R2：if(VALID) 分支内立刻拉低 READY。大小写不敏感（与 R1/R3/R4 一致，
         # 缺陷 104 同根）：真实第三方 TB 大量用小写，旧正则只认大写，静默漏报 R2。
-        mif = re.search(r"if\s*\(\s*axi\.([A-Za-z_]+VALID)\s*\)", ln, re.IGNORECASE)
+        mif = re.search(r"if\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_]+VALID)\s*\)", ln, re.IGNORECASE)
         if mif:
             sig = mif.group(1)
             ready = _READY_OF.get(sig.upper())
@@ -266,6 +270,19 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                         "message": f"Checks {sig} without visible prior {ready}=1.",
                         "context": raw.strip(),
                     })
+    return issues
+
+
+def _scan_s1_sv_function_stubs(path: Path, lines: List[str]) -> List[Dict[str, Any]]:
+    """S1（SV function 常量 stub）：验证 helper 永远返回常量、不含真实判定。
+
+    为什么单独成函数并从 scan_handshake 移出：S1 是 **silent_pass** 规则，
+    旧实现把它写在 scan_handshake 里，导致
+      * `lint_tb(target, rules=["silent_pass"])` **完全跳过** SV stub 检测；
+      * `rules=["handshake"]` 反而意外报出 S1（规则路由到错误的扫描器）。
+    """
+    out: List[Dict[str, Any]] = []
+    for i, ln in enumerate(lines):
         # S1 扩展（SV function stub）：SV 的 function 是多行的，旧 S1 正则只匹配
         # shell 单行 stub（func() { return 0; }）。这里识别 SV function 内只有
         # return <常量>; 的 stub —— 真实踩坑：SV 验证 helper 函数返回常量 0/1
@@ -298,14 +315,14 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
             # function 体只有 return 常量语句（无 if/else/case/for/while）→ stub
             if rets and len(body) <= 4 and not any(
                     re.search(r"\b(if|else|case|for|while)\b", b) for b in body):
-                issues.append({
+                out.append({
                     "severity": "ERROR",
                     "code": "S1",
                     "path": f"{path}:{i + 1}",
                     "message": "Verification helper function returns only a constant (stub).",
                     "context": lines[i].strip(),
                 })
-    return issues
+    return out
 
 
 def scan_sv_silent_pass(path: Path) -> List[Dict[str, Any]]:
@@ -326,11 +343,21 @@ def scan_sv_silent_pass(path: Path) -> List[Dict[str, Any]]:
       * 且不存在 if(...) 与 $error/$fatal 的邻近组合
     """
     text = path.read_text(encoding="utf-8", errors="replace")
-    # 去掉行注释与块注释，避免注释里的关键字造成漏报/误报
+    lines = text.splitlines()
+    # S1（SV function 常量 stub）属于 silent_pass 规则，必须先跑：它和 S4
+    # 是同一类「验证根本没有判定」的检查，返回值要合并。
+    findings: List[Dict[str, Any]] = _scan_s1_sv_function_stubs(path, lines)
+    # 去掉行注释与块注释，避免注释里的关键字造成漏报/误报。
+    # 注意：必须用 _strip_comment（跳过字符串内的 //）而不是朴素的
+    # re.sub(r"//[^\n]*")，且判定前要一并去掉字符串字面量 —— 否则
+    # `$display("no error(s)")` 里的 `error(` 会被当成判定构造，把真正的
+    # S4（只打印不判定）静默放行（字符串内假判定）。
     code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    code = re.sub(r"//[^\n]*", "", code)
+    stripped_lines = [_strip_comment(ln) for ln in code.splitlines()]
+    code = "\n".join(stripped_lines)
+    code = _STR_LIT_RE.sub('""', code)
     if not re.search(r"\$display\b", code):
-        return []
+        return findings
     judges = [
         r"\bassert\b", r"\$error\b", r"\$fatal\b", r"\$assert\b", r"\$assertoff\b",
         r"\$\w*assert\w*\b",
@@ -339,14 +366,14 @@ def scan_sv_silent_pass(path: Path) -> List[Dict[str, Any]]:
     ]
     for pat in judges:
         if re.search(pat, code, re.IGNORECASE):
-            return []
+            return findings
     # 定位第一个 $display，用它作为证据行号
     line_no = 1
     for i, ln in enumerate(text.splitlines(), 1):
         if re.search(r"\$display\b", ln):
             line_no = i
             break
-    return [{
+    findings.append({
         "severity": "ERROR",
         "code": "S4",
         "path": f"{path}:{line_no}",
@@ -355,8 +382,9 @@ def scan_sv_silent_pass(path: Path) -> List[Dict[str, Any]]:
             "(no assert/$error/$fatal/check task). The simulation can only pass; "
             "it never expresses failure."
         ),
-        "context": text.splitlines()[line_no - 1].strip(),
-    }]
+        "context": lines[line_no - 1].strip(),
+    })
+    return findings
 
 
 def scan_silent_pass(path: Path) -> List[Dict[str, Any]]:

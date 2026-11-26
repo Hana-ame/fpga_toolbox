@@ -1,4 +1,4 @@
-"""Central tool registry, MCP JSON Schema exporter, and uniform dispatcher (12 atomic tools)."""
+"""Central tool registry, MCP JSON Schema exporter, and uniform dispatcher (13 atomic tools)."""
 
 from __future__ import annotations
 
@@ -204,6 +204,10 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if tool_name not in TOOL_REGISTRY:
         return err_result(tool_name, f"Unknown tool '{tool_name}'.")
     fn: Callable[..., Dict[str, Any]] = TOOL_REGISTRY[tool_name]["fn"]
+    # 复制一份再操作：下面的 boolean 字符串强转会原地写 params[pname]。
+    # 直接改写调用方传进来的 dict 是隐蔽的副作用（调用方复用同一个 dict 发
+    # 第二次调用时会拿到"被偷偷改成 bool"的值，而它自己以为还是 "true"）。
+    params = dict(params)
     # 参数名校验：schema 声明 additionalProperties: false，未知参数名应给出
     # 明确错误，而非让 fn(**params) 抛模糊的 TypeError（agent 传错参数名时
     # 能立即定位，而不是看到 "got an unexpected keyword argument"）。
@@ -238,11 +242,11 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if val is None:
             continue  # Optional：显式 None 交给函数处理
         # bool 是 int 子类：integer 参数不接受 True/False
-        if ptype == "integer" and isinstance(val, bool):
+        if ptype in ("integer", "number") and isinstance(val, bool):
             return err_result(
                 tool_name,
                 f"Invalid type for parameter '{pname}' of tool '{tool_name}': "
-                f"expected integer, got boolean.",
+                f"expected {ptype}, got boolean.",
             )
         if not isinstance(val, expected):
             # 数字类参数允许字符串：MCP 客户端常把 JSON number 序列化成 str，
@@ -284,7 +288,11 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     # `protocol='ddr3'` 报错文本完全一致，无法区分。
     for pname, pspec in schema_props.items():
         allowed = pspec.get("enum")
-        if allowed and pname in params and params[pname] not in allowed:
+        # Optional 参数：MCP 客户端常把省略的可选字段序列化成 null。
+        # 上面类型校验明确写了「显式 None 交给函数处理」，enum 校验必须一致，
+        # 否则 {"protocol": null} 会被判成"非法枚举值"。
+        if allowed and pname in params and params[pname] is not None \
+                and params[pname] not in allowed:
             return err_result(
                 tool_name,
                 f"Invalid value {params[pname]!r} for parameter '{pname}' of tool '{tool_name}'. "
@@ -297,7 +305,11 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     # （实测在 /tmp/dircwd 凭空出现 4 个 .sv/.py）并返回 ok=True。
     # 注意：只校验「缺失」，不校验空字符串——空值语义由各工具自己决定。
     schema_required = TOOL_REGISTRY[tool_name].get("inputSchema", {}).get("required") or []
-    missing_required = [k for k in schema_required if k not in params]
+    # 显式 None 不算"提供了"：{"out_dir": None} 过去同时通过类型校验（None 跳过）
+    # 与 required 校验（key 存在），然后把 None 漏进函数体，报出与参数无关的
+    # 下游错误（实测 "RTL file not found: x.sv" —— 明明问题是 out_dir 是 None）。
+    missing_required = [k for k in schema_required
+                        if k not in params or params[k] is None]
     if missing_required:
         return err_result(
             tool_name,

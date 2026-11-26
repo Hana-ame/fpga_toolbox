@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import asdict
@@ -271,7 +270,11 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
 
     obs_s = "\n".join(obs_decls) + ("\n\n" if obs_decls else "")
     # 波形落盘路径：优先 WAVE_FILE（若外部 export 了就用），否则模块名兜底。
-    wave_file = os.environ.get("WAVE_FILE") or f"{b.module_name}_axil_wrap.vcd"
+    # 注意：环境变量会被**原文插进生成的 SV 字符串字面量** `$dumpfile("...")`。
+    # 含 `"` 或 `\` 的路径（Windows 路径 `C:\tmp\w.vcd` 就是典型）会生成
+    # 语法错误/转义错误的 SV，而工具已报 ok=True。这里转义成合法的 SV 字符串。
+    _raw_wave = os.environ.get("WAVE_FILE") or f"{b.module_name}_axil_wrap.vcd"
+    wave_file = _raw_wave.replace("\\", "/").replace('"', "")
     conn_s = ",\n".join(conns)
     return f"""`timescale 1ns/1ps
 module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W={ax.data_width}, STRB_W={ax.strb_width}) (
@@ -389,8 +392,12 @@ def _emit_bind(u: CompiledUnitIR) -> str:
 
 def _emit_cocotb(u: CompiledUnitIR) -> str:
     b, ax, tp = u.boundary, u.boundary.axil, u.test_plan
-    regs = json.dumps([asdict(r) for r in tp.register_rules], indent=2)
-    ills = json.dumps([asdict(i) for i in tp.illegal_addr_rules], indent=2)
+    # 用 repr() 而不是 json.loads(r"""...""")：寄存器/非法地址描述来自用户契约，
+    # 只要出现 `"""`（或结尾反斜杠）就会让生成的 Python 源码 SyntaxError ——
+    # 而工具已经报 ok=True，用户拿到的是一个根本跑不起来的 cocotb 测试台。
+    # repr() 产出的是合法的 Python 字符串字面量，任意内容都能安全往返。
+    regs = repr([asdict(r) for r in tp.register_rules])
+    ills = repr([asdict(i) for i in tp.illegal_addr_rules])
     rst_assert = 0 if b.reset.active_low else 1
     rst_idle = 1 - rst_assert
     return f'''import json, random, cocotb
@@ -399,8 +406,8 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
 
-REGS = json.loads(r"""{regs}""")
-ILLS = json.loads(r"""{ills}""")
+REGS = json.loads({regs!r})
+ILLS = json.loads({ills!r})
 STRESS = {{"random_backpressure": {tp.stress_profile.random_backpressure}, "iterations": {tp.stress_profile.iterations}, "seed": {tp.stress_profile.seed}}}
 REPORT = {{"module": "{b.module_name}", "seed": {tp.stress_profile.seed},
           "completed": False, "checks": []}}

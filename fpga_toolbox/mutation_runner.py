@@ -139,6 +139,59 @@ def tool_run_mutation(
             diagnostics=residuals,
         )
 
+    # ---- baseline 预检（变异前先跑一次未变异的测试命令）----
+    # 背景（真实踩坑）：旧实现只看「变异后 test_cmd 是否非零」就判 KILLED。若
+    # test_cmd 本身是坏的（写了错的名字、缺二进制、或测试台**本来就失败**），
+    # 那么每个变异都以非零退出 → 全部判 KILLED → 报 **100% 变异得分**。
+    # 这是最严重的静默假通过：分数满格、结论「测试台能杀掉所有故障」，而实际
+    # 一个故障都没验。变异得分的定义前提是「未变异版本必须通过」，所以必须在
+    # 动任何源码之前先把这个前提验掉，不成立就 fail-fast（一行源码都不改）。
+    baseline_detail = ""
+    try:
+        baseline = subprocess.run(
+            test_cmd, cwd=str(wd), capture_output=True, text=True,
+            timeout=timeout_sec, check=False,
+        )
+    except FileNotFoundError as exc:
+        # 旧实现的 subprocess.run 只 catch TimeoutExpired，命令不存在会让
+        # FileNotFoundError 直接冒泡成裸堆栈（CLI 下就是 traceback），
+        # 用户看到 Python 异常而不是「test_cmd 的第一个词不是可执行文件」。
+        return err_result(
+            "run_mutation",
+            f"test_cmd is not executable: {exc}. The first element must be a "
+            "command on PATH (or an absolute path). No RTL was modified.",
+            data={"baseline": {"ran": False, "error": str(exc)}},
+        )
+    except subprocess.TimeoutExpired:
+        return err_result(
+            "run_mutation",
+            f"Baseline run of test_cmd exceeded the {timeout_sec}s timeout. "
+            "Raise timeout_sec, or the test command is hanging. No RTL was modified.",
+            data={"baseline": {"ran": True, "timed_out": True}},
+        )
+    baseline_detail = ((baseline.stdout or "") + "\n" + (baseline.stderr or ""))[-2000:]
+    if baseline.returncode != 0:
+        return err_result(
+            "run_mutation",
+            f"Baseline (unmutated) test run already fails with exit code "
+            f"{baseline.returncode}. A passing baseline is required: with a "
+            "broken or already-failing test_cmd every mutation exits non-zero and "
+            "would be counted as KILLED, reporting a false 100% mutation score. "
+            "No RTL was modified. Fix test_cmd first.",
+            data={
+                "baseline": {
+                    "ran": True, "returncode": baseline.returncode,
+                    "stderr_tail": (baseline.stderr or "")[-1000:],
+                    "stdout_tail": (baseline.stdout or "")[-1000:],
+                }
+            },
+            diagnostics=[{
+                "severity": "ERROR", "code": "E031", "path": "test_cmd",
+                "message": f"Baseline test run failed (rc={baseline.returncode}); "
+                           "mutation score would be meaningless.",
+            }],
+        )
+
     results: List[Dict[str, Any]] = []
     killed = 0
     wd_resolved = wd.resolve()
@@ -181,20 +234,48 @@ def tool_run_mutation(
         except subprocess.TimeoutExpired:
             killed += 1
             results.append({"id": m["id"], "status": "KILLED_TIMEOUT", "desc": m["desc"]})
+        except OSError as exc:
+            # 命令在 baseline 时还在、到某个变异时消失（被删/权限变了）——
+            # 这不是 KILLED（没测到任何东西），标 ERROR 并排除出分母。
+            results.append({"id": m["id"], "status": "ERROR",
+                            "detail": f"test_cmd could not be executed: {exc}", "desc": m["desc"]})
         finally:
             fp.write_bytes(original_bytes)
 
     total = len(mutations)
-    score = round((killed / total) * 100.0, 2) if total else 0.0
+    # ERROR / SKIP_UNMATCHED 不是「存活」——它们根本没被测到。旧实现用
+    # survived = total - killed 把它们算成 survived 并留在分母里：
+    # 一个文件写错就凭空多一个「存活变异」，让本来 100% 的分数掉到 50%，
+    # 而报告里 survived 的语义（「测试台没杀掉的故障」）被污染。
+    errors = sum(1 for r in results if r["status"] == "ERROR")
+    skipped = sum(1 for r in results if r["status"] == "SKIP_UNMATCHED")
+    evaluated = total - errors - skipped
+    survived = evaluated - killed
+    score = round((killed / evaluated) * 100.0, 2) if evaluated else 0.0
     data = {
         "workdir": str(wd.resolve()),
         "total": total,
+        "evaluated": evaluated,
         "killed": killed,
-        "survived": total - killed,
+        "survived": survived,
+        "errors": errors,
+        "skipped": skipped,
         "mutation_score": score,
         "min_score": min_score,
+        "baseline": {"ran": True, "returncode": baseline.returncode,
+                     "output_tail": baseline_detail},
         "results": results,
     }
+    # 一个变异都没评估到（全 ERROR / 全 SKIP）时不能说「0% 得分」了事：
+    # 分母是 0，任何 min_score 比较都无意义，必须显式失败。
+    if evaluated == 0:
+        return err_result(
+            "run_mutation",
+            f"No mutation could be evaluated ({errors} error(s), {skipped} unmatched "
+            f"out of {total}). The mutation score is undefined; check that spec "
+            "'file'/'old' patterns point at existing in-sandbox files.",
+            data=data,
+        )
     if score < min_score:
         # 分数低于门槛时仍带 data：调用方需要看到逐个变异的 killed/survived
         # 结果（哪些变异存活 = 测试盲区），否则只能看到一句「50% < 100%」。

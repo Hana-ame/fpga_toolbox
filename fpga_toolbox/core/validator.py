@@ -41,9 +41,30 @@ _SV_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def _to_int(val: Any, default: int = 0) -> int:
+    """把 spec 里的整数字段解析成 int；无法解析时返回 default 而不是抛。
+
+    背景（真实踩坑）：`offset` 早先已改成容错的 `_to_int_or_none`（缺陷 103），
+    但其余 17 处调用点（addr_width / data_width / reset_value / write_mask /
+    max_resp_cycles / iterations / width / seed ...）仍是裸 `int(str(val), 0)`。
+    契约 spec 由用户/AI 手写，`boundary.axi4_lite.addr_width: "abc"` 会让
+    `validate_contract` 直接抛 `ValueError: invalid literal for int() with
+    base 0: 'abc'` —— 裸堆栈、无字段定位、不进诊断码体系，与 offset 那条
+    修好的路径完全不一致。
+
+    返回 default 比返回 None 更合适：这些字段都有明确默认值，非法值退化为
+    默认不会让下游拿到 None 再二次崩溃；需要「必须报错」的字段
+    （offset）走 `_to_int_or_none` + E005 诊断。
+    """
     if val is None:
         return default
-    return val if isinstance(val, int) else int(str(val), 0)
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, int):
+        return val
+    try:
+        return int(str(val), 0)
+    except (ValueError, TypeError):
+        return default
 
 
 def _to_int_or_none(val: Any) -> Optional[int]:
@@ -219,6 +240,19 @@ def build_and_validate_ir(
     data_w = _to_int(axil_dict.get("data_width"), _to_int((apb_raw or {}).get("data_width"), 32))
     role = str(axil_dict.get("role", "slave")).lower()
     pm = {str(k): str(v) for k, v in axil_dict.get("port_map", {}).items()}
+
+    # 非法整数字段不再崩溃（_to_int 容错），但静默退化到默认值同样是假信息：
+    # 用户写了 addr_width: "abc" 会得到"一切正常"的 12 位默认值。给一条
+    # WARNING 说明该字段被忽略并用了默认值，值本身仍带在 message 里。
+    for _label, _raw, _eff in (
+        ("boundary.axi4_lite.addr_width", axil_dict.get("addr_width"), addr_w),
+        ("boundary.axi4_lite.data_width", axil_dict.get("data_width"), data_w),
+    ):
+        if _raw is not None and _to_int_or_none(_raw) is None:
+            diags.append(Diagnostic(
+                "WARNING", "W010", _label,
+                f"Ignoring non-integer value {_raw!r}; using default {_eff}.",
+            ))
 
     if has_axil:
         if data_w not in (32, 64):
