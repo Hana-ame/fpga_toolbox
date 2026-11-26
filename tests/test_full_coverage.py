@@ -3665,6 +3665,64 @@ def test_check_lines_and_suite_summary_precedence() -> None:
     assert r5["all_verified"] is True, r5
 
 
+def test_mutation_spec_non_object_entries_are_rejected() -> None:
+    """Defect 156: mutation spec 里的非对象元素不能被静默丢弃。
+
+    `load_mutations` 对非 dict 元素是 `continue`：
+
+        {"mutations": ["oops", {"id":"m1","file":"dut.sv","old":...,"new":...}]}
+        → total=1, evaluated=1, ok=True
+
+    `"oops"` 这条变异凭空消失，用户会以为 spec 里所有变异都跑了。全部是
+    `"oops"` 时更糟：total=0/evaluated=0，错误信息说
+    "0 error(s), 0 unmatched out of 0"，完全没提元素类型不对。
+    """
+    print("coverage: mutation spec non-object entries rejected")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "dut.sv").write_text(
+            "module dut (input logic a, output logic b);\n"
+            "  assign b = a;\nendmodule\n", encoding="utf-8")
+
+        def _run(name: str, spec) -> dict:
+            sp = root / name
+            sp.write_text(json.dumps(spec), encoding="utf-8")
+            return call_tool("run_mutation", {
+                "workdir": str(root), "mutation_spec": str(sp),
+                "test_cmd": ["true"], "min_score": 0})
+
+        # 全部是非对象 → 必须明确报错，不能说「0 个变异」
+        r = _run("all_bad.json", {"mutations": ["oops"]})
+        assert r["ok"] is False, r
+        err = str(r.get("error"))
+        assert "must be objects" in err, err[:250]
+        assert "silently skipped" in err, err[:250]
+        # 不能伪装成「没有可评估的变异」
+        assert "No mutation could be evaluated" not in err, err[:250]
+
+        # 混合：有效项 + 非对象 → 同样拒绝（否则非对象项静默消失）
+        r2 = _run("mixed.json", {"mutations": [
+            "oops",
+            {"id": "m1", "file": "dut.sv", "old": "assign b = a;", "new": "assign b = ~a;"}]})
+        assert r2["ok"] is False, r2
+        assert "must be objects" in str(r2.get("error")), str(r2.get("error"))[:250]
+
+        # 合法 spec 正常执行
+        r3 = _run("ok.json", {"mutations": [
+            {"id": "m1", "file": "dut.sv", "old": "assign b = a;", "new": "assign b = ~a;"}]})
+        assert r3["ok"] is True, str(r3.get("error"))[:250]
+        assert r3["data"]["total"] == 1, r3["data"]
+        assert r3["data"]["evaluated"] == 1, r3["data"]
+
+        # 省略 id 时仍自动生成确定性 id（合法用法，不误伤）
+        r4 = _run("noid.json", {"mutations": [
+            {"file": "dut.sv", "old": "assign b = a;", "new": "assign b = ~a;"}]})
+        assert r4["ok"] is True, str(r4.get("error"))[:250]
+        assert r4["data"]["results"][0]["id"] == "M01", r4["data"]["results"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3724,6 +3782,7 @@ def main() -> int:
     test_regfile_spec_type_and_value_validation()
     test_json_results_unnamed_entries_are_not_pass_evidence()
     test_check_lines_and_suite_summary_precedence()
+    test_mutation_spec_non_object_entries_are_rejected()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

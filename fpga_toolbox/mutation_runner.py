@@ -37,8 +37,13 @@ def load_mutations(spec_path: Path) -> List[Dict[str, str]]:
     if not isinstance(items, list):
         raise ValueError("Mutation spec must be a list or mapping with 'mutations' list.")
     out: List[Dict[str, str]] = []
+    _bad_elems: List[str] = []
     for idx, m in enumerate(items):
         if not isinstance(m, dict):
+            # 旧实现 `continue` 静默丢弃非对象元素：spec 里混进一个字符串
+            # （`mutations: ["oops", {...}]`）时，那条变异凭空消失，total 只剩
+            # 后面的有效项，工具报 ok=true。用户会以为所有变异都跑了。
+            _bad_elems.append(f"[{idx}]={type(m).__name__}")
             continue
         out.append({
             "id": str(m.get("id", f"M{idx + 1:02d}")),
@@ -47,6 +52,12 @@ def load_mutations(spec_path: Path) -> List[Dict[str, str]]:
             "new": str(m["new"]),
             "desc": str(m.get("desc", "")),
         })
+    if _bad_elems:
+        raise ValueError(
+            "Mutation spec entries must be objects with file/old/new; got non-object "
+            f"element(s) at {_bad_elems[:8]}. Every entry must be a mapping so no "
+            "mutation is silently skipped."
+        )
     return out
 
 
