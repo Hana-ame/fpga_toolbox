@@ -3150,6 +3150,64 @@ def test_lint_tb_zero_matches_is_not_silent_clean() -> None:
         assert "W055" not in codes2, codes2
 
 
+def test_normalizer_surfaces_verilator_errors_and_empty_verification() -> None:
+    """Defect 142/143: 日志里的 %Error 与「零套件核对」都不能算正常。
+
+    142: result_normalizer 完全不看 `%Error:` 行。一份「%Error: syntax error」
+    混着「PASS: ...」的日志被归一成 overall_status=NO_RESULTS、零诊断 ——
+    一个编译都没过的仿真既不失败也不提示。修法：把 %Error 行转成
+    rule_id=VERILATOR_ERROR 的 FAIL 检查，使 overall_status=FAIL。
+
+    143: `all_verified` 的语义是「预期套件没缺失/没失败」，expected_suites 为空
+    时必然为 true。但它与 observed={} 并排出现会被误读成「核对通过」。
+    新增 observed_any / verified_any 明确区分「没核对」与「核对通过」。
+    （all_verified 语义保持不变：自审计 A6 依赖它对「无预期」不假报警。）
+    """
+    print("coverage: normalizer surfaces %Error and empty verification")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        log = root / "sim.log"
+        log.write_text(
+            "%Error: some_sv.sv:10:5: syntax error\n"
+            "PASS: apb all 8 checks passed\n", encoding="utf-8")
+
+        r = call_tool("normalize_sim_result", {
+            "verilator_log_path": str(log), "module_name": "apb"})
+        assert r["ok"], str(r.get("error"))[:200]
+        data = r["data"]
+        # 142: %Error 必须让 overall_status 变 FAIL，且作为一条 FAIL 检查出现
+        assert data["overall_status"] == "FAIL", data["overall_status"]
+        assert data["summary"]["failed"] >= 1, data["summary"]
+        rules = {c["rule_id"]: c["status"] for c in data["checks"]}
+        assert rules.get("VERILATOR_ERROR") == "FAIL", rules
+
+        # 143: 日志里没有 `== sim: ... ==` 头 → 没观察到任何套件
+        ident = data["verilator_suite_identity"]
+        assert ident["all_verified"] is True, ident          # 语义不变
+        assert ident["observed_any"] is False, ident         # 但确实没核对
+        assert ident["verified_any"] is False, ident
+
+        # 对照组：有真实 suite 头 + PASS 汇总行 → observed_any / verified_any 为真
+        ok_log = root / "ok.log"
+        ok_log.write_text(
+            "== sim: apb (top=tb_apb) ==\n"
+            "PASS: apb all 8 checks passed\n", encoding="utf-8")
+        ro = call_tool("normalize_sim_result", {
+            "verilator_log_path": str(ok_log), "module_name": "apb",
+            "expected_suites": ["apb"]})
+        assert ro["ok"], str(ro.get("error"))[:200]
+        io = ro["data"]["verilator_suite_identity"]
+        assert io["observed_any"] is True, io
+        assert io["verified_any"] is True, io
+        assert ro["data"]["overall_status"] == "PASS", ro["data"]["overall_status"]
+
+        # 纯干净日志（无 %Error）不得出现 VERILATOR_ERROR 假报
+        rules_ok = {c["rule_id"] for c in ro["data"]["checks"]}
+        assert "VERILATOR_ERROR" not in rules_ok, rules_ok
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3200,6 +3258,7 @@ def main() -> int:
     test_typedef_port_width_placeholders_are_legal()
     test_unexpanded_sv_interface_ports_are_reported()
     test_lint_tb_zero_matches_is_not_silent_clean()
+    test_normalizer_surfaces_verilator_errors_and_empty_verification()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

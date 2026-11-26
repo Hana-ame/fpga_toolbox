@@ -86,7 +86,14 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
         "summaries": summaries,
         "missing": missing,
         "failed": failed,
+        # all_verified 保持原语义：「预期的套件没有缺失/失败」，因此没有预期
+        # 套件时为 True（自审计 A6 依赖这一点：不能对「无预期」假报警）。
         "all_verified": not missing and not failed,
+        # 但 `all_verified=True` + `observed={}` 会被误读成「核对通过」，实际
+        # 是什么都没核对（`expected_suites` 为空且日志里也没有任何 suite 头）。
+        # 单独给出「是否真的观察到套件」的布尔，调用方据此区分两者。
+        "observed_any": bool(results),
+        "verified_any": bool(results) and not missing and not failed,
     }
 
 

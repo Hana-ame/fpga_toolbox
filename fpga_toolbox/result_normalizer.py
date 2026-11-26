@@ -362,6 +362,23 @@ def tool_normalize_sim_result(
         if not p.is_file():
             return err_result("normalize_sim_result", f"Verilator log not found: {verilator_log_path}")
         log_txt = p.read_text(encoding="utf-8", errors="ignore")
+        # Verilator 的**编译/elaboration 错误**在日志里是 `%Error: ...` 行。
+        # 旧实现完全不看它：一份「%Error: syntax error + PASS: ...」的混合日志
+        # 被归一成 overall_status=NO_RESULTS、all_verified=true、零诊断 ——
+        # 一个编译都没过的仿真被报告成「无结果」（既不失败也不提示）。
+        # 这里把 %Error 行转成 FAIL 检查，让错误在报告里可见。
+        _verr_lines = [
+            ln.strip() for ln in log_txt.splitlines()
+            if ln.lstrip().startswith("%Error")
+        ]
+        if _verr_lines:
+            checks.append({
+                "rule_id": "VERILATOR_ERROR",
+                "category": "verilator_log",
+                "status": "FAIL",
+                "detail": (f"Verilator reported {len(_verr_lines)} %Error line(s); first: "
+                           + _verr_lines[0][:200]),
+            })
         ident = verify_suite_identities(log_txt, expected_suites or [])
         parsed_vchecks = _parse_verilator_checks(log_txt)
         if parsed_vchecks:

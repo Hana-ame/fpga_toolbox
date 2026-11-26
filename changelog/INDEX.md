@@ -147,3 +147,4 @@
 - [82 · typedef 端口位宽未解析时生成非法或致败代码](82-typedef-port-width-placeholders.md)
 - [83 · interface 打包的总线端口被误报成 DUT 缺端口](83-unexpanded-sv-interface-ports.md)
 - [84 · lint_tb 目录模式扫到 0 个文件却报 clean](84-lint-tb-zero-match-not-clean.md)
+- [85 · 归一化报告忽略 %Error 且零核对被当作通过](85-normalizer-verilator-errors-and-empty-verification.md)
