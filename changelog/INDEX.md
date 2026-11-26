@@ -109,6 +109,8 @@
 
 - [69-strobe-width-follows-port.md](69-strobe-width-follows-port.md) — APB `pstrb` / AXI4 `wstrb` 的位宽被写成 `dw // 8` **推导值**，而规范并不要求 strobe 位宽 == DATA/8。实测一个合法 APB 从设备（16 位 `pwdata` + 4 位 `pstrb`，`extract_interfaces` 也如实报告 `pstrb.width=4`）生成的 TB 是 `logic [1:0] pstrb`，连线 `%Warning-WIDTHEXPAND: 'pstrb' expects 4 bits ... generates 2 bits` → Verilator 警告即错误、构建失败，而工具报 `ok=True`。修复：strobe 位宽改走 `_pw()` 取真实端口（`dw//8` 仅兜底），并把 APB/AHB 的 `aw`/`dw` 也统一到 `_pw`（此前只有 AXI4/DDR/HBM 走），七协议位宽来源口径一致：**端口真实位宽 > classifier 推导 > 标准默认**。A19 扩展为同时断言 strobe 必须经 `_pw` 取得
 
+- [70-ahb-trans-size-resp-widths.md](70-ahb-trans-size-resp-widths.md) — AHB 模板把 `htrans`/`hsize`/`hresp` 位宽写死成规范默认值（2/3/1 位），而真实 IP 常扩展它们（如 2 位 HRESP 表达 SPLIT/RETRY）。DUT 用 2 位 HRESP 时 TB 声明的是 1 位标量 → `WIDTHEXPAND` → Verilator 警告即错误、构建失败而工具报 `ok=True`。修复 `_pw` 取真实位宽 + 声明/常量/task 形参**调用点字面量**全部同步（`1'b0` 在 2 位形参上同样 EXPAND）+ `!exp_err` 改 `exp_err == 0`（LOGNOT 只接受 1 位）。记录一个教训：第一版只改声明和形参，TB 侧仍有 7 条告警（调用点没改），第二版又漏了文本重复的 `AHB_003` —— **改声明不改调用点的漏改只有实际编译才能发现**
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

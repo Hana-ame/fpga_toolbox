@@ -2005,6 +2005,87 @@ endmodule
         assert "[15:0]" in pwdata_decl, pwdata_decl
 
 
+def test_ahb_trans_size_resp_widths_follow_port() -> None:
+    """Defect 123: AHB `htrans` / `hsize` / `hresp` 位宽写死，不跟真实端口。
+
+    AHB-Lite 规范给的是 HTRANS=2 / HSIZE=3 / HRESP=1 位，但真实 IP 常扩展它
+    （例如用 2 位 HRESP 表达 SPLIT/RETRY）。旧模板写死：
+
+        logic HREADYOUT, HRESP;          <- HRESP 当成 1 位标量
+        logic [1:0] HTRANS = 0;
+        logic [2:0] HSIZE = 3'd2;
+
+    DUT 用 2 位 HRESP 时连线报：
+
+        %Warning-WIDTHEXPAND: Output port connection 'HRESP' expects 2 bits
+                              ... generates 1 bits
+        %Error: Exiting due to N warning(s)
+
+    Verilator 警告即错误 → 构建失败，而工具返回 ok=True。
+
+    修复：htrans_w / hsize_w / hresp_w 全部由 `_pw()` 取真实端口位宽；task 形参
+    与所有调用点的字面量同步改成 `{hresp_w}'dN`（`1'b0` 在 2 位形参上同样
+    WIDTHEXPAND）；`!exp_err` 改成 `exp_err == 0`（LOGNOT 只接受 1 位）。
+    """
+    print("coverage: AHB htrans/hsize/hresp widths follow real ports")
+    from fpga_toolbox.protocol_tb_emitter import _pw
+
+    assert _pw({"port_details": {"hresp": {"width": 2}}}, "hresp", 1) == 2
+    assert _pw({"port_details": {"htrans": {"width": 3}}}, "htrans", 2) == 3
+    assert _pw({"port_details": {"hsize": {"width": 4}}}, "hsize", 3) == 4
+
+    rtl = """`timescale 1ns/1ps
+module ahb_wide (
+  input  logic          HCLK,
+  input  logic          HRESETn,
+  input  logic          HSEL,
+  input  logic [15:0]   HADDR,
+  input  logic [1:0]    HTRANS,
+  input  logic          HWRITE,
+  input  logic [2:0]    HSIZE,
+  input  logic [31:0]   HWDATA,
+  output logic          HREADYOUT,
+  output logic [31:0]   HRDATA,
+  output logic [1:0]    HRESP
+);
+  assign HREADYOUT = 1'b1;
+  assign HRDATA = HWDATA;
+  assign HRESP = 2'b00;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(f), "out_dir": str(Path(td) / "out"), "protocol": "ahb_lite"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        # HRESP 必须声明为 2 位，而不是 1 位标量
+        resp_decl = next(ln for ln in tb.splitlines()
+                         if "HRESP" in ln and ln.strip().startswith("logic"))
+        assert "[1:0]" in resp_decl, resp_decl
+        # 所有 exp_err 实参必须是 2 位字面量，不能是 1'b0/1'b1
+        call_lines = [ln for ln in tb.splitlines() if ln.strip().startswith(("ahb_read", "ahb_write"))]
+        assert call_lines, "no AHB task calls generated"
+        for ln in call_lines:
+            assert "1'b0" not in ln and "1'b1" not in ln, ln
+            assert "2'd" in ln, ln
+        # 多位 exp_err 上不能再用 LOGNOT
+        assert "!exp_err" not in tb, "LOGNOT on multi-bit exp_err"
+        assert "exp_err == 0" in tb, "multi-bit zero test missing"
+
+    # 参考 DUT（1 位 HRESP）仍然正常生成
+    with tempfile.TemporaryDirectory() as td:
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(ROOT / "examples" / "multi_bus_ref" / "ahb_lite_slave.sv"),
+            "out_dir": str(Path(td) / "out"), "protocol": "ahb_lite"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        resp_decl = next(ln for ln in tb.splitlines()
+                         if "HRESP" in ln and ln.strip().startswith("logic"))
+        assert "[0:0]" in resp_decl, resp_decl
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2040,6 +2121,7 @@ def main() -> int:
     test_visual_renderer_consistency_and_shape_validation()
     test_ddr_required_ports_cover_dq_in()
     test_strobe_width_follows_real_port()
+    test_ahb_trans_size_resp_widths_follow_port()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
