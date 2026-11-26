@@ -89,6 +89,8 @@
 
 - [59-module-name-unsafe-filename.md](59-module-name-unsafe-filename.md) — 契约 `boundary.module_name` 被原样拼进产物文件名与 cocotb Makefile，validator 只查了「非空」。两类实测后果：① `../../EVILMOD` 让 4 个产物里 **3 个写到 `out_dir` 之外**（`Path/..` 静默越界），仍报 `ok=True`；② `m$(shell touch PWNEDMK)_x` 让生成的 Makefile 出现 `$(shell ...)`，用户一 `make` 就**执行任意命令**（实测文件被真实创建）。新增诊断 **E016** 按 SV 标识符 `[A-Za-z_][A-Za-z0-9_$]*` 收口（v1 与 `apb-regfile-spec/v2` 两入口共用同一 validator，一处覆盖两路），tb_emitter 再在写产物前做一次纵深防御。`$` 在 SV 标识符里合法故不误伤 `a$b`
 
+- [60-ddr-hbm-template-widths.md](60-ddr-hbm-template-widths.md) — DDR3/DDR4/HBM 的 TB 模板把端口位宽、数据常量、`$display` 格式宽度全部写死，而 Verilator **默认警告即错误**，DUT 位宽不符时生成的 TB 编译不过却报 `ok=True`（DUT 一点没验到）。三个协议实测：DDR3 写死 BA=3 位/常量 `8'hBEEF` → 4 条 WIDTHDIGITS + 1 条 WIDTHTRUNC；DDR4 写死 adr=17/dq=64/dm_dbi_n=8 位 → 4 条 WIDTHTRUNC；HBM 写死 data=256/ID=6/addr=28 位 → 64 位与 512 位 DUT 各 2/6 条 WIDTHEXPAND。新增 `_pw()` 从 `port_details` 取 RTL 真实位宽（三级回退），三个模板全部跟随，数据常量按位宽掩码、格式宽度同步。顺带修掉一个按十六进制字符截断数据图案的 off-by-one（dw=256 时低 64 位错成 `0xF123456789ABCDEF`）。6 个参考 DUT 全部 0 宽度告警 rc=0
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

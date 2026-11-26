@@ -1028,6 +1028,165 @@ def test_module_name_not_used_as_unsafe_filename() -> None:
         assert r["ok"] is False and "E016" in str(r["error"]), str(r.get("error"))[:200]
 
 
+def test_ddr_hbm_templates_follow_port_widths() -> None:
+    """Defect 110: DDR3/DDR4/HBM 模板写死位宽，产出的 TB 因宽度告警编译失败却报 ok。
+
+    Verilator 默认**警告即错误**，所以 WIDTHTRUNC / WIDTHEXPAND / WIDTHDIGITS
+    会让构建直接失败 —— 而工具返回 ok=True，DUT 一点没验到。三个协议实测：
+
+      * DDR3 `ddr3_ba` 写死 [2:0]、数据常量写死 8'hBEEF / 8'h1234 / %04h：
+        DUT 用 2 位 BA 或 8 位 DQ 时报 4 条 WIDTHDIGITS + 1 条 WIDTHTRUNC。
+      * DDR4 `ddr4_adr` 写死 17 位、dq 写死 64 位、dm_dbi_n 写死 8 位：
+        DUT 用 14/8/1 位时报 4 条 WIDTHTRUNC。
+      * HBM `wdata`/`rdata` 写死 256 位、ID 写死 6 位、addr 写死 28 位：
+        DUT 用 64 位或 512 位数据时报 WIDTHEXPAND/WIDTHTRUNC。
+
+    修复：新增 `_pw()` 从 `port_details` 取 RTL 真实端口位宽（缺失时退回
+    addr_width/data_width 再退回标准默认），三个模板全部按它声明网线；
+    数据常量按真实位宽缩放（hex 位数 + 掩码），ID/BA/BG 取值按位宽截断。
+    """
+    print("coverage: DDR3/DDR4/HBM templates follow real port widths")
+    from fpga_toolbox.protocol_tb_emitter import _pw
+
+    iface = {
+        "port_details": {
+            "ba": {"port": "ddr3_ba", "direction": "output", "width": 2},
+            "dq": {"port": "ddr3_dq_out", "direction": "output", "width": 8},
+            "addr": {"port": "ddr3_addr", "direction": "output", "width": 10},
+        },
+        "addr_width": 10,
+        "data_width": 8,
+    }
+    assert _pw(iface, "ba", 3) == 2, "port_details width must win"
+    assert _pw(iface, "dq", 16) == 8
+    assert _pw(iface, "addr", 14) == 10
+    # 缺失 port_details 时退回 addr_width / data_width
+    assert _pw({"addr_width": 12, "data_width": 32}, "addr", 14) == 12
+    assert _pw({"addr_width": 12, "data_width": 32}, "dq", 16) == 32
+    # 两者都没有时用标准默认值，不能变成 0（否则生成 [-1:0]）
+    assert _pw({}, "ba", 3) == 3
+    assert _pw({}, "dq", 16) == 16
+
+    def _emit(rtl_src: str, proto: str) -> tuple:
+        with tempfile.TemporaryDirectory() as td:
+            rtl = Path(td) / "dut.sv"
+            rtl.write_text(rtl_src, encoding="utf-8")
+            r = call_tool("emit_testbench", {
+                "rtl_file": str(rtl), "out_dir": str(Path(td) / "out"),
+                "protocol": proto,
+            })
+            tb = ""
+            arts = (r.get("data") or {}).get("artifacts") or {}
+            if arts.get("sv_testbench"):
+                tb = Path(arts["sv_testbench"]).read_text(encoding="utf-8")
+            return r, tb
+
+    # DDR3：2 位 BA + 8 位 DQ + 10 位 addr —— TB 网线必须跟着变，常量不能溢出
+    ddr3_rtl = """`timescale 1ns/1ps
+module ddr3_narrow (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        ddr3_ck_p,
+  input  logic        ddr3_ck_n,
+  output logic        ddr3_cke,
+  output logic        ddr3_cs_n,
+  output logic        ddr3_ras_n,
+  output logic        ddr3_cas_n,
+  output logic        ddr3_we_n,
+  output logic [1:0]  ddr3_ba,
+  output logic [9:0]  ddr3_addr,
+  input  logic [7:0]  ddr3_dq_in,
+  output logic [7:0]  ddr3_dq_out,
+  output logic        ddr3_rd_valid
+);
+  assign ddr3_cke = 1; assign ddr3_cs_n = 1; assign ddr3_ras_n = 1;
+  assign ddr3_cas_n = 1; assign ddr3_we_n = 1; assign ddr3_ba = '0;
+  assign ddr3_addr = '0; assign ddr3_dq_out = ddr3_dq_in;
+  assign ddr3_rd_valid = 1'b1;
+endmodule
+"""
+    r, tb = _emit(ddr3_rtl, "ddr3")
+    assert r["ok"], str(r.get("error"))[:200]
+    assert "logic [1:0]  ddr3_ba" in tb, tb[:800]
+    assert "logic [9:0] ddr3_addr" in tb, tb[:800]
+    assert "logic [7:0] ddr3_dq_in" in tb, tb[:800]
+    # 8 位总线上 0xBEEF 是 Too many digits：常量必须被掩码到 0xEF
+    assert "8'hEF" in tb, [ln for ln in tb.splitlines() if "ddr3_cmd(3'b100" in ln][:2]
+    assert "8'hBEEF" not in tb
+    assert "%04h" not in tb, "printf 位宽也必须跟随（8 位用 %02h）"
+
+    # DDR4：14 位 adr + 8 位 dq + 1 位 dm_dbi_n + 2 位 bg/ba
+    ddr4_rtl = """`timescale 1ns/1ps
+module ddr4_narrow (
+  input  logic         clk,
+  input  logic         rst_n,
+  input  logic         ddr4_ck_t,
+  input  logic         ddr4_ck_c,
+  output logic         ddr4_act_n,
+  output logic [1:0]   ddr4_bg,
+  output logic [1:0]   ddr4_ba,
+  output logic [13:0]  ddr4_adr,
+  output logic         ddr4_cs_n,
+  output logic         ddr4_odt,
+  input  logic [7:0]   ddr4_dq_in,
+  output logic [7:0]   ddr4_dq_out,
+  output logic [0:0]   ddr4_dm_dbi_n,
+  output logic         ddr4_rd_valid
+);
+  assign ddr4_act_n = 1; assign ddr4_bg = '0; assign ddr4_ba = '0;
+  assign ddr4_adr = '0; assign ddr4_cs_n = 1; assign ddr4_odt = 0;
+  assign ddr4_dq_out = ddr4_dq_in; assign ddr4_dm_dbi_n = '0;
+  assign ddr4_rd_valid = 1'b1;
+endmodule
+"""
+    r, tb = _emit(ddr4_rtl, "ddr4")
+    assert r["ok"], str(r.get("error"))[:200]
+    assert "logic [13:0] ddr4_adr" in tb, tb[:900]
+    assert "logic [7:0] ddr4_dq_in" in tb, tb[:900]
+    assert "logic [0:0]  ddr4_dm_dbi_n" in tb, tb[:900]
+    assert "logic [16:0] ddr4_adr" not in tb
+    assert "logic [63:0] ddr4_dq_in" not in tb
+
+    # HBM：64 位数据 / 4 位 ID / 32 位地址 —— 旧的 256/6/28 会 WIDTHEXPAND
+    hbm_rtl = """`timescale 1ns/1ps
+module hbm_narrow (
+  input  logic         clk,
+  input  logic         rst_n,
+  input  logic [3:0]   hbm_awid,
+  input  logic [31:0]  hbm_awaddr,
+  input  logic         hbm_awvalid,
+  output logic         hbm_awready,
+  input  logic [63:0]  hbm_wdata,
+  input  logic         hbm_wvalid,
+  output logic         hbm_wready,
+  output logic [3:0]   hbm_bid,
+  output logic         hbm_bvalid,
+  input  logic         hbm_bready,
+  input  logic [3:0]   hbm_arid,
+  input  logic [31:0]  hbm_araddr,
+  input  logic         hbm_arvalid,
+  output logic         hbm_arready,
+  output logic [3:0]   hbm_rid,
+  output logic [63:0]  hbm_rdata,
+  output logic         hbm_rvalid,
+  input  logic         hbm_rready
+);
+  assign hbm_awready = 1; assign hbm_wready = 1; assign hbm_arready = 1;
+  assign hbm_bid = hbm_awid; assign hbm_bvalid = 1'b1;
+  assign hbm_rid = hbm_arid; assign hbm_rdata = '0; assign hbm_rvalid = 1'b1;
+endmodule
+"""
+    r, tb = _emit(hbm_rtl, "hbm")
+    assert r["ok"], str(r.get("error"))[:200]
+    assert "logic [3:0]   hbm_awid" in tb, tb[:900]
+    assert "logic [63:0] hbm_wdata" in tb, tb[:900]
+    assert "logic [31:0]  hbm_awaddr" in tb, tb[:900]
+    assert "logic [255:0] hbm_wdata" not in tb
+    # 数据图案必须按 64 位构造，不能被十六进制字符截断成错值
+    assert "64'h0123456789ABCDEF" in tb, tb[:1200]
+    assert "64'hF123456789ABCDEF" not in tb
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1050,6 +1209,7 @@ def main() -> int:
     test_s1_sv_literal_constant_stub()
     test_pcie_tb_matches_dut_parameterization()
     test_module_name_not_used_as_unsafe_filename()
+    test_ddr_hbm_templates_follow_port_widths()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
