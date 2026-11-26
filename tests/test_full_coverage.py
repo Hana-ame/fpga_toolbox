@@ -3946,6 +3946,76 @@ def test_staged_rtl_files_reach_the_parser() -> None:
         assert r_ok["ok"] is True, str(r_ok.get("error"))[:250]
 
 
+def test_netlist_cleaner_preserves_comments() -> None:
+    """Defect 162: PT 网表清理会把注释里提到的黑盒实例也删掉。
+
+    `clean_pt_netlist` 的实例正则直接在原文上跑，没有排除注释区间：
+
+        // BUFX2 u_comment (.A(clk), .Y(n1));   <- 用户注释
+        BUFX2 u1 (.A(clk), .Y(n1));            <- 真实实例
+        BUFX2 #(.DRIVE(2)) u2 (.A(n1), .Y(n2)); <- 参数化实例
+
+    实测输出把三行（含注释行）全部替换，用户注释内容丢失，且产生
+    `// // [fpga_toolbox:pt_clean] ...` 这种叠加注释。
+    """
+    print("coverage: netlist cleaner preserves user comments")
+    from fpga_toolbox.registry import call_tool
+
+    netlist = (
+        "module top (input clk, output q);\n"
+        "  wire n1, n2;\n"
+        "  // BUFX2 u_comment (.A(clk), .Y(n1));\n"
+        "  BUFX2 u1 (.A(clk), .Y(n1));\n"
+        "  BUFX2 #(.DRIVE(2)) u2 (.A(n1), .Y(n2));\n"
+        "  DFFX1 u3 (.D(n2), .CK(clk), .Q(q));\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "net.v"
+        dst = root / "clean.v"
+        src.write_text(netlist, encoding="utf-8")
+        r = call_tool("clean_pt_netlist", {
+            "in_verilog": str(src), "out_verilog": str(dst),
+            "blackbox_modules": ["BUFX2"]})
+        assert r["ok"], str(r.get("error"))[:250]
+        out = dst.read_text(encoding="utf-8")
+
+        # 用户注释必须保留（原样）
+        assert "// BUFX2 u_comment (.A(clk), .Y(n1));" in out, out
+        # 两个真实实例被替换 → 恰好两条替换注释
+        assert out.count("[fpga_toolbox:pt_clean]") == 2, out
+        # 不能出现叠加注释
+        assert "// // [fpga_toolbox" not in out, out
+        # 非黑盒实例保留
+        assert "DFFX1 u3" in out, out
+        assert "u1 (" not in out and "u2 (" not in out, out
+
+        # 块注释里提到的实例同样不能删
+        net2 = (
+            "module top (input clk, output q);\n"
+            "  wire n1;\n"
+            "  /* multi\n     BUFX2 u_comment (.A(clk), .Y(n1));\n     line */\n"
+            "  BUFX2 u1 (.A(clk), .Y(n1));\n"
+            "  // mentions endmodule in comment\n"
+            "  DFFX1 u2 (.D(n1), .CK(clk), .Q(q));\n"
+            "endmodule\n")
+        src2 = root / "net2.v"
+        dst2 = root / "clean2.v"
+        src2.write_text(net2, encoding="utf-8")
+        r2 = call_tool("clean_pt_netlist", {
+            "in_verilog": str(src2), "out_verilog": str(dst2),
+            "blackbox_modules": ["BUFX2"]})
+        assert r2["ok"], str(r2.get("error"))[:250]
+        out2 = dst2.read_text(encoding="utf-8")
+        # 块注释完整保留
+        assert "BUFX2 u_comment (.A(clk), .Y(n1));" in out2, out2
+        assert "/* multi" in out2 and "line */" in out2, out2
+        assert out2.count("[fpga_toolbox:pt_clean]") == 1, out2
+        # 注释里的 endmodule 不能让 assign 插错位置：块必须正常结束
+        assert out2.rstrip().endswith("endmodule"), out2
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4010,6 +4080,7 @@ def main() -> int:
     test_min_score_bounds_are_enforced()
     test_parser_backend_enum_is_enforced()
     test_staged_rtl_files_reach_the_parser()
+    test_netlist_cleaner_preserves_comments()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

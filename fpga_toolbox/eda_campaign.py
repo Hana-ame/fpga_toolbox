@@ -410,7 +410,25 @@ def clean_netlist_for_pt(
                             mod_ties.append(net)
             return "// [fpga_toolbox:pt_clean] removed unresolved parameterized blackbox instance"
 
-        new_block = inst_re.sub(_strip_inst, block)
+        # **必须先掩掉注释与字符串再匹配实例**：旧实现直接在原文上跑
+        # inst_re，于是注释里的 `// BUFX2 u_comment (...)` 也会被当成真实实例
+        # 删除 —— 实测用户的注释行被替换成 pt_clean 注释（内容丢失），
+        # 且一条注释行 + 两个实例产生 3 条替换注释（第一个 `// //` 还叠加了）。
+        # 用等长占位把注释/字符串替换成哨兵字符，匹配完后原样还原，既不影响
+        # 偏移也不误伤。
+        _mask_store: List[str] = []
+        def _mask(mm: re.Match[str]) -> str:
+            _mask_store.append(mm.group(0))
+            # 用不可能出现在实例正则里的同长度占位（\x00 填充）
+            return "\x00" * len(mm.group(0))
+        _masked = re.sub(_SKIP, _mask, block, flags=re.S)
+        _stripped = inst_re.sub(_strip_inst, _masked)
+        # 还原被掩掉的注释/字符串（长度一致，按顺序回填）
+        def _unmask(mm: re.Match[str]) -> str:
+            if not _mask_store:
+                return mm.group(0)
+            return _mask_store.pop(0)
+        new_block = re.sub(r"\x00+", _unmask, _stripped)
         if mod_ties:
             tied_nets_total.extend(mod_ties)
             assigns = "\n".join(f"  assign {net} = 1'b0;" for net in mod_ties)
