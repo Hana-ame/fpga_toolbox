@@ -544,11 +544,22 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             _gap = sorted(_connected - _required)
             if _gap:
                 _a19_bad.append(f"{_proto}: template connects {_gap} not in REQUIRED_TB_PORTS")
-        a19_ok = not _a19_bad
+        # 同时检查「strobe 类信号必须用 _pw 取真实位宽，不能用 dw//8 推导」：
+        # 缺陷 122 —— APB 的 pstrb / AXI4 的 wstrb 位宽不必等于 DATA/8，
+        # 用推导值会生成过窄/过宽网线，连线告警而构建失败。
+        _a19_strobe: List[str] = []
+        for _proto, _fname, _sig in (("apb", "_emit_apb_tb", "pstrb"),
+                                     ("axi4", "_emit_axi4_tb", "wstrb")):
+            _src = _inspect.getsource(getattr(_pte, _fname))
+            _decl = re.search(
+                rf"=\s*_pw\(\s*iface\s*,\s*['\"]{_sig}['\"]", _src)
+            if not _decl:
+                _a19_strobe.append(f"{_proto}: {_sig} width not taken via _pw()")
+        a19_ok = not _a19_bad and not _a19_strobe
         checks.append({
             "id": "A19_REQUIRED_PORTS_COVER_TEMPLATE",
             "passed": a19_ok,
-            "detail": f"gaps={_a19_bad[:3]}",
+            "detail": f"gaps={_a19_bad[:3]} strobe={_a19_strobe}",
         })
 
         # ---- A15: run_mutation 必须有 baseline 预检（缺陷 113）----

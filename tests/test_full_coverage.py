@@ -1941,6 +1941,70 @@ endmodule
         assert "ddr3_dq_in" in str(r["error"]), str(r["error"])[:200]
 
 
+def test_strobe_width_follows_real_port() -> None:
+    """Defect 122: APB `pstrb` / AXI4 `wstrb` 位宽被推导成 `dw//8` 而非取真实端口。
+
+    规范并不要求 strobe 位宽 == DATA/8。实测一个**合法**的 APB 从设备用
+    16 位 `pwdata` + 4 位 `pstrb`（按字节方案），`extract_interfaces` 也如实
+    报告 `data_width=16` 与 `pstrb.width=4`，但 TB 模板按 `16//8=2` 生成：
+
+        logic [1:0] pstrb = '1;
+        %Warning-WIDTHEXPAND: Input port connection 'pstrb' expects 4 bits
+                              ... generates 2 bits
+        %Error: Exiting due to 4 warning(s)
+
+    Verilator 默认警告即错误 → 构建失败，而 `emit_testbench` 返回 ok=True。
+
+    修复：strobe 位宽一律 `_pw(iface, "pstrb"/"wstrb", dw//8)` —— 真实端口位宽
+    优先，`dw//8` 只作兜底。自审计 A19 同时检查这两个信号确实走了 `_pw`。
+    """
+    print("coverage: APB pstrb / AXI4 wstrb width follows the real port")
+    from fpga_toolbox.protocol_tb_emitter import _pw
+
+    # _pw 语义：port_details 优先，其次 addr/data_width，最后默认值
+    assert _pw({"port_details": {"pstrb": {"width": 4}}}, "pstrb", 2) == 4
+    assert _pw({"port_details": {"wstrb": {"width": 16}}}, "wstrb", 4) == 16
+    assert _pw({}, "pstrb", 2) == 2
+
+    # 端到端：16 位数据 + 4 位 pstrb 的 APB DUT，TB 网线必须是 4 位
+    rtl = """`timescale 1ns/1ps
+module apb_wide_strobe (
+  input  logic        pclk,
+  input  logic        presetn,
+  input  logic        psel,
+  input  logic        penable,
+  input  logic        pwrite,
+  input  logic [9:0]  paddr,
+  input  logic [15:0] pwdata,
+  input  logic [3:0]  pstrb,
+  output logic        pready,
+  output logic [15:0] prdata,
+  output logic        pslverr
+);
+  assign pready = 1'b1;
+  assign prdata = pwdata;
+  assign pslverr = 1'b0;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(f), "out_dir": str(Path(td) / "out"), "protocol": "apb"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        decl = next(ln for ln in tb.splitlines() if "pstrb" in ln and ln.strip().startswith("logic"))
+        assert "[3:0]" in decl, decl
+        assert "[1:0]" not in decl, decl
+        # 地址/数据网线也要取真实端口位宽
+        paddr_decl = next(ln for ln in tb.splitlines()
+                          if "paddr" in ln and ln.strip().startswith("logic"))
+        assert "[9:0]" in paddr_decl, paddr_decl
+        pwdata_decl = next(ln for ln in tb.splitlines()
+                           if "pwdata" in ln and ln.strip().startswith("logic"))
+        assert "[15:0]" in pwdata_decl, pwdata_decl
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1975,6 +2039,7 @@ def main() -> int:
     test_normalizer_rejects_malformed_and_unnamed_results()
     test_visual_renderer_consistency_and_shape_validation()
     test_ddr_required_ports_cover_dq_in()
+    test_strobe_width_follows_real_port()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

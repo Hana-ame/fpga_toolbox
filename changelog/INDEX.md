@@ -107,6 +107,8 @@
 
 - [68-ddr-required-ports-dq-in.md](68-ddr-required-ports-dq-in.md) — `emit_testbench` 的生成前端口校验表 `REQUIRED_TB_PORTS` 里 ddr3/ddr4 **只列了 `dq_out`、漏了 `dq_in`**，而模板对 DUT 是双向语义（dq_in 由 TB 驱动写数据、dq_out 由 DUT 驱动读数据）。于是一个没有 `dq_in` 端口的 DDR3 DUT 通过了校验，产出的 TB 硬连 `.ddr3_dq_in(...)` → `%Error-PINNOTFOUND: Pin not found: 'ddr3_dq_in'` 而工具报 `ok=True`（与缺陷 14/15 同类）。补表后拒绝并点名端口，参考 DUT 仍全绿。**另加自审计 A19**：从模板源码抽「同名成对」的 `.foo(foo)` 连线与必需表做差集，以后模板加连线忘同步表格会被当场抓到（已验证生效；实现时第一版只匹配 `.name(` 前缀导致七协议全假 gap，改成同名匹配才正确 —— 探针自身也要防误报）
 
+- [69-strobe-width-follows-port.md](69-strobe-width-follows-port.md) — APB `pstrb` / AXI4 `wstrb` 的位宽被写成 `dw // 8` **推导值**，而规范并不要求 strobe 位宽 == DATA/8。实测一个合法 APB 从设备（16 位 `pwdata` + 4 位 `pstrb`，`extract_interfaces` 也如实报告 `pstrb.width=4`）生成的 TB 是 `logic [1:0] pstrb`，连线 `%Warning-WIDTHEXPAND: 'pstrb' expects 4 bits ... generates 2 bits` → Verilator 警告即错误、构建失败，而工具报 `ok=True`。修复：strobe 位宽改走 `_pw()` 取真实端口（`dw//8` 仅兜底），并把 APB/AHB 的 `aw`/`dw` 也统一到 `_pw`（此前只有 AXI4/DDR/HBM 走），七协议位宽来源口径一致：**端口真实位宽 > classifier 推导 > 标准默认**。A19 扩展为同时断言 strobe 必须经 `_pw` 取得
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

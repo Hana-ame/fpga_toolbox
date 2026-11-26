@@ -180,9 +180,13 @@ def _emit_apb_tb(mod: str, clk: str, rst: str, iface: Dict[str, Any]) -> str:
     pready = _pm(iface, "pready", "pready")
     prdata = _pm(iface, "prdata", "prdata")
     pslverr = _pm(iface, "pslverr", "pslverr")
-    aw = int(iface.get("addr_width") or 16)
-    dw = int(iface.get("data_width") or 32)
-    sw = max(1, dw // 8)
+    aw = _pw(iface, "paddr", int(iface.get("addr_width") or 16))
+    dw = _pw(iface, "pwdata", int(iface.get("data_width") or 32))
+    # strobe 位宽必须取 **pstrb 端口真实位宽**，不能用 dw//8 推导：
+    # APB 规范并不要求 PSTRB 的位宽 == DATA/8。实测 DUT 用 16 位 pwdata +
+    # 4 位 pstrb（合法的按字节方案）时，TB 按 16//8 生成 [1:0] 网线，
+    # 连线报 WIDTHEXPAND、构建失败（Verilator 警告即错误），而工具报 ok=True。
+    sw = _pw(iface, "pstrb", max(1, dw // 8))
     # 测试向量必须随实际位宽缩放：旧模板写死 32 位的 8 位十六进制字面量，
     # 套到窄总线（如 dw=8）上会得到 `8'h12345678`——Verilator 报
     # WIDTHDIGITS/WIDTHTRUNC，数据被截断、断言值失真（测试仍能"跑通"，
@@ -282,7 +286,8 @@ def _emit_axi4_tb(mod: str, clk: str, rst: str, iface: Dict[str, Any]) -> str:
     """
     aw = _pw(iface, "awaddr", int(iface.get("addr_width") or 16))
     dw = _pw(iface, "wdata", int(iface.get("data_width") or 32))
-    sw = max(1, dw // 8)
+    # wstrb 位宽取端口真实值（AXI4 允许 WSTRB 位宽 != DATA/8，例如窄传输实现）
+    sw = _pw(iface, "wstrb", max(1, dw // 8))
     id_w = _pw(iface, "awid", 4)
     len_w = _pw(iface, "awlen", 8)
     size_w = _pw(iface, "awsize", 3)
@@ -407,8 +412,12 @@ endmodule
 
 
 def _emit_ahb_tb(mod: str, clk: str, rst: str, iface: Dict[str, Any]) -> str:
-    aw = int(iface.get("addr_width") or 16)
-    dw = int(iface.get("data_width") or 32)
+    # 与其他模板统一：位宽优先取**端口真实位宽**（port_details），
+    # classifier 的 addr_width/data_width 只作兜底。海量第三方 AHB 设计里
+    # HADDR/HWDATA 位宽与推导值不一致（如 20 位地址 + 32 位数据）时，
+    # 写死推导值会产出 WIDTHTRUNC/WIDTHEXPAND 而 Verilator 警告即错误。
+    aw = _pw(iface, "haddr", int(iface.get("addr_width") or 16))
+    dw = _pw(iface, "hwdata", int(iface.get("data_width") or 32))
     hsel = _pm(iface, "hsel", "HSEL")
     haddr = _pm(iface, "haddr", "HADDR")
     htrans = _pm(iface, "htrans", "HTRANS")
