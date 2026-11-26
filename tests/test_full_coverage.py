@@ -3427,6 +3427,62 @@ def test_detected_but_unsupported_protocol_is_distinguished() -> None:
             assert r3["ok"] is True, str(r3.get("error"))[:300]
 
 
+def test_master_role_is_explained_on_direction_mismatch() -> None:
+    """Defect 149: 主设备配从设备模板时，错误信息必须指出是角色问题。
+
+    分类器能判定 role="master"，而所有 TB 模板都是从设备视角（驱动请求信号、
+    等待 DUT 响应）。对 APB 主设备生成 TB 时方向必然全部相反，旧错误只列
+    「port direction(s) disagree with the template」，用户会以为 RTL 端口方向
+    写错了，实际是「主设备不能配从设备模板」。
+    """
+    print("coverage: master role explained on direction mismatch")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+    from fpga_toolbox.registry import call_tool
+
+    rtl = (
+        "module apb_master_dut (\n"
+        "  input  logic        clk,\n"
+        "  input  logic        rst_n,\n"
+        "  output logic        psel,\n"
+        "  output logic        penable,\n"
+        "  output logic        pwrite,\n"
+        "  output logic [7:0]  paddr,\n"
+        "  output logic [31:0] pwdata,\n"
+        "  output logic [3:0]  pstrb,\n"
+        "  input  logic        pready,\n"
+        "  input  logic [31:0] prdata,\n"
+        "  input  logic        pslverr\n"
+        ");\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "apb_master_dut.sv"
+        f.write_text(rtl, encoding="utf-8")
+
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        ifaces = ex["data"]["modules"][0]["interfaces"]
+        assert ifaces and ifaces[0]["role"] == "master", ifaces
+
+        r = emit_protocol_testbench(str(f), str(root / "tb"), "apb")
+        assert r["ok"] is False
+        err = str(r.get("error"))
+        assert "master" in err, err[:400]
+        assert "slave" in err, err[:400]
+        # 必须解释「模板是从设备视角」
+        assert "template" in err.lower(), err[:400]
+        d = r.get("data") or {}
+        assert d.get("role") == "master", d
+        assert d.get("direction_mismatches"), d
+
+        # 从设备 DUT 不受影响
+        slave = Path(__file__).resolve().parent.parent / "examples/multi_bus_ref/apb_slave.sv"
+        if slave.is_file():
+            rs = emit_protocol_testbench(str(slave), str(root / "tb2"), "apb")
+            assert rs["ok"] is True, str(rs.get("error"))[:300]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3482,6 +3538,7 @@ def main() -> int:
     test_eda_remote_tag_cannot_escape_staging_dir()
     test_package_imports_are_part_of_the_dependency_closure()
     test_detected_but_unsupported_protocol_is_distinguished()
+    test_master_role_is_explained_on_direction_mismatch()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

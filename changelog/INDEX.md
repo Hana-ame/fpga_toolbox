@@ -152,3 +152,4 @@
 - [87 · eda_campaign 的 tag=.. 让清理临时目录变成删除 /dev](87-eda-tag-dot-escape.md)
 - [88 · import pkg::* 依赖的 package 文件不在依赖闭包里](88-package-imports-in-closure.md)
 - [89 · 协议没识别到 vs 识别到了但没有 TB 模板](89-detected-but-unsupported-protocol.md)
+- [90 · 主设备配从设备模板时错误信息不指向角色反了](90-master-role-direction-mismatch.md)

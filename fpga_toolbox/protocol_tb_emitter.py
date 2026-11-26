@@ -1371,12 +1371,31 @@ def emit_protocol_testbench(
     # 比编译失败更隐蔽——所以必须在生成前拦住。
     wrong_dir = _wrong_dir_ports(proto, chosen, rtl_dir)
     if wrong_dir:
+        # 方向不符最常见的原因是**角色反了**：所有模板都假定 DUT 是「从设备」，
+        # 而分类器的 role 字段已经知道 DUT 是 master。旧错误只列端口方向，
+        # 用户会以为 RTL 写错了方向，实际是「主设备不能配从设备模板」。
+        _role = str(chosen.get("role") or "")
+        if _role == "master":
+            return err_result(
+                "emit_testbench",
+                f"Cannot emit a '{proto}' testbench for {mod_name}: the DUT was "
+                f"classified as a {proto} **master**, but every generated testbench "
+                f"template acts as a bus **slave** (it drives the request signals and "
+                f"waits for DUT responses). Port directions therefore disagree: "
+                f"{'; '.join(wrong_dir)}. Write a master-side testbench manually, or "
+                f"run emit_testbench on the slave device this master talks to.",
+                data={"protocol": proto, "role": _role,
+                      "direction_mismatches": wrong_dir},
+            )
         return err_result(
             "emit_testbench",
             f"Cannot emit a '{proto}' testbench for {mod_name}: DUT port direction(s) "
             f"disagree with the template: {'; '.join(wrong_dir)}. "
             "A direction mismatch does not fail to compile but hangs the simulation "
-            "(the testbench waits forever for a response).",
+            "(the testbench waits forever for a response)."
+            + (f" (Detected role: {_role}.)" if _role else ""),
+            data={"protocol": proto, "role": _role,
+                  "direction_mismatches": wrong_dir},
         )
 
     # 同 tb_emitter：空 out_dir 会写进 cwd 并报成功，必须显式拒绝。
