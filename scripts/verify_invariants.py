@@ -205,7 +205,37 @@ def _check_layer5_intent_and_docs() -> Tuple[bool, str]:
                 continue
             if not (mf.parent / tgt).resolve().exists():
                 return False, f"Broken link in {mf.name}: {tgt}"
-    return True, f"all {len(TOOL_REGISTRY)} tools documented + HTML docs in sync + 0 broken links"
+    # 4. 诊断码文档覆盖（D13）：新增一个诊断码却忘了写进 docs/FEATURES.md 时，
+    #    本地 --fast 过去查不出来，只有 CI 的 docs_check.py 才报错 —— 一次真实
+    #    踩坑：新增 W052/W053 后本地全绿、CI 四个 test job 全红。把这条前移到
+    #    本地门禁，代价很低（纯文本扫描），收益是"文档漏登记"当场可见。
+    # 与 CI 的 examples/axi_apb_ref/axi/docs_check.py（D13）保持同一口径：
+    # 「声明的码」取包内的**字符串字面量** `"E0xx"`/`"W0xx"`，文档侧扫
+    # README + 全部 docs/*.md。不要用宽松的 \b 匹配（那会把注释里提到的码
+    # 也算成"声明"，且会误把 E003–E009 这类只在 ranges 里出现的码判成缺失）。
+    doc_files = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
+    doc_src = "\n".join(f.read_text(encoding="utf-8", errors="ignore")
+                        for f in doc_files if f.is_file())
+    declared = set()
+    for p_ in sorted((ROOT / "fpga_toolbox").rglob("*.py")):
+        declared.update(re.findall(r'"([EW]\d{3})"',
+                                   p_.read_text(encoding="utf-8", errors="ignore")))
+    doc_codes = set(re.findall(r"([EW]\d{3})", doc_src))
+    # 范围概括（如 "E000–E015"）视为覆盖了区间内的码 —— README/USER_MANUAL 用
+    # 这种写法列举整段诊断码，逐码核对会把它们全部误判为缺失。
+    for m in re.finditer(r"(E\d{3})\s*[-–—]\s*(E\d{3})", doc_src):
+        lo, hi = m.group(1), m.group(2)
+        if lo[0] == hi[0] == "E":
+            for n in range(int(lo[1:]), int(hi[1:]) + 1):
+                doc_codes.add(f"E{n:03d}")
+    undocumented = sorted(c for c in declared if c not in doc_codes)
+    if undocumented:
+        return False, (f"{len(undocumented)} diagnostic code(s) used in the package "
+                       f"but not documented in docs/FEATURES.md or README.md: "
+                       f"{undocumented}")
+
+    return True, (f"all {len(TOOL_REGISTRY)} tools documented + HTML docs in sync + "
+                  f"0 broken links + {len(declared)} diagnostic codes documented")
 
 
 def _check_layer6_rtl_and_tb_integrity() -> Tuple[bool, str]:

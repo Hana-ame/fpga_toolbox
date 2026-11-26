@@ -73,3 +73,35 @@ objects (got types ['str']).
 - 新增回归 `test_visual_renderer_consistency_and_shape_validation`：四种数据矛盾
   必须给诊断、自洽报告不误报、六种畸形形状给可定位错误且不得出现
   `attribute 'get'`。
+
+## 附：新增诊断码漏登记 + 本地门禁盲区（CI 暴露）
+
+首次推送后 **4 个 test job 全红**，失败点不是代码而是文档门禁：
+
+```
+✗ D13 2 个诊断码文档未提及：W052, W053
+```
+
+新增的 W052/W053 没有写进 `docs/FEATURES.md` 的诊断码表。这暴露了一个**流程
+盲区**：本地 `verify_invariants --fast` 的 Layer 5 只查「13 个工具都在
+USER_MANUAL 里」「HTML 同步」「无死链」，**不查诊断码登记** —— 那条检查只在
+CI 的 `examples/axi_apb_ref/axi/docs_check.py`（D13）里跑。于是本地全绿、CI 全红。
+
+修复（两层）：
+
+1. **补文档**：`docs/FEATURES.md` 增加 W052/W053 两行；`README.md` 的
+   `W050–W051` 改 `W050–W053`；`docs/USER_MANUAL.md` 的 `W001–W051` 改
+   `W001–W053`。
+2. **把 D13 前移到本地门禁**：`verify_invariants.py` Layer 5 增加第 4 项检查，
+   与 `docs_check.py` 的 D13 严格同口径 ——
+   - 「声明」取包内**字符串字面量** `"E0xx"`/`"W0xx"`（不用宽松 `\b`，否则
+     注释里提到的码也算）；
+   - 文档侧扫 `README.md` + 全部 `docs/*.md`；
+   - 认**范围概括**写法（`E000–E015` 视为覆盖区间内所有码），否则
+     USER_MANUAL 用范围列举时会被全部误判为缺失。
+
+   验证该检查真有效：临时从 FEATURES.md 删掉 W052/W053 → 检查报
+   `['W052', 'W053']`；恢复后通过（43 个诊断码全覆盖）。
+
+这条流程修复的价值大于单个缺陷：以后「加了诊断码忘了写文档」在本地就会红，
+不必等 CI。

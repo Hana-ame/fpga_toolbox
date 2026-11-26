@@ -578,6 +578,8 @@ python3 -m fpga_toolbox audit_harness
 | `W014` | `run_sim` | `waveform=true` 却没产出波形文件（脚本可能不响应 `WAVE=1` / 缺 `--trace`）；`require_waveform=true` 会把它升级成 `E024` 硬错误 |
 | `W050` | `render_visual_report` | HTML 标签不平衡 |
 | `W051` | `render_visual_report` | 规则行数不一致 |
+| `W052` | `render_visual_report` | `summary.total/passed/failed` 与 `checks` 实际统计不符（报告会印出自相矛盾的结论）|
+| `W053` | `render_visual_report` | `overall_status` 与行级结论矛盾（PASS 却无一行通过 / FAIL 却无一行失败）|
 | `W101` | `copy_sandbox` | 被 include 的文件未进沙箱 |
 | `W102` | `index_repo` | 例化了仓库内无定义的模块 |
 

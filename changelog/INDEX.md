@@ -101,7 +101,7 @@
 
 - [65-normalizer-malformed-results.md](65-normalizer-malformed-results.md) — `normalize_sim_result` 违背自己的 docstring 承诺（「无法识别的输入报错而非静默 NO_RESULTS」）三处：① `checks` 混入非对象 → 裸 `AttributeError: 'str' object has no attribute 'get'`（无字段名无索引）；② `tests` 混入非对象被 `isinstance(t, dict)` **静默过滤** → 零检查 + `overall_status=NO_RESULTS` + **`ok=True`**，调用方看到「成功、零检查」而真相是文件无法解析（本轮最危险）；③ JUnit 里无名 `<testcase/>` 被判 PASS —— 比真正空的 XML（正确判 NO_RESULTS）还宽松，零证据反而成了通过。另把写死的 `engine="Verilator 5.054"` 改成从日志抓真实版本
 
-- [66-visual-report-data-consistency.md](66-visual-report-data-consistency.md) — `render_visual_report` 的自检只查 HTML 标签配平与渲染行数（W050/W051），**完全不看 report 数据是否自相矛盾**：`summary.passed=2` 而 checks 全 FAIL、`overall_status=PASS` 却没有任何检查通过等四种情形，全部 `consistency_ok=True` + 零诊断被原样印进 HTML —— 读者面对「通过率 100%」和满屏 FAIL 行无从判断。新增 **W052**（summary 计数与实际不符）与 **W053**（overall_status 与行级结论矛盾）。另修六种畸形 report 字段抛裸 `AttributeError: 'str' object has no attribute 'get'`（无字段名无索引），改为渲染前统一结构校验 + 可定位错误（与上轮 normalize_sim_result 同口径）
+- [66-visual-report-data-consistency.md](66-visual-report-data-consistency.md) — `render_visual_report` 的自检只查 HTML 标签配平与渲染行数（W050/W051），**完全不看 report 数据是否自相矛盾**：`summary.passed=2` 而 checks 全 FAIL、`overall_status=PASS` 却没有任何检查通过等四种情形，全部 `consistency_ok=True` + 零诊断被原样印进 HTML —— 读者面对「通过率 100%」和满屏 FAIL 行无从判断。新增 **W052**（summary 计数与实际不符）与 **W053**（overall_status 与行级结论矛盾）。另修六种畸形 report 字段抛裸 `AttributeError: 'str' object has no attribute 'get'`（无字段名无索引），改为渲染前统一结构校验 + 可定位错误（与上轮 normalize_sim_result 同口径）；**另暴露流程盲区**：新增诊断码必须在 `docs/FEATURES.md` 登记，但该检查只在 CI 的 `docs_check.py`（D13）里跑，本地 `--fast` 的 Layer 5 不查 —— 本地全绿、CI 四个 test job 全红。已把 D13 前移到本地门禁（与 CI 同口径：字符串字面量声明 + README/docs 范围覆盖）
 
 ## 文档交付
 
