@@ -111,6 +111,8 @@
 
 - [70-ahb-trans-size-resp-widths.md](70-ahb-trans-size-resp-widths.md) — AHB 模板把 `htrans`/`hsize`/`hresp` 位宽写死成规范默认值（2/3/1 位），而真实 IP 常扩展它们（如 2 位 HRESP 表达 SPLIT/RETRY）。DUT 用 2 位 HRESP 时 TB 声明的是 1 位标量 → `WIDTHEXPAND` → Verilator 警告即错误、构建失败而工具报 `ok=True`。修复 `_pw` 取真实位宽 + 声明/常量/task 形参**调用点字面量**全部同步（`1'b0` 在 2 位形参上同样 EXPAND）+ `!exp_err` 改 `exp_err == 0`（LOGNOT 只接受 1 位）。记录一个教训：第一版只改声明和形参，TB 侧仍有 7 条告警（调用点没改），第二版又漏了文本重复的 `AHB_003` —— **改声明不改调用点的漏改只有实际编译才能发现**
 
+- [71-ddr-control-widths.md](71-ddr-control-widths.md) — DDR3/DDR4 模板把整组控制信号塞进同一个 `logic` 标量声明（`ddr3_cke = 1, ddr3_cs_n = 1, ...`），但**多 rank 控制器用多位 CKE/CS_n**（每 rank 一位，JEDEC 标准做法）。DUT 用 2 位 `ddr3_cke` 时 TB 侧 2 条 WIDTHEXPAND → Verilator 警告即错误、构建失败而工具报 `ok=True`。修复：DDR3 的 cke/cs_n/ras_n/cas_n/we_n/rd_valid 与 DDR4 的 act_n/cs_n/odt/rd_valid 全部 `_pw()` 取真实位宽并独立声明；驱动改成按位赋值（多位信号无法用 `{ras,cas,we} = cmd` 拼接整体赋值，否则 WIDTHTRUNC）与 `'0`/`'1` 全位赋值。两台变体 TB 侧告警清零，6 参考 DUT 全绿
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归

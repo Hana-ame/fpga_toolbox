@@ -2086,6 +2086,102 @@ endmodule
         assert "[0:0]" in resp_decl, resp_decl
 
 
+def test_ddr_control_widths_follow_port() -> None:
+    """Defect 124: DDR3/DDR4 的 CKE/CS_n/RAS_n/CAS_n/WE_n/ODT/ACT_n 位宽写死 1 位。
+
+    多 rank 的 DDR 控制器会用多位 CKE / CS_n（每 rank 一位）。旧模板把这一整组
+    控制信号塞进同一个 `logic` 标量声明：
+
+        logic clk = 0, rst_n = 0, ddr3_cke = 1, ddr3_cs_n = 1, ..., ddr3_rd_valid;
+
+    DUT 用 2 位 `ddr3_cke` 时钟线报：
+
+        %Warning-WIDTHEXPAND: Input port connection 'ddr3_cke' expects 2 bits
+                              ... generates 1 bits
+        %Error: Exiting due to 2 warning(s)
+
+    Verilator 警告即错误 → 构建失败，而工具返回 ok=True。
+
+    修复：cke/cs_n/ras_n/cas_n/we_n/rd_valid（DDR3）与
+    act_n/cs_n/odt/rd_valid（DDR4）全部由 `_pw()` 取真实端口位宽；task 内的
+    驱动改用 `'0`/`'1` 与按位赋值（多位 CS_n 时「全部置有效」语义不变）。
+    """
+    print("coverage: DDR3/DDR4 control signals follow real port widths")
+    from fpga_toolbox.protocol_tb_emitter import _pw
+
+    assert _pw({"port_details": {"cke": {"width": 2}}}, "cke", 1) == 2
+    assert _pw({"port_details": {"cs_n": {"width": 4}}}, "cs_n", 1) == 4
+    assert _pw({}, "cke", 1) == 1
+
+    # DDR3：2 位 cke —— TB 网线必须是 [1:0]，且不能再出现在 1 位标量串里
+    ddr3 = """`timescale 1ns/1ps
+module ddr3_multi_rank (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        ddr3_ck_p,
+  input  logic        ddr3_ck_n,
+  input  logic [1:0]  ddr3_cke,
+  input  logic        ddr3_cs_n,
+  input  logic        ddr3_ras_n,
+  input  logic        ddr3_cas_n,
+  input  logic        ddr3_we_n,
+  input  logic [2:0]  ddr3_ba,
+  input  logic [13:0] ddr3_addr,
+  input  logic [15:0] ddr3_dq_in,
+  output logic [15:0] ddr3_dq_out,
+  output logic        ddr3_rd_valid
+);
+  assign ddr3_dq_out = ddr3_dq_in;
+  assign ddr3_rd_valid = 1'b1;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(ddr3, encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(f), "out_dir": str(Path(td) / "out"), "protocol": "ddr3"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        cke_decl = next(ln for ln in tb.splitlines()
+                        if "ddr3_cke" in ln and ln.strip().startswith("logic"))
+        assert "[1:0]" in cke_decl, cke_decl
+        # 不能还有把 cke 塞进 1 位标量声明串的旧形态
+        assert "logic        clk = 0, rst_n = 0, ddr3_cke" not in tb
+
+    # DDR4：2 位 cs_n
+    ddr4 = """`timescale 1ns/1ps
+module ddr4_multi_rank (
+  input  logic         clk,
+  input  logic         rst_n,
+  input  logic         ddr4_ck_t,
+  input  logic         ddr4_ck_c,
+  input  logic         ddr4_act_n,
+  input  logic [1:0]   ddr4_bg,
+  input  logic [1:0]   ddr4_ba,
+  input  logic [16:0]  ddr4_adr,
+  input  logic [1:0]   ddr4_cs_n,
+  input  logic         ddr4_odt,
+  input  logic [63:0]  ddr4_dq_in,
+  output logic [63:0]  ddr4_dq_out,
+  input  logic [7:0]   ddr4_dm_dbi_n,
+  output logic         ddr4_rd_valid
+);
+  assign ddr4_dq_out = ddr4_dq_in;
+  assign ddr4_rd_valid = 1'b1;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(ddr4, encoding="utf-8")
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(f), "out_dir": str(Path(td) / "out"), "protocol": "ddr4"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        cs_decl = next(ln for ln in tb.splitlines()
+                       if "ddr4_cs_n" in ln and ln.strip().startswith("logic"))
+        assert "[1:0]" in cs_decl, cs_decl
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2122,6 +2218,7 @@ def main() -> int:
     test_ddr_required_ports_cover_dq_in()
     test_strobe_width_follows_real_port()
     test_ahb_trans_size_resp_widths_follow_port()
+    test_ddr_control_widths_follow_port()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
