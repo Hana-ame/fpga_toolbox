@@ -180,8 +180,16 @@ def test_mutation_non_utf8_rtl() -> None:
 
         # test_cmd 模拟"正确的 dut 应通过"：原 RTL 是 a & b（AND），
         # 变异成 a | b（OR）后 y 的真值表变了 → 一个能区分 AND/OR 的检查会失败
-        # → 变异被 KILLED。这里用 grep 找 AND（变异后找不到 → rc=1 → KILLED）。
-        cmd = ["bash", "-c", "grep -q 'a & b' dut.sv"]
+        # → 变异被 KILLED。
+        #
+        # 这里必须用 **Python 按字节**判断，不能用 `bash -c "grep -q 'a & b'"`：
+        # 那在 Windows Git Bash 下引号/`&` 会被曲解，命令在**未变异**的文件上
+        # 就返回非零（实测 CI windows job）。加了 baseline 预检之后这个假
+        # 命令立刻暴露 —— 而在此之前它从未被验证过，因为旧逻辑只看「变异后
+        # 非零即 KILLED」，一个永远返回非零的命令必然"杀掉"所有变异。
+        cmd = [sys.executable, "-c",
+               "import sys, pathlib; "
+               "sys.exit(0 if b'a & b' in pathlib.Path('dut.sv').read_bytes() else 1)"]
         r = call_tool("run_mutation", {"workdir": str(wd), "mutation_spec": str(spec),
                                        "test_cmd": cmd})
         check(r["ok"], f"mutation on latin-1 RTL runs without decode error "

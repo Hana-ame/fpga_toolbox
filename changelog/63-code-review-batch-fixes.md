@@ -150,3 +150,23 @@ active-high 复位原本靠两处 `tb_src.replace(f", {rst} = 0", ...)` /
   `test_review_fixes_artifact_escaping_and_polarity`。
 - 既有测试中依赖「坏 test_cmd 也能拿分」的用例（`["false"]`）已改用真正有
   判别力的命令（`grep -q`），这正是这轮修复要消灭的那类假通过。
+
+## 附：CI 暴露的既有测试缺陷（baseline 预检的第一个战果）
+
+首次推送后 `test (windows-latest, py3.13)` 失败，失败点是**既有测试**
+`test_mutation_non_utf8_rtl`：
+
+```
+FAIL mutation on latin-1 RTL runs without decode error
+     (got Baseline (unmutated) test run already fails with exit code 1 ...)
+```
+
+它用的检测命令是 `["bash", "-c", "grep -q 'a & b' dut.sv"]`。在 Windows Git Bash
+下引号与 `&` 被曲解，这条命令在**未变异**的文件上就返回非零 —— 也就是说它从来
+不具备判别力。旧实现之所以一直「通过」，恰恰因为旧逻辑是「变异后非零即 KILLED」：
+一个永远返回非零的命令必然"杀掉"所有变异，看起来 100% 通过。
+
+这正是本轮修复要消灭的那类假通过，而且是被新的 baseline 预检**第一次**抓出来的
+（本地 Linux 下 grep 行为正常，所以只有 Windows CI 暴露）。改成跨平台的
+`sys.executable -c "b'a & b' in read_bytes()"`，语义不变（按字节判断 AND→OR 是否
+发生）但真正可判别。
