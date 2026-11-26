@@ -165,3 +165,4 @@
 - [100 · 黑盒输出端口未识别导致悬空 wire](100-netlist-tieoff-blackbox-outputs.md)
 - [101 · 第二时钟 clk_extra/clk2/clk_i 识别不到被静默 tie 到 0](101-secondary-clock-names.md)
 - [102 · 第二复位 rst_extra/rst2/rst_i 识别不到被静默 tie](102-secondary-reset-names.md)
+- [103 · 方向后缀 psel_i/pready_o 让协议识别彻底失败](103-direction-suffixed-ports.md)

@@ -4163,6 +4163,90 @@ def test_secondary_reset_names_are_recognised() -> None:
         assert "clock/reset-like" in oos["rst_extra"]["warning"], oos["rst_extra"]
 
 
+def test_direction_suffixed_bus_ports_are_classified() -> None:
+    """Defect 166: `psel_i` / `pready_o` 方向后缀让协议识别彻底失败。
+
+    各 `_*_PATS` 的形态都是 `(?:^|_)sig$`（信号名必须在末尾），方向后缀
+    `_i`/`_o`/`_in`/`_out` 因此完全无解：
+
+      - 标准 APB 从机用 psel_i/penable_i/.../pready_o/prdata_o/pslverr_o
+        → interfaces=[]，9 个信号全落进 out_of_scope_ports
+      - 标准 AXI4-Lite 用 awaddr_o/awready_i/... → 17 个信号全落空
+
+    前缀问题（缺陷 131）至少有 `(?:^|_)` 兜住，后缀没有任何保底。
+    """
+    print("coverage: direction-suffixed bus ports are classified")
+    from fpga_toolbox.registry import call_tool
+
+    apb = (
+        "module apb_suffix_dut (\n"
+        "  input  logic        clk,\n"
+        "  input  logic        rst_n,\n"
+        "  input  logic        psel_i,\n"
+        "  input  logic        penable_i,\n"
+        "  input  logic        pwrite_i,\n"
+        "  input  logic [7:0]  paddr_i,\n"
+        "  input  logic [31:0] pwdata_i,\n"
+        "  input  logic [3:0]  pstrb_i,\n"
+        "  output logic        pready_o,\n"
+        "  output logic [31:0] prdata_o,\n"
+        "  output logic        pslverr_o\n"
+        ");\n"
+        "  assign pready_o = 1\'b1; assign prdata_o = pwdata_i; assign pslverr_o = 1\'b0;\n"
+        "endmodule\n")
+
+    axi = (
+        "module axi_suffix_dut (\n"
+        "  input  logic        aclk,\n"
+        "  input  logic        aresetn,\n"
+        "  output logic [7:0]  awaddr_o,\n"
+        "  output logic        awvalid_o,\n"
+        "  input  logic        awready_i,\n"
+        "  output logic [31:0] wdata_o,\n"
+        "  output logic [3:0]  wstrb_o,\n"
+        "  output logic        wvalid_o,\n"
+        "  input  logic        wready_i,\n"
+        "  input  logic [1:0]  bresp_i,\n"
+        "  input  logic        bvalid_i,\n"
+        "  output logic        bready_o,\n"
+        "  output logic [7:0]  araddr_o,\n"
+        "  output logic        arvalid_o,\n"
+        "  input  logic        arready_i,\n"
+        "  input  logic [31:0] rdata_i,\n"
+        "  input  logic [1:0]  rresp_i,\n"
+        "  input  logic        rvalid_i,\n"
+        "  output logic        rready_o\n"
+        ");\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        for name, src, proto, nports in (
+                ("apb.sv", apb, "apb", 9),
+                ("axi.sv", axi, "axi4_lite", 17)):
+            f = root / name
+            f.write_text(src, encoding="utf-8")
+            r = call_tool("extract_interfaces", {"rtl_file": str(f)})
+            assert r["ok"], str(r.get("error"))[:200]
+            mod = r["data"]["modules"][0]
+            ifaces = mod["interfaces"]
+            assert len(ifaces) == 1, [(i["protocol"], i["group_prefix"]) for i in ifaces]
+            assert ifaces[0]["protocol"] == proto, ifaces[0]["protocol"]
+            assert len(ifaces[0]["port_map"]) == nports, sorted(ifaces[0]["port_map"])
+            # 方向后缀端口不能被丢进 out_of_scope
+            assert mod["out_of_scope_ports"] == [], mod["out_of_scope_ports"]
+            # port_map 必须指向**真实**（带后缀的）端口名
+            assert ifaces[0]["port_map"].get("psel", ifaces[0]["port_map"].get("awaddr", "")).endswith(("_i", "_o")), \
+                ifaces[0]["port_map"]
+
+        # 端到端：带后缀的 APB 仍能生成 TB，且 TB 里映射到真实端口名
+        from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+        r2 = emit_protocol_testbench(str(root / "apb.sv"), str(root / "tb"), "apb")
+        assert r2["ok"], str(r2.get("error"))[:250]
+        tb = Path(r2["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        assert ".psel_i(psel_i)" in tb, tb[:600]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4231,6 +4315,7 @@ def main() -> int:
     test_netlist_cleaner_ties_off_blackbox_outputs()
     test_secondary_clock_names_are_recognised()
     test_secondary_reset_names_are_recognised()
+    test_direction_suffixed_bus_ports_are_classified()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

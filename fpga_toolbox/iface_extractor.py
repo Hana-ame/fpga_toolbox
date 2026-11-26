@@ -53,6 +53,12 @@ _AXIS_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("tkeep",  re.compile(r"(?:^|_)t_?keep$", re.I)),
 )
 
+# 方向后缀：`psel_i` / `pready_o` / `awaddr_in` / `rdata_out` / `din_i` 这类
+# 命名在真实 RTL 里极常见。各 `_*_PATS` 都以 `(?:^|_)sig$` 形态匹配（信号名
+# 必须在末尾），因此这些名字全部匹配不到 —— 一个标准 APB 从机用 `_i`/`_o`
+# 后缀就会得到 0 个接口。匹配前先剥掉这一段。
+_DIR_SUFFIX_RE = re.compile(r"_(?:i|o|in|out|ib|ob)$", re.I)
+
 _APB_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("psel",    re.compile(r"(?:^|_)p_?sel\d*$", re.I)),
     ("penable", re.compile(r"(?:^|_)p_?enable$", re.I)),
@@ -306,11 +312,27 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
         for p in mod.ports:
             if p.name in claimed:
                 continue
+            # 匹配前先剥掉**方向后缀**（`_i`/`_o`/`_in`/`_out`/`_ib`/`_ob`）。
+            # 各 `_*_PATS` 的形态都是 `(?:^|_)sig$`（信号名在末尾），于是
+            # `psel_i` / `pready_o` / `awaddr_o` / `rdata_i` 这类**非常常见**的
+            # 方向后缀命名全部匹配不到：实测一个完全标准的 APB 从机
+            # （psel_i/penable_i/.../pready_o/prdata_o/pslverr_o）被分类成 0 个
+            # 接口，9 个信号全落进 out_of_scope_ports；AXI4-Lite 同理（17 个
+            # 信号全落空）。这比前缀问题（缺陷 131）影响面更大 —— 前缀至少有
+            # `(?:^|_)` 兜住，后缀则完全无解。
+            _mname = p.name
+            _suf = _DIR_SUFFIX_RE.search(_mname)
+            if _suf:
+                _mname = _mname[:_suf.start()]
+            matched = None
             for canon, pat in pats:
-                m = pat.search(p.name)
+                m = pat.search(_mname)
                 if m:
-                    groups.setdefault(_norm_prefix(p.name[:m.start()]), {})[canon] = p
+                    groups.setdefault(_norm_prefix(_mname[:m.start()]), {})[canon] = p
+                    matched = canon
                     break
+            if matched:
+                continue
         for grp, sigs in groups.items():
             if len(sigs) < min_cnt:
                 continue
