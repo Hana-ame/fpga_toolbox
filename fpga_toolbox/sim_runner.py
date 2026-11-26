@@ -18,10 +18,27 @@ if __package__ in (None, ""):
 from .core.types import err_result, ok_result
 from .eda_env import probe_eda_env
 
+# 套件**结束汇总行**：`PASS: <suite> ...` / `FAIL: <suite> ...`。
+# 生成器（sim.sh / protocol_tb_emitter）在每个套件 $finish 之前必定打印恰好一条。
+_SUITE_SUMMARY_RE = re.compile(r"^\s*(PASS|FAIL)\s*:", re.MULTILINE)
+
 
 def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[str, Any]:
-    """Ported from agent/verilog/suite_verify.py: verify each named suite passed, not just PASS line count."""
+    """逐套件核对身份与完成度（不只是「日志里出现过 PASS」）。
+
+    背景（真实踩坑，两处都是静默假通过）：
+      1. 旧实现「任意行匹配 \bPASS\b 就判该套件 PASS」。一个套件打印了
+         `[CHECK] id=C1 | status=PASS` 之后、在 `$finish` 之前崩溃（断言挂 /
+         段错误 / 超时被杀），仍被判成 PASS —— 而它根本没跑完。
+      2. 完成度只看「日志里 PASS/FAIL 汇总行的**总数** >= 启动的套件数」。
+         若 A 打了两条 PASS: 而 B 一条都没有（B 崩了），总数仍然够，B 被放行。
+         实测：A 重复打印 + B 崩溃 → overall_status=PASS。
+
+    正确口径：每个**启动过**的套件都必须有自己的结束汇总行，且该行必须是
+    `PASS:`；崩溃的套件只有 STARTED / 无汇总行 → 判 FAIL。
+    """
     results: Dict[str, str] = {}
+    summaries: Dict[str, str] = {}
     current: Optional[str] = None
     # 真实 sim.sh 打印的 header 是 `== sim: <name> (top=<top>) ==`，套件名后可能
     # 带 (top=...) / (WAIT=...) 等参数。旧正则要求套件名后紧跟 `==`，对真实日志
@@ -33,16 +50,33 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
         if m_hdr:
             current = m_hdr.group(1)
             results.setdefault(current, "STARTED")
+            continue
         if current:
-            if re.search(r"\bFAIL\b|\$fatal|ERROR:", line):
+            # 明确的失败信号优先（含崩溃/断言的痕迹）
+            if re.search(r"\bFAIL\b|\$fatal|ERROR:|Assertion failed|Segmentation fault",
+                         line, re.IGNORECASE):
                 results[current] = "FAIL"
-            elif re.search(r"\bPASS\b", line) and results.get(current) != "FAIL":
-                results[current] = "PASS"
+                continue
+            # 该套件自己的结束汇总行：以该行开头、且套件名匹配（或首词不是套件名
+            # 的通用汇总 `PASS: all N checks passed` 也认，见下）。
+            m_sum = _SUITE_SUMMARY_RE.match(line)
+            if m_sum:
+                verdict = m_sum.group(1)
+                summaries.setdefault(current, verdict)
+                if verdict == "FAIL":
+                    results[current] = "FAIL"
+                elif results.get(current) != "FAIL":
+                    results[current] = "PASS"
+    # 启动过但没有**自己的**结束汇总行 => 中途崩溃，判 FAIL（不能沿用 PASS）
+    for name, status in list(results.items()):
+        if status == "PASS" and name not in summaries:
+            results[name] = "FAIL"
     missing = [s for s in expected_suites if s not in results]
     failed = [s for s in expected_suites if results.get(s) != "PASS" and s not in missing]
     return {
         "expected": expected_suites,
         "observed": results,
+        "summaries": summaries,
         "missing": missing,
         "failed": failed,
         "all_verified": not missing and not failed,

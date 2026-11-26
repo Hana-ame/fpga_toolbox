@@ -1659,6 +1659,90 @@ def test_review_fixes_artifact_escaping_and_polarity() -> None:
         assert "preset = 0;" in tb, tb[:600]
 
 
+def test_suite_identity_requires_per_suite_summary() -> None:
+    """Defect 117: 套件「打印过 PASS 之后崩溃」仍被判 PASS（两处静默通过）。
+
+    正则/计数法都只看「日志里出现过 PASS」：
+
+    1. `sim_runner.verify_suite_identities` 对任意含 `\bPASS\b` 的行判该套件
+       PASS。套件打印 `[CHECK] id=C1 | status=PASS` 后在 `$finish` 之前崩溃
+       （断言挂 / 段错误 / 超时被杀），仍被判 PASS。
+    2. `result_normalizer` 的完成度只看**汇总行总数** >= 启动套件数。A 打印两条
+       `PASS:`、B 崩溃一条都没有时，总数仍够 —— 实测 overall_status=PASS。
+
+    正确口径：每个**启动过**的套件都必须有自己的 `PASS:` 结束汇总行；只有
+    STARTED 没有汇总行 = 中途崩溃 = FAIL。
+    """
+    print("coverage: suite identity needs per-suite PASS summary (crash is not PASS)")
+    from fpga_toolbox.result_normalizer import tool_normalize_sim_result
+    from fpga_toolbox.sim_runner import verify_suite_identities
+
+    # 1) 只在 CHECK 行里出现过 PASS、随后崩溃 => 不能算 PASS
+    crash_log = ("== sim: apb (top=tb) ==\n"
+                 "[CHECK] id=C1 | status=PASS\n%Error: Assertion failed\n")
+    r = verify_suite_identities(crash_log, ["apb"])
+    assert r["observed"].get("apb") == "FAIL", r
+    assert r["all_verified"] is False, r
+
+    # 正常跑完（有自身汇总行）=> PASS
+    ok_log = ("== sim: apb (top=tb) ==\n"
+              "[CHECK] id=C1 | status=PASS\nPASS: apb all 8 checks passed\n")
+    r2 = verify_suite_identities(ok_log, ["apb"])
+    assert r2["observed"].get("apb") == "PASS", r2
+    assert r2["all_verified"] is True, r2
+
+    # 2) 计数法绕过：A 两条 PASS、B 零条 => B 必须 FAIL
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / "v.log"
+        log.write_text(
+            "== sim: A (top=t) ==\nPASS: a\nPASS: a duplicated\n"
+            "[CHECK] id=A1 | status=PASS\n"
+            "== sim: B (top=t) ==\n[CHECK] id=B1 | status=PASS\n%Error crash\n",
+            encoding="utf-8")
+        nr = tool_normalize_sim_result("m", verilator_log_path=str(log),
+                                       expected_suites=["A", "B"])
+        d = nr["data"]
+        assert d["overall_status"] == "FAIL", d["overall_status"]
+        assert any(c["rule_id"] == "VERILATOR_NO_SUMMARY" and c["status"] == "FAIL"
+                   for c in d["checks"]), [c["rule_id"] for c in d["checks"]]
+
+        # 两个套件都各自有汇总行 => 仍然是 PASS（不能因为加严而误伤）
+        good = Path(td) / "good.log"
+        good.write_text(
+            "== sim: A (top=t) ==\n[CHECK] id=A1 | status=PASS\nPASS: A ok\n"
+            "== sim: B (top=t) ==\n[CHECK] id=B1 | status=PASS\nPASS: B ok\n",
+            encoding="utf-8")
+        ng = tool_normalize_sim_result("m", verilator_log_path=str(good),
+                                       expected_suites=["A", "B"])
+        assert ng["data"]["overall_status"] == "PASS", ng["data"]["checks"]
+        assert not any(c["rule_id"] == "VERILATOR_NO_SUMMARY"
+                       for c in ng["data"]["checks"])
+
+
+def test_mutation_rejects_empty_old_pattern() -> None:
+    """Defect 118: 变异 spec 的 `old: ""` 被当作"匹配任意位置"静默执行。
+
+    `b"" in bytes` 恒为真，`original.replace(b"", new, 1)` 会把 new 插到文件
+    **开头**（实测）——变异"成功"、进入分母影响得分，却没有任何语义。这不是
+    "匹配到所有位置"，是 spec 写错了，必须显式拒绝且不动文件。
+    """
+    print("coverage: run_mutation rejects empty 'old' pattern")
+    from fpga_toolbox.mutation_runner import tool_run_mutation
+
+    with tempfile.TemporaryDirectory() as td:
+        wd = Path(td)
+        (wd / "a.txt").write_text("hello world\n", encoding="utf-8")
+        (wd / "m.json").write_text(json.dumps({"mutations": [
+            {"id": "E", "file": "a.txt", "old": "", "new": "ZZ", "desc": "empty"}]}),
+            encoding="utf-8")
+        r = tool_run_mutation(str(wd), str(wd / "m.json"), ["true"], min_score=0.0)
+        assert not r["ok"], "empty 'old' must not produce a score"
+        assert "No mutation could be evaluated" in r["error"], r["error"]
+        res = r["data"]["results"][0]
+        assert res["status"] == "ERROR" and "empty" in res["detail"].lower(), res
+        assert (wd / "a.txt").read_text(encoding="utf-8") == "hello world\n"
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -1688,6 +1772,8 @@ def main() -> int:
     test_review_fixes_index_repo_and_linter_routing()
     test_review_fixes_registry_parser_and_types()
     test_review_fixes_artifact_escaping_and_polarity()
+    test_suite_identity_requires_per_suite_summary()
+    test_mutation_rejects_empty_old_pattern()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

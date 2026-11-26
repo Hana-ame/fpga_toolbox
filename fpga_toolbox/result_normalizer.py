@@ -250,18 +250,23 @@ def tool_normalize_sim_result(
         # 采用计数法：**启动了几个套件，就必须至少有几条汇总行**——
         # 生成/运行一个套件必然在 $finish 前打印恰好一条。数量不足即说明
         # 有套件在中途崩溃。
-        _summary_list = [m for m in _SUITE_SUMMARY_RE.finditer(log_txt)]
+        # 逐套件核对「有没有自己的结束汇总行」，而不是比对**总数**。
+        # 旧实现用 len(汇总行) < len(启动套件) 判断，会被重复汇总行绕过：
+        # 实测 A 打印两条 `PASS:`、B 崩溃一条都没有 → 总数 2 >= 2，B 被放行，
+        # overall_status 仍是 PASS。verify_suite_identities 现已按套件边界
+        # 归集 summaries，这里直接用它。
         _started = list(ident["observed"].keys())
-        if _started and len(_summary_list) < len(_started):
-            missing_count = len(_started) - len(_summary_list)
+        _summaries = ident.get("summaries") or {}
+        _no_summary = [n for n in _started if n not in _summaries]
+        if _no_summary:
             checks.append({
                 "rule_id": "VERILATOR_NO_SUMMARY",
                 "category": "verilator_run_integrity",
                 "status": "FAIL",
-                "detail": f"{len(_started)} suite(s) started ({_started}) but only "
-                          f"{len(_summary_list)} 'PASS:'/'FAIL:' summary line(s) found "
-                          f"({missing_count} suite(s) aborted before $finish). "
-                          "Treat as failure, not partial pass.",
+                "detail": f"suite(s) {_no_summary} started but never printed their own "
+                          "'PASS:'/'FAIL:' summary line before the log ended "
+                          f"(started={_started}, summaries={_summaries}). They aborted "
+                          "before $finish. Treat as failure, not partial pass.",
             })
         sources.append(str(p))
 

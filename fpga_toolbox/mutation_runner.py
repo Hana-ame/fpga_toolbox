@@ -219,6 +219,18 @@ def tool_run_mutation(
         original_bytes = fp.read_bytes()
         old_b = m["old"].encode("utf-8")
         new_b = m["new"].encode("utf-8")
+        # 空 old 不是"匹配到所有位置"，而是 spec 本身写错了：b"" in bytes 恒真，
+        # replace(b"", new, 1) 把 new 插到文件**开头**（实测），变异于是"成功"，
+        # 看起来像一次合法变异。这种变异没有任何语义，却会进入分母影响得分。
+        # 明确拒绝，而不是静默按"插入到开头"执行。
+        if not old_b:
+            results.append({
+                "id": m["id"], "status": "ERROR",
+                "detail": "Mutation 'old' is empty: an empty search pattern matches "
+                          "anywhere and would insert 'new' at offset 0, which is not "
+                          "a meaningful mutation. Give the exact source text to replace.",
+            })
+            continue
         if old_b not in original_bytes:
             results.append({"id": m["id"], "status": "SKIP_UNMATCHED", "detail": "Pattern 'old' not found."})
             continue

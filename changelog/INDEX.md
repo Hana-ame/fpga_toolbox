@@ -97,6 +97,8 @@
 
 - [63-code-review-batch-fixes.md](63-code-review-batch-fixes.md) — v0.5.0 外部代码评审的批量修复（14 项，逐条复现后确认）。**最严重**：`run_mutation` 无 baseline 预检，`test_cmd` 坏掉时每个变异都非零退出 → **假 100% 变异得分**，且 `ERROR` 被 `survived = total - killed` 算成存活。另有 `index_repo` 用展开源码覆写子模块的 `instantiated_modules`/`includes`（实测 datapath 被错标 include 了 datapath.v）+ O(F×M) 次重复 tokenize；`lint_tb` 的 S1 写在 `scan_handshake` 里（规则路由错位）、`s_apb`/`m_apb` 漏检、R2/R4 写死 `axi.` 前缀、S4 被 `"no error(s)"` 字符串绕过；`call_tool` 的 Optional enum 拒绝 None / required 接受 None / number 接受 bool / 原地改写调用方 dict；`sv_parser` 把 int/byte/shortint/longint 当 1 位、`$clog2(1)` 返回 1（应为 0）；`_to_int` 对 17 个字段仍抛裸 ValueError；`eda_campaign` 的 dev_shm 路径不一致 + PT 网表编码 + 转义实例名残留漏检；生成的 cocotb 用 `json.loads(r"""...""")` 会因描述含三引号而 SyntaxError、`WAVE_FILE` 未转义、复位极性靠脆弱 replace（模板一变就静默反相）。新增 4 个回归测试
 
+- [64-suite-identity-and-empty-mutation.md](64-suite-identity-and-empty-mutation.md) — 又两处同根静默假通过：「只看某条证据存在，不看它是否属于该对象/是否覆盖完整边界」。① `verify_suite_identities` 对任意含 `\bPASS\b` 的行判该套件 PASS —— 套件打印 `[CHECK] ... status=PASS` 后在 `$finish` 前崩溃（断言挂/段错误/超时被杀）仍被判 PASS；② `result_normalizer` 的完成度只比**汇总行总数** vs 启动套件数，A 重复两条 `PASS:` + B 崩溃一条没有时仍放行（实测 `overall_status=PASS`）。修复：按套件边界归集各自的结束汇总行，启动过却没有自己汇总行的套件判 FAIL，`VERILATOR_NO_SUMMARY` 点名具体套件。真实 apb(1)/pcie(9) 日志不误伤。另修 `old: ""` 被当成「匹配任意位置」：`replace(b"", new, 1)` 把 new 插到文件开头，变异「成功」却无语义 —— 现显式拒绝且不动文件
+
 ## 文档交付
 
 - [31-docs-html-derivation.md](31-docs-html-derivation.md) — 文档 HTML 版定位为派生产物（markdown 唯一事实源）：写派生器时踩到 4 个真实缺陷——`<strong>` 被转义成可见文本、把 `.md` 无脑改 `.html` 造成 3 个死链、页面出现两个 `<h1>`、**f-string 表达式含反斜杠（仅 py3.12+ 允许，本地 3.13 测不出、CI 3.10/3.11 直接 SyntaxError）**；后者暴露语法门只扫 `fpga_toolbox`+`tests` 的覆盖漏洞，一并修好并加本地回归
