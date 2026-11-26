@@ -1190,7 +1190,15 @@ run_one() {{
   echo "== sim: $name (top=$top) =="
   if [ "$need_build" -eq 1 ]; then
     rm -rf "$out"
-    "$VLT" --binary --build-jobs 4 $TRACE_FLAG -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME -Wno-PINMISSING --top-module "$top" -Mdir "$out" "$@" >/dev/null
+    # --timescale 1ns/1ps：TB 头部写了 `timescale，但大量真实 RTL 把它交给
+    # 编译选项、文件里不写。Verilator 5.x 对「部分模块有 timescale、部分没有」
+    # 报 TIMESCALEMOD，并在默认配置下当 error 处理（"Exiting due to N
+    # warning(s)"），于是一个完全合法的 DUT 直接构建失败 —— 实测无 timescale
+    # 的 APB 从机 emit 返回 ok=True 但 run 脚本 rc!=0。
+    # 这里用 --timescale 统一给**所有**模块同一个 timescale（与 tb_emitter 的
+    # COMPILE_ARGS 口径一致），比 -Wno-TIMESCALEMOD 更正确：既不压制告警，
+    # 又让 DUT 的时间单位真正确定下来。
+    "$VLT" --binary --build-jobs 4 $TRACE_FLAG --timescale 1ns/1ps -Wno-UNUSED -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME -Wno-PINMISSING --top-module "$top" -Mdir "$out" "$@" >/dev/null
     printf '%s' "$want_tag" > "$out/.wave_mode"
   fi
   if [ "$WAVE" = "1" ]; then

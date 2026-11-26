@@ -2896,6 +2896,136 @@ def test_rtl_files_keeps_independently_compilable_modules() -> None:
         assert rm["data"]["all_files"] == ["rtl/real.sv"], rm["data"]["all_files"]
 
 
+def test_tb_builds_for_rtl_without_timescale() -> None:
+    """Defect 137: DUT 不写 `timescale 时 TB 构建必须仍然成功。
+
+    TB 头部有 ``timescale 1ns/1ps``，但大量真实 RTL 把 timescale 交给编译
+    选项、文件里不写。Verilator 5.x 对「部分模块有、部分没有」报
+    TIMESCALEMOD，并在默认配置下当 error（"Exiting due to N warning(s)"）：
+    一个完全合法的 DUT 直接构建失败，而 emit_testbench 返回 ok=True。
+
+    修复方式是给 verilator 统一传 `--timescale 1ns/1ps`（与 tb_emitter 的
+    COMPILE_ARGS 口径一致），而不是压制告警。
+    """
+    print("coverage: TB run script supplies --timescale for RTL without one")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        dut = root / "apb_nots.sv"
+        dut.write_text(
+            "module apb_nots (\n"
+            "  input  logic        clk,\n"
+            "  input  logic        rst_n,\n"
+            "  input  logic        psel,\n"
+            "  input  logic        penable,\n"
+            "  input  logic        pwrite,\n"
+            "  input  logic [7:0]  paddr,\n"
+            "  input  logic [31:0] pwdata,\n"
+            "  input  logic [3:0]  pstrb,\n"
+            "  output logic        pready,\n"
+            "  output logic [31:0] prdata,\n"
+            "  output logic        pslverr\n"
+            ");\n"
+            "  assign pready = 1'b1; assign prdata = pwdata; assign pslverr = 1'b0;\n"
+            "endmodule\n", encoding="utf-8")
+        r = emit_protocol_testbench(str(dut), str(root / "tb"), "apb")
+        assert r["ok"], str(r.get("error"))[:300]
+        script = Path(r["data"]["artifacts"]["sim_script"]).read_text(encoding="utf-8")
+        assert "--timescale 1ns/1ps" in script, script[:400]
+        # 不能靠压制告警掩饰：真正的 verilator 调用行里不该出现抑制 TIMESCALEMOD
+        vlt_lines = [ln for ln in script.splitlines()
+                     if '"$VLT"' in ln and "--binary" in ln]
+        assert vlt_lines, script[:400]
+        assert not any("Wno-TIMESCALEMOD" in ln for ln in vlt_lines), vlt_lines
+
+
+def test_typedef_port_width_placeholders_are_legal() -> None:
+    """Defect 138/139: typedef/interface 端口位宽未解析时不能生成非法或致败代码。
+
+    纯文本解析拿不到 typedef（enum/struct）与 interface 端口的位宽，实测都是
+    width=0。旧实现：
+
+    - 138: `out_of_scope_ports` 的 tie_off 用 f"{width}'b0" → 产出非法字面量
+      `0'b0`（零位宽）；tb_emitter 直接写进 `.port(0'b0)`，生成物必然编译失败。
+      修法：位宽未知时用 SV 的 unsized `'0`，并附 warning 说明位宽未解析。
+    - 139: 输出端口的观察变量按 `if o.width > 1` 三态声明，width=0 落到 1 位，
+      而 DUT 端口实际可能多位（enum 常见 2/3 位）→ WIDTHTRUNC，Verilator 默认
+      warning-as-error 直接构建失败。修法：该端口用**显式空连接** `.port()`
+      （实测零告警），并通过 W054 诊断告知调用方未观察该端口。
+    """
+    print("coverage: unresolved typedef port widths use legal placeholders")
+    from fpga_toolbox.registry import call_tool
+
+    rtl = (
+        "package tdpkg;\n"
+        "  typedef enum logic [2:0] { T0, T1, T2 } dbg_e;\n"
+        "endpackage\n"
+        "module axil_typed\n"
+        "  import tdpkg::*;\n"
+        "(\n"
+        "  input  logic        ACLK,\n"
+        "  input  logic        ARESETn,\n"
+        "  input  logic [7:0]  AWADDR,\n"
+        "  input  logic        AWVALID,\n"
+        "  output logic        AWREADY,\n"
+        "  input  logic [31:0] WDATA,\n"
+        "  input  logic [3:0]  WSTRB,\n"
+        "  input  logic        WVALID,\n"
+        "  output logic        WREADY,\n"
+        "  output logic [1:0]  BRESP,\n"
+        "  output logic        BVALID,\n"
+        "  input  logic        BREADY,\n"
+        "  input  logic [7:0]  ARADDR,\n"
+        "  input  logic        ARVALID,\n"
+        "  output logic        ARREADY,\n"
+        "  output logic [31:0] RDATA,\n"
+        "  output logic [1:0]  RRESP,\n"
+        "  output logic        RVALID,\n"
+        "  input  logic        RREADY,\n"
+        "  input  dbg_e        dbg_mode_i,\n"
+        "  output dbg_e        dbg_state_o\n"
+        ");\n"
+        "  assign AWREADY = 1'b1; assign WREADY = 1'b1; assign BVALID = 1'b0;\n"
+        "  assign BRESP = 2'b00; assign ARREADY = 1'b1; assign RVALID = 1'b0;\n"
+        "  assign RDATA = 32'h0; assign RRESP = 2'b00; assign dbg_state_o = T0;\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "axil_typed.sv"
+        f.write_text(rtl, encoding="utf-8")
+
+        # 138: 输入侧 tie_off 不能是 0'b0
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        mod = ex["data"]["modules"][0]
+        oos = {o["port"]: o for o in mod["out_of_scope_ports"]}
+        assert "dbg_mode_i" in oos, sorted(oos)
+        assert oos["dbg_mode_i"]["tie_off"] != "0'b0", oos["dbg_mode_i"]
+        assert oos["dbg_mode_i"]["tie_off"] == "'0", oos["dbg_mode_i"]
+        assert "warning" in oos["dbg_mode_i"], oos["dbg_mode_i"]
+
+        # 139: 观察端口用显式空连接，且报 W054
+        draft = root / "draft.yaml"
+        dr = call_tool("extract_interfaces",
+                       {"rtl_file": str(f), "emit_draft_yaml": str(draft)})
+        assert dr["ok"], str(dr.get("error"))[:200]
+        em = call_tool("emit_testbench", {
+            "spec_path": str(draft), "rtl_file": str(f), "out_dir": str(root / "out")})
+        assert em["ok"], str(em.get("error"))[:300]
+        assert em["data"]["unconnected_observation_ports"] == ["dbg_state_o"], \
+            em["data"].get("unconnected_observation_ports")
+        codes = [(d["code"], d["path"]) for d in (em.get("diagnostics") or [])]
+        assert ("W054", "wrapper[dbg_state_o]") in codes, codes
+        wrap = Path(em["data"]["artifacts"]["unit_isolation_wrapper"]).read_text(
+            encoding="utf-8")
+        assert ".dbg_state_o()" in wrap, wrap
+        assert "0'b0" not in wrap, "illegal zero-width literal in wrapper"
+        # 输入侧 tie-off 必须是合法的 unsized '0
+        assert ".dbg_mode_i('0)" in wrap, wrap
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2942,6 +3072,8 @@ def main() -> int:
     test_resolve_deps_transitive_headers()
     test_included_source_not_treated_as_compilation_unit()
     test_rtl_files_keeps_independently_compilable_modules()
+    test_tb_builds_for_rtl_without_timescale()
+    test_typedef_port_width_placeholders_are_legal()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

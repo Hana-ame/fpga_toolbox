@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 if __package__ in (None, ""):
     import sys as _sys
@@ -168,7 +168,7 @@ endmodule
 """
 
 
-def _emit_wrap(u: CompiledUnitIR) -> str:
+def _emit_wrap(u: CompiledUnitIR) -> Tuple[str, List[str]]:
     b, ax = u.boundary, u.boundary.axil
     pm = ax.port_map
     clk_p, rst_p = b.clock.port, b.reset.port
@@ -183,6 +183,7 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
     conns += [f"    .{pm[s]}(s_axil_{s})" for s in OPTIONAL_AXIL_SIGNALS if s in pm]
 
     obs_decls: List[str] = []
+    unresolved_obs: List[str] = []
     # A port already wired through clock/reset/port_map must never be connected twice.
     connected = {clk_p, rst_p} | set(pm.values())
     apb_pm = b.apb.port_map if b.apb is not None else {}
@@ -194,10 +195,24 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
         connected.add(o.port)
         if o.direction == "input":
             conns.append(f"    .{o.port}({o.tie_off})")
-        else:
+        elif o.width and o.width > 0:
             w = f"[{o.width - 1}:0] " if o.width > 1 else ""
             obs_decls.append(f"  logic {w}obs_{o.port};")
             conns.append(f"    .{o.port}(obs_{o.port})")
+        else:
+            # width<=0 = 「位宽未能解析」（typedef/interface 类型的端口）。
+            # 此时**不连接**：任何猜测都不对 ——
+            #   * 声明成 1 位 → 对 2 位 enum 端口产生 WIDTHTRUNC；
+            #   * 声明成 64 位 → 对 2 位端口同样 WIDTHTRUNC（实测）。
+            # Verilator 默认 warning-as-error，任一猜测都会让构建失败。
+            # 声明一个同名变量但不接入 DUT 更糟（PINMISSING 又被触发，而
+            # 模板已注入 lint_off 掩盖，反而留下未驱动信号）。
+            # 正确做法：用**显式空连接** `.port()` —— Verilator 对空连接不产生
+            # 任何位宽/缺失告警（实测 count=0），而完全省略该 pin 会触发
+            # PINMISSING（同样是默认 error）。同时记录到 unresolved_obs，由
+            # diagnostics 告知调用方该端口未被观察。
+            conns.append(f"    .{o.port}()")
+            unresolved_obs.append(o.port)
 
     apb_inst_s = ""
     if dual_apb and b.apb is not None:
@@ -277,7 +292,7 @@ def _emit_wrap(u: CompiledUnitIR) -> str:
     _raw_wave = os.environ.get("WAVE_FILE") or f"{b.module_name}_axil_wrap.vcd"
     wave_file = _raw_wave.replace("\\", "/").replace('"', "")
     conn_s = ",\n".join(conns)
-    return f"""`timescale 1ns/1ps
+    _wrap_src = f"""`timescale 1ns/1ps
 module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W={ax.data_width}, STRB_W={ax.strb_width}) (
   input logic {clk_p}, input logic {rst_p},
   input logic [ADDR_W-1:0] s_axil_awaddr, input logic [2:0] s_axil_awprot, input logic s_axil_awvalid, output logic s_axil_awready,
@@ -316,6 +331,7 @@ module {b.module_name}_axil_wrap #(parameter int ADDR_W={ax.addr_width}, DATA_W=
   end
 endmodule
 """
+    return _wrap_src, unresolved_obs
 
 
 def _emit_sva(u: CompiledUnitIR) -> str:
@@ -681,7 +697,8 @@ def tool_emit_testbench(
                 diagnostics=dd,
             )
 
-    Path(artifacts["unit_isolation_wrapper"]).write_text(_emit_wrap(unit), encoding="utf-8")
+    _wrap_src, _unresolved_obs = _emit_wrap(unit)
+    Path(artifacts["unit_isolation_wrapper"]).write_text(_wrap_src, encoding="utf-8")
     Path(artifacts["sva_protocol_checker"]).write_text(_emit_sva(unit), encoding="utf-8")
     Path(artifacts["in_situ_bind_file"]).write_text(_emit_bind(unit), encoding="utf-8")
     Path(artifacts["cocotb_testbench"]).write_text(_emit_cocotb(unit), encoding="utf-8")
@@ -739,9 +756,32 @@ def tool_emit_testbench(
                         break
     mk_path.write_text(_emit_cocotb_makefile(mod, rtl_entries), encoding="utf-8")
     artifacts["makefile"] = str(mk_path.resolve())
+
+    # 位宽未能解析的输出端口（typedef / interface 类型）被有意**跳过连接**：
+    # 任何猜测位宽都会触发 WIDTHTRUNC（Verilator 默认 warning-as-error，直接
+    # 构建失败）。跳过是安全的，但必须让调用方知道 wrapper 里没有观察这些
+    # 信号，否则"生成成功"会被误读成"所有端口都接好了"。
+    for _port in _unresolved_obs:
+        dd.append({
+            "severity": "WARNING",
+            "code": "W054",
+            "path": f"wrapper[{_port}]",
+            "message": (
+                f"output port '{_port}' has an unresolved width (typedef/interface "
+                "type); it was left unconnected in the generated wrapper. Add an "
+                "explicit bit width in the RTL (e.g. use a logic vector) if the "
+                "testbench needs to observe it."
+            ),
+        })
     return ok_result(
         "emit_testbench",
-        {"module": mod, "dual_side": dual_apb, "output_dir": str(od.resolve()), "artifacts": artifacts},
+        {
+            "module": mod,
+            "dual_side": dual_apb,
+            "output_dir": str(od.resolve()),
+            "artifacts": artifacts,
+            "unconnected_observation_ports": list(_unresolved_obs),
+        },
         diagnostics=dd,
     )
 

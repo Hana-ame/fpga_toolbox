@@ -143,3 +143,5 @@
 - [78 · resolve_deps 丢失 header 之间的传递 include](78-resolve-deps-transitive-headers.md)
 - [79 · 被 include 的 .sv 被当成独立编译单元](79-included-source-not-compilation-unit.md)
 - [80 · 剔除被 include 的源文件时保留了独立可编译的目标](80-rtl-files-keep-independent-modules.md)
+- [81 · 不带 timescale 的 DUT 会让 TB 构建失败](81-tb-timescale-for-user-rtl.md)
+- [82 · typedef 端口位宽未解析时生成非法或致败代码](82-typedef-port-width-placeholders.md)

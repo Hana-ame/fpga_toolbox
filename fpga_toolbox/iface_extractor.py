@@ -361,7 +361,21 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
         if p.name in claimed:
             continue
         if p.direction == "input":
-            item = {"port": p.name, "dir": "input", "width": p.width, "tie_off": f"{p.width}'b0"}
+            # width 可能为 0：typedef（enum/struct）或 interface 端口的位宽在
+            # 纯文本解析下无法确定（实测 `input st_e state_in` 与
+            # `input req_t req` 都是 width=0）。此时**不能**生成
+            # f"{width}'b0" —— 那会产出非法字面量 `0'b0`（零位宽），下游
+            # tb_emitter 直接把它写进 `.port(0'b0)`，生成物必然编译失败。
+            # 位宽未知时用 '0（SV 的「全零、宽度由上下文决定」字面量）兜底，
+            # 并由 diagnostics 提示调用方该端口位宽未解析。
+            if p.width and p.width > 0:
+                item = {"port": p.name, "dir": "input", "width": p.width,
+                        "tie_off": f"{p.width}'b0"}
+            else:
+                item = {"port": p.name, "dir": "input", "width": p.width,
+                        "tie_off": "'0",
+                        "warning": f"width of port '{p.name}' could not be resolved "
+                                   f"(typedef/interface type); tie_off uses unsized '0"}
             if _is_clock(p.name) or _is_reset(p.name):
                 item["warning"] = "clock/reset-like port left out of scope; verify tie-off is intended"
             oos.append(item)
