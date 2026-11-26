@@ -4298,6 +4298,52 @@ def test_multi_interface_dut_reports_uncovered_bus() -> None:
             assert "W056" not in codes2, codes2
 
 
+def test_multiple_candidate_modules_are_disclosed() -> None:
+    """Defect 168: 多模块文件里静默只测第一个匹配模块，不告知。
+
+    一个 .sv 文件里有两个 APB 从机（apb_a 与 apb_b，地址宽度不同）时，旧实现
+    静默取文件顺序里的第一个，返回体里只有 module_name 一个字段 —— 用户不细看
+    就无从察觉「测的不是我以为的那个模块」。
+    """
+    print("coverage: multiple candidate modules are disclosed")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+
+    apb_body = (
+        "  input  logic clk, input logic rst_n,\n"
+        "  input  logic psel, input logic penable, input logic pwrite,\n"
+        "  input  logic [{aw}:0] paddr, input logic [31:0] pwdata, input logic [3:0] pstrb,\n"
+        "  output logic pready, output logic [31:0] prdata, output logic pslverr\n"
+        ");\n"
+        "  assign pready = 1\'b1; assign prdata = pwdata; assign pslverr = 1\'b0;\n"
+        "endmodule\n")
+    src = (
+        "module helper_mod (input logic a, output logic b);\n  assign b = a;\nendmodule\n\n"
+        "module apb_a (\n" + apb_body.format(aw=7) + "\n"
+        "module apb_b (\n" + apb_body.format(aw=15))
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "multimod.sv"
+        f.write_text(src, encoding="utf-8")
+        r = emit_protocol_testbench(str(f), str(root / "tb"), "apb")
+        assert r["ok"], str(r.get("error"))[:250]
+        assert r["data"]["module_name"] == "apb_a", r["data"]
+        others = r["data"]["other_candidate_modules"]
+        assert len(others) == 1, others
+        assert others[0]["module_name"] == "apb_b", others
+        assert others[0]["protocol"] == "apb", others
+        codes = [(d["code"], d["path"]) for d in (r.get("diagnostics") or [])]
+        assert ("W057", "module[apb_b]") in codes, codes
+
+        # 单模块文件不得产生 W057
+        one = Path(__file__).resolve().parent.parent / "examples/multi_bus_ref/apb_slave.sv"
+        if one.is_file():
+            r2 = emit_protocol_testbench(str(one), str(root / "tb2"), "apb")
+            assert r2["ok"], str(r2.get("error"))[:250]
+            assert r2["data"]["other_candidate_modules"] == [], r2["data"]
+            assert "W057" not in [d["code"] for d in (r2.get("diagnostics") or [])]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4368,6 +4414,7 @@ def main() -> int:
     test_secondary_reset_names_are_recognised()
     test_direction_suffixed_bus_ports_are_classified()
     test_multi_interface_dut_reports_uncovered_bus()
+    test_multiple_candidate_modules_are_disclosed()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

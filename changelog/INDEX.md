@@ -167,3 +167,4 @@
 - [102 · 第二复位 rst_extra/rst2/rst_i 识别不到被静默 tie](102-secondary-reset-names.md)
 - [103 · 方向后缀 psel_i/pready_o 让协议识别彻底失败](103-direction-suffixed-ports.md)
 - [104 · 多接口 DUT 只测第一个接口其余静默悬空](104-uncovered-interfaces.md)
+- [105 · 多模块文件里静默只测第一个匹配模块](105-multiple-candidate-modules.md)

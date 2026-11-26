@@ -1302,6 +1302,26 @@ def emit_protocol_testbench(
     # `s1_*` 一个都不出现，s1 侧的输入悬空、行为未定义，而工具报 ok=True。
     # 这里把「未被覆盖的接口」显式报出来（W056），让调用方知道这份 TB
     # 只验证了 DUT 的一部分。
+    # 多模块文件里可能有**多个**都匹配目标协议的模块（如两个不同地址宽度的
+    # APB 从机）。旧实现静默取文件顺序里的第一个，用户在返回体里只能看到
+    # module_name，如果没细看就无法察觉「测的不是我以为的那个模块」。
+    # 这里把其它候选列出来（W057），让选择是显式的。
+    _other_modules = []
+    for _cand in mods:
+        if _cand is m:
+            continue
+        for x in (_cand.get("interfaces") or []):
+            if want is None:
+                _ok_proto = x.get("protocol") in SUPPORTED_MULTI_PROTOCOLS
+            else:
+                _ok_proto = x.get("protocol") == want
+            if _ok_proto:
+                _other_modules.append({
+                    "module_name": _cand.get("module_name"),
+                    "protocol": x.get("protocol"),
+                    "group_prefix": x.get("group_prefix"),
+                })
+                break
     _all_ifaces = [x for x in (m.get("interfaces") or []) if x is not chosen]
     _uncovered = [
         {"protocol": x.get("protocol"), "group_prefix": x.get("group_prefix"),
@@ -1519,6 +1539,18 @@ def emit_protocol_testbench(
 
     suites = pcie_suites if proto == "pcie" else [proto]
     _diags: List[Dict[str, Any]] = []
+    for _om in _other_modules:
+        _diags.append({
+            "severity": "WARNING",
+            "code": "W057",
+            "path": f"module[{_om.get('module_name')}]",
+            "message": (
+                f"{rp.name} contains another module '{_om.get('module_name')}' with a "
+                f"'{_om.get('protocol')}' interface too, but this testbench targets "
+                f"'{mod_name}' (the first match in file order). Generate a separate "
+                "testbench per module if you meant that one."
+            ),
+        })
     for _u in _uncovered:
         _g = _u.get("group_prefix") or "default"
         _diags.append({
@@ -1546,6 +1578,7 @@ def emit_protocol_testbench(
                 "sim_script": str(sim_path),
             },
             "uncovered_interfaces": _uncovered,
+            "other_candidate_modules": _other_modules,
         },
         diagnostics=_diags,
     )

@@ -45,7 +45,7 @@ APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ 
 
 ### 诊断码补充
 
-除工具表里的 `E000–E015` / `W001` / `W010–W013` / `W050–W056` / `W101` 外：
+除工具表里的 `E000–E015` / `W001` / `W010–W013` / `W050–W057` / `W101` 外：
 
 - `W102` — `index_repo` 检出「形态上是例化、但仓库内无定义」的模块（厂商 IP / 加密 IP /
   未克隆子模块）。此时 `resolve_deps` 会返回 `closure_is_complete: false`，明确告知依赖
