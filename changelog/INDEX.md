@@ -148,3 +148,4 @@
 - [83 · interface 打包的总线端口被误报成 DUT 缺端口](83-unexpanded-sv-interface-ports.md)
 - [84 · lint_tb 目录模式扫到 0 个文件却报 clean](84-lint-tb-zero-match-not-clean.md)
 - [85 · 归一化报告忽略 %Error 且零核对被当作通过](85-normalizer-verilator-errors-and-empty-verification.md)
+- [86 · schema 数值边界缺失，负/零超时被当成仿真超时](86-numeric-bounds-at-entry.md)

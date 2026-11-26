@@ -3208,6 +3208,52 @@ def test_normalizer_surfaces_verilator_errors_and_empty_verification() -> None:
         assert "VERILATOR_ERROR" not in rules_ok, rules_ok
 
 
+def test_numeric_bounds_are_enforced_at_entry() -> None:
+    """Defect 144: schema 的 minimum/maximum 必须在 call_tool 入口强制执行。
+
+    旧实现没有任何数值边界校验，`timeout_sec=-5` 被直接传进
+    `subprocess.run(timeout=-5)`，Python 立刻抛 TimeoutExpired 并报出
+    「Simulation timed out after -5s」——语义荒谬且把「参数非法」伪装成
+    「仿真超时」。`timeout_sec=0` 同理，永远不可能跑完任何仿真。
+    """
+    print("coverage: numeric bounds enforced at call_tool entry")
+    from fpga_toolbox.registry import call_tool, list_tool_schemas
+
+    # schema 必须声明边界（否则校验无从谈起）
+    sim_schema = next(s for s in list_tool_schemas() if s["name"] == "run_sim")
+    assert sim_schema["inputSchema"]["properties"]["timeout_sec"].get("minimum") == 1, \
+        sim_schema["inputSchema"]["properties"]["timeout_sec"]
+    mut_schema = next(s for s in list_tool_schemas() if s["name"] == "run_mutation")
+    assert mut_schema["inputSchema"]["properties"]["timeout_sec"].get("minimum") == 1, \
+        mut_schema["inputSchema"]["properties"]["timeout_sec"]
+
+    with tempfile.TemporaryDirectory() as td:
+        script = Path(td) / "sim.sh"
+        script.write_text(
+            "#!/bin/bash\n"
+            'echo "== sim: apb (top=tb_apb) =="\n'
+            'echo "PASS: apb all 8 checks passed"\n', encoding="utf-8")
+        script.chmod(0o755)
+        base = {"sim_script": str(script), "expected_suites": ["apb"]}
+
+        for bad in (0, -5, "-3"):
+            r = call_tool("run_sim", {**base, "timeout_sec": bad})
+            assert r["ok"] is False, (bad, r)
+            err = str(r.get("error"))
+            assert "must be >= 1" in err, (bad, err[:200])
+            # 不能伪装成「仿真超时」
+            assert "timed out" not in err, (bad, err[:200])
+
+        # 合法值照常工作；字符串数字（MCP 客户端常见）仍被接受
+        for good in (1, 300, "1700"):
+            r = call_tool("run_sim", {**base, "timeout_sec": good})
+            assert r["ok"] is True, (good, r.get("error"))
+
+        # 省略该参数时默认生效
+        r = call_tool("run_sim", base)
+        assert r["ok"] is True, r.get("error")
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3259,6 +3305,7 @@ def main() -> int:
     test_unexpanded_sv_interface_ports_are_reported()
     test_lint_tb_zero_matches_is_not_silent_clean()
     test_normalizer_surfaces_verilator_errors_and_empty_verification()
+    test_numeric_bounds_are_enforced_at_entry()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

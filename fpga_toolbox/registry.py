@@ -142,7 +142,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "sim_script": {"type": "string", "description": "Path to the simulation entry script (e.g. sim.sh), run from its own directory."},
                 "suite": {"type": "string", "description": "Suite name to run (default all)."},
                 "expected_suites": {"type": "array", "items": {"type": "string"}, "description": "Optional list of suites that must all appear and PASS (per-suite identity check)."},
-                "timeout_sec": {"type": "integer", "description": "Simulation timeout in seconds (default 300)."},
+                "timeout_sec": {"type": "integer", "minimum": 1, "description": "Simulation timeout in seconds (default 300)."},
                 "seed": {"type": "integer", "description": "Optional SEED environment value passed to the sim script."},
                 "wait_cycles": {"type": "integer", "description": "Optional WAIT environment value passed to the sim script."},
                 "require_slang": {"type": "boolean", "description": "Require slang on PATH (E021 if missing, default false)."},
@@ -165,7 +165,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "mutation_spec": {"type": "string", "description": "Path to the mutation spec JSON/YAML listing mutations to apply."},
                 "test_cmd": {"type": "array", "items": {"type": "string"}, "description": "Command (argv list) run after each mutation; non-zero exit means the mutation was killed."},
                 "min_score": {"type": "number", "description": "Minimum acceptable mutation kill score percentage (default 80)."},
-                "timeout_sec": {"type": "integer", "description": "Per-mutation test command timeout in seconds (default 120)."},
+                "timeout_sec": {"type": "integer", "minimum": 1, "description": "Per-mutation test command timeout in seconds (default 120)."},
                 "only_id": {"type": "string", "description": "Optional single mutation id to run (for targeted verification)."},
             },
             "required": ["workdir", "mutation_spec", "test_cmd"],
@@ -297,6 +297,43 @@ def call_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
                 tool_name,
                 f"Invalid value {params[pname]!r} for parameter '{pname}' of tool '{tool_name}'. "
                 f"Allowed values: {allowed}.",
+            )
+
+    # minimum / maximum 校验：schema 里声明的数值边界必须强制执行。
+    # 旧实现完全没有这条 —— `timeout_sec=-5` 会被直接传进
+    # subprocess.run(timeout=-5)，Python 立刻抛 TimeoutExpired 并报
+    # 「Simulation timed out after -5s」，语义荒谬；`timeout_sec=0` 同理，
+    # 永远不可能跑完任何仿真。这类越界值应在入口拒绝，而不是靠下游偶然报错。
+    # 字符串数字（MCP 客户端常见）先尝试转 float 再比，转不动就跳过
+    # （交给下游的宽容转换逻辑处理）。
+    for pname, pspec in schema_props.items():
+        if pname not in params or params[pname] is None:
+            continue
+        lo, hi = pspec.get("minimum"), pspec.get("maximum")
+        if lo is None and hi is None:
+            continue
+        val = params[pname]
+        num: Optional[float] = None
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            num = float(val)
+        elif isinstance(val, str):
+            try:
+                num = float(val.strip())
+            except ValueError:
+                num = None
+        if num is None:
+            continue
+        if lo is not None and num < lo:
+            return err_result(
+                tool_name,
+                f"Invalid value {val!r} for parameter '{pname}' of tool '{tool_name}': "
+                f"must be >= {lo}.",
+            )
+        if hi is not None and num > hi:
+            return err_result(
+                tool_name,
+                f"Invalid value {val!r} for parameter '{pname}' of tool '{tool_name}': "
+                f"must be <= {hi}.",
             )
 
     # required 校验：schema 声明的必填项若缺失，必须在入口拒绝。
