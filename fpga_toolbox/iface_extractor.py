@@ -73,7 +73,14 @@ _AHB_PATS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("hwrite",    re.compile(r"(?:^|_)h_?write$", re.I)),
     ("hsize",     re.compile(r"(?:^|_)h_?size$", re.I)),
     ("hwdata",    re.compile(r"(?:^|_)h_?wdata$", re.I)),
-    ("hready",    re.compile(r"(?:^|_)h_?ready(?:out|in)?$", re.I)),
+    # `hready` 与 `hreadyout` 在 AHB-Lite 从机上是**两个不同端口**：HREADY 是
+    # TB 驱动的输入、HREADYOUT 是从机驱动的输出。旧的单一模式
+    # `h_?ready(?:out|in)?$` 会把两者都归到 canon `hready`，后遍历到的覆盖前者：
+    # 实测同时存在时 port_map["hready"] = "HREADYOUT"，而真正的输入 HREADY 落进
+    # out_of_scope_ports 并被 tie_off 到 1'b0 —— TB 端永远等不到 ready，仿真
+    # 永久挂起。拆成两个 canon 后各归各位。
+    ("hreadyout", re.compile(r"(?:^|_)h_?ready_?out$", re.I)),
+    ("hready",    re.compile(r"(?:^|_)h_?ready(?:in)?$", re.I)),
     ("hrdata",    re.compile(r"(?:^|_)h_?rdata$", re.I)),
     ("hresp",     re.compile(r"(?:^|_)h_?resp$", re.I)),
 )
@@ -173,7 +180,22 @@ _RST_RE = re.compile(
 
 
 def _norm_prefix(raw: str) -> str:
-    return re.sub(r"^(?:i_|o_|in_|out_)", "", raw, flags=re.I).strip("_").lower() or "default"
+    """把端口名前缀归一成「接口组名」。
+
+    方向前缀 `i_` / `o_` / `in_` / `out_` 必须剥掉 —— 否则同一总线会被拆成
+    两组：`i_psel` 组名 "i"、`o_pready` 组名 "o"，于是输出口全部落进
+    out_of_scope_ports，识别出的接口只有一半信号（实测 i_psel/i_penable/...
+    + o_pready/o_prdata/o_pslverr 的 APB：只认出 group="i" 的 6 个信号，
+    3 个输出口被当成本总线之外的端口）。
+
+    注意 `_norm_prefix` 已在调用点按「pat 匹配位置之前的子串」传入（见
+    classify_module），所以这里只需要处理缀在组名首尾的方向词。
+    """
+    # 归一前先剥方向词：`i_psel` 的 _APB_PATS 是 `(?:^|_)psel`，于是
+    # m.start() 落在下划线**之后**，传进来的 raw 就是裸 "i"（不含下划线）。
+    # 因此这里要同时接受 `i` / `i_` / `in` / `in_` 等形态。
+    norm = re.sub(r"^(?:in|out|i|o)(?:_|$)", "", raw.strip(), flags=re.I)
+    return norm.strip("_").lower() or "default"
 
 
 def _is_clock(name: str) -> bool:

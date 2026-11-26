@@ -2632,6 +2632,102 @@ def test_sv_parser_tokenizer_and_header_fixes() -> None:
             assert got.get("flat") == 8, (backend, got)
 
 
+def test_iface_direction_prefix_and_ahb_ready_split() -> None:
+    """Defect 131: 方向前缀拆组 + AHB HREADY/HREADYOUT 键冲突。
+
+    1. `_norm_prefix` 原本 `re.sub(r"^(?:i_|o_|in_|out_)", ...)` —— 要求方向词
+       后**必须跟下划线**。但各 `_*_PATS` 的模式是 `(?:^|_)sig$`，`m.start()`
+       落在下划线**之后**，传进来的前缀是裸 `"i"` / `"o"`，正则匹配不到 →
+       APB 被拆成 "i" 组与 "o" 组两组，识别出的接口只有一半信号：
+       实测 i_psel/i_penable/... + o_pready/o_prdata/o_pslverr 的 APB 只认出
+       group="i" 的 6 个信号，3 个输出口落进 out_of_scope_ports。
+    2. `_AHB_PATS` 的 `hready` 模式是 `h_?ready(?:out|in)?$`，同时匹配
+       HREADY 与 HREADYOUT，后遍历者覆盖前者。标准 AHB-Lite 从机同时暴露
+       这两个端口（HREADY 输入、HREADYOUT 输出），实测
+       `port_map["hready"]="HREADYOUT"` 而真正的输入 `HREADY` 落进
+       out_of_scope_ports 并被 tie_off 到 `1'b0` —— TB 端永远等不到 ready，
+       仿真永久挂起。
+    """
+    print("coverage: direction-prefix grouping + AHB HREADY/HREADYOUT split")
+    from fpga_toolbox.iface_extractor import _norm_prefix
+
+    # 1a) 裸方向词与带下划线形态都必须归一成 default
+    for raw in ("i", "o", "i_", "o_", "in", "out", "in_", "out_"):
+        assert _norm_prefix(raw) == "default", (raw, _norm_prefix(raw))
+    # 1b) 非方向前缀不能被误伤
+    for raw in ("s_axi", "m_axi", "ch0", "s_apb"):
+        assert _norm_prefix(raw) == raw, (raw, _norm_prefix(raw))
+
+    # 1c) 端到端：完整的 i_/o_ 前缀 APB 必须被认出全部 9 个信号
+    apb = """module dirpref_dut (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        i_psel,
+  input  logic        i_penable,
+  input  logic        i_pwrite,
+  input  logic [7:0]  i_paddr,
+  input  logic [31:0] i_pwdata,
+  input  logic [3:0]  i_pstrb,
+  output logic        o_pready,
+  output logic [31:0] o_prdata,
+  output logic        o_pslverr
+);
+  assign o_pready = 1'b1; assign o_prdata = i_pwdata; assign o_pslverr = 1'b0;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "dut.sv"
+        f.write_text(apb, encoding="utf-8")
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        mod = ex["data"]["modules"][0]
+        ifaces = mod["interfaces"]
+        assert len(ifaces) == 1, [(i["protocol"], i["group_prefix"]) for i in ifaces]
+        assert ifaces[0]["protocol"] == "apb", ifaces[0]["protocol"]
+        assert len(ifaces[0]["port_map"]) == 9, sorted(ifaces[0]["port_map"])
+        assert mod["out_of_scope_ports"] == [], mod["out_of_scope_ports"]
+
+        # 2) AHB 同时有 HREADY + HREADYOUT：两者必须各归各位
+        ahb = """module ahb_both_dut (
+  input  logic        HCLK,
+  input  logic        HRESETn,
+  input  logic        HSEL,
+  input  logic [15:0] HADDR,
+  input  logic [1:0]  HTRANS,
+  input  logic        HWRITE,
+  input  logic [2:0]  HSIZE,
+  input  logic [31:0] HWDATA,
+  input  logic        HREADY,
+  output logic        HREADYOUT,
+  output logic [31:0] HRDATA,
+  output logic        HRESP
+);
+  assign HREADYOUT = HREADY;
+  assign HRDATA = HWDATA;
+  assign HRESP = 1'b0;
+endmodule
+"""
+        f2 = Path(td) / "ahb.sv"
+        f2.write_text(ahb, encoding="utf-8")
+        ex2 = call_tool("extract_interfaces", {"rtl_file": str(f2)})
+        assert ex2["ok"], str(ex2.get("error"))[:200]
+        m2 = ex2["data"]["modules"][0]
+        pm = next(i for i in m2["interfaces"] if i["protocol"] == "ahb_lite")["port_map"]
+        assert pm.get("hready") == "HREADY", pm
+        assert pm.get("hreadyout") == "HREADYOUT", pm
+        # 真正的输入 HREADY 绝不能被 tie 到 1'b0
+        assert all(o["port"] != "HREADY" for o in m2["out_of_scope_ports"]), \
+            m2["out_of_scope_ports"]
+
+        # 端到端：标准 AHB-Lite 从机现在能正常生成 TB（修复前误报方向不符）
+        r = call_tool("emit_testbench", {
+            "rtl_file": str(f2), "out_dir": str(Path(td) / "ahb_tb"),
+            "protocol": "ahb_lite"})
+        assert r["ok"], str(r.get("error"))[:300]
+        tb = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        assert ".HREADYOUT(HREADYOUT)" in tb, "template must connect the slave's HREADYOUT"
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -2674,6 +2770,7 @@ def main() -> int:
     test_silent_pass_gates_uvm_fatal_zero_frames_completed_xml()
     test_residual_and_suite_rerun_gates()
     test_sv_parser_tokenizer_and_header_fixes()
+    test_iface_direction_prefix_and_ahb_ready_split()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

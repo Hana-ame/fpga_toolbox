@@ -39,7 +39,7 @@ REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
         "bresp", "bvalid", "bready", "araddr", "arvalid", "arready",
         "rdata", "rresp", "rvalid", "rready",
     ),
-    "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hsize", "hwdata", "hready", "hrdata", "hresp"),
+    "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hsize", "hwdata", "hrdata", "hresp"),
     # ddr3/ddr4/hbm/pcie 的模板不用 port_map，直接按标准端口名连线并用 `.*`
     # 兜底。`.*` 只连接**TB 里已声明**的同名变量，所以 DUT 端口名一旦与模板
     # 声明不一致（如 DUT 用 `inout [15:0] ddr3_dq` 而模板声明的是
@@ -89,7 +89,12 @@ EXPECTED_TB_DIR: Dict[str, Dict[str, str]] = {
     "ahb_lite": {
         "hsel": "input", "haddr": "input", "htrans": "input", "hwrite": "input",
         "hsize": "input", "hwdata": "input",
-        "hready": "output", "hrdata": "output", "hresp": "output",
+        # 从机输出 ready 是 HREADYOUT（canon：hreadyout）。
+        # 单独 canon "hready" 在标准从机上指向 DUT 的**输入**（TB 驱动），
+        # 因此期望方向是 input；旧表把它写成 output，遇到同时暴露
+        # HREADY + HREADYOUT 的标准从机就误报方向不符。
+        "hreadyout": "output", "hready": "input",
+        "hrdata": "output", "hresp": "output",
     },
     "axi4": {
         "awaddr": "input", "awvalid": "input", "wdata": "input", "wstrb": "input",
@@ -437,7 +442,12 @@ def _emit_ahb_tb(mod: str, clk: str, rst: str, iface: Dict[str, Any]) -> str:
     hwrite = _pm(iface, "hwrite", "HWRITE")
     hsize = _pm(iface, "hsize", "HSIZE")
     hwdata = _pm(iface, "hwdata", "HWDATA")
-    hready = _pm(iface, "hready", "HREADYOUT")
+    # AHB-Lite 从机的「ready 输出」是 HREADYOUT；HREADY 是 TB 驱动的输入。
+    # 旧实现固定用 canon "hready"（并且分类器把两者混成一个），于是同时存在
+    # HREADY + HREADYOUT 的设计会被当成方向不符而拒绝 —— 但那是完全合法的
+    # 标准 AHB-Lite 从机。这里优先取 hreadyout，回退 hready（只有单一
+    # HREADYOUT 端口的设计在分类器里仍归 canon hready）。
+    hready = _pm(iface, "hreadyout", _pm(iface, "hready", "HREADYOUT"))
     hrdata = _pm(iface, "hrdata", "HRDATA")
     hresp = _pm(iface, "hresp", "HRESP")
     return f"""`timescale 1ns/1ps
