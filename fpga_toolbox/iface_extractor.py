@@ -421,10 +421,47 @@ def tool_extract_interfaces(
     p = Path(rtl_file)
     if not p.is_file():
         return err_result("extract_interfaces", f"RTL file not found: {rtl_file}")
+    # `staged_rtl_files` 的语义是「与目标文件同批编译」，所以每个条目都必须是
+    # 真实存在的**文件**。缺陷 161 前该参数只被写进返回值的 rtl_files 字段，
+    # 从未传给解析器 —— 不存在的路径、目录都能通过，且对解析结果零影响。
+    if staged_rtl_files:
+        # 相对路径的解析基准（按顺序尝试，命中即用）：
+        #   1. rtl_file 所在目录；
+        #   2. rtl_file 的父目录（= project root 的常见布局，如
+        #      `staged_rtl_files=["rtl/reg_slave.sv"]` 配 `rtl_file=proj/rtl/x.sv`）；
+        #   3. 当前工作目录（测试/脚本常直接传 cwd 相对路径）。
+        # 三种约定在真实调用里都出现过，只支持一种会把合法路径误判成「不存在」。
+        _rtl_dir = p.resolve().parent
+        _rroots = [_rtl_dir]
+        if _rtl_dir.parent != _rtl_dir:
+            _rroots.append(_rtl_dir.parent)
+        _bad: List[str] = []
+        _resolved_staged: List[str] = []
+        for _s in staged_rtl_files:
+            _sp = Path(_s)
+            if not _sp.is_absolute():
+                _hit = next((_r / _sp for _r in _rroots if (_r / _sp).is_file()), None)
+                _sp = _hit if _hit is not None else _sp.resolve()
+            if not _sp.is_file():
+                _bad.append(f"{_s} ({'directory' if _sp.is_dir() else 'not found'})")
+            else:
+                _resolved_staged.append(str(_sp.resolve()))
+        staged_rtl_files = _resolved_staged
+        if _bad:
+            return err_result(
+                "extract_interfaces",
+                "Invalid staged_rtl_files entries: "
+                + ", ".join(_bad)
+                + ". Each entry must be an existing RTL/header file compiled together "
+                "with rtl_file (package or interface definitions imported by it).",
+            )
     # 收集 slang 后端的回退原因：slang 装了却没生效时对调用方可见，
     # 而不是静默退回 builtin（否则「可选 slang AST 后端」就是虚报）。
     parse_diags: List[str] = []
-    mods = parse_sv_file(p, backend=parser_backend, diagnostics=parse_diags)
+    mods = parse_sv_file(
+        p, backend=parser_backend, diagnostics=parse_diags,
+        staged_rtl_files=staged_rtl_files,
+    )
     if not mods:
         return err_result("extract_interfaces", f"No modules found in {rtl_file}")
     selected = [m for m in mods if m.name == module_name] if module_name else mods

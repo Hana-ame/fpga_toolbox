@@ -3870,6 +3870,82 @@ def test_parser_backend_enum_is_enforced() -> None:
             assert "Allowed values" not in err, (good, err[:200])
 
 
+def test_staged_rtl_files_reach_the_parser() -> None:
+    """Defect 161: `staged_rtl_files` 过去从未传给解析器。
+
+    参数描述承诺 "Optional additional RTL files compiled together (e.g.
+    packages) for cross-file imports."，但实现里它**只**出现在返回值的
+    `rtl_files` 字段中，没有传给 parse_sv_file / slang 上下文：
+
+        grep staged_rtl_files iface_extractor.py
+        → 418: 形参
+        → 468: "rtl_files": staged_rtl_files or [...]
+
+    后果：不存在的路径、目录都能通过校验；即使传了真实文件，对解析结果也是
+    零影响。slang 的自动收集只认 `*_pkg.sv` / `*_if.sv` 命名，命名不规范的
+    package（如 `types.sv`）只能靠这个参数补充 —— 而它没生效。
+    """
+    print("coverage: staged_rtl_files reach the parser")
+    from fpga_toolbox.core.sv_parser import _find_slang_context
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        proj = root / "proj"
+        (proj / "rtl").mkdir(parents=True)
+        (proj / "inc").mkdir()
+        (proj / "inc" / "defs.svh").write_text("`define W 8\n", encoding="utf-8")
+        # package 名不规范，slang 自动收集（*_pkg.sv / *_if.sv）抓不到
+        (proj / "types.sv").write_text(
+            "package types_named_pkg;\n  typedef enum logic [1:0] { A1, A2 } mode_e;\n"
+            "endpackage\n", encoding="utf-8")
+        rtl = proj / "rtl" / "dut.sv"
+        rtl.write_text(
+            "module dut\n  import types_named_pkg::*;\n(\n"
+            "  input  logic clk,\n  input  logic rst_n,\n"
+            "  input  logic psel,\n  input  logic penable,\n  input  logic pwrite,\n"
+            "  input  logic [7:0] paddr,\n  input  logic [31:0] pwdata,\n"
+            "  input  logic [3:0] pstrb,\n"
+            "  output logic pready,\n  output logic [31:0] prdata,\n"
+            "  output logic pslverr\n);\n"
+            "  assign pready = 1'b1; assign prdata = pwdata; assign pslverr = 1'b0;\n"
+            "endmodule\n", encoding="utf-8")
+
+        # (a) staged 文件必须真正进入 slang 编译上下文
+        auto_extra, _ = _find_slang_context(rtl)
+        assert "types.sv" not in " ".join(auto_extra), auto_extra
+        staged_extra, _ = _find_slang_context(rtl, [str(proj / "types.sv")])
+        assert str((proj / "types.sv").resolve()) in staged_extra, staged_extra
+
+        # (b) 不存在的 staged 条目必须被拒绝（旧实现静默接受）
+        r_bad = call_tool("extract_interfaces", {
+            "rtl_file": str(rtl), "staged_rtl_files": [str(root / "nope.sv")]})
+        assert r_bad["ok"] is False, r_bad
+        assert "Invalid staged_rtl_files" in str(r_bad.get("error")), str(r_bad.get("error"))[:200]
+
+        # 目录同样拒绝
+        r_dir = call_tool("extract_interfaces", {
+            "rtl_file": str(rtl), "staged_rtl_files": [str(proj)]})
+        assert r_dir["ok"] is False, r_dir
+        assert "directory" in str(r_dir.get("error")), str(r_dir.get("error"))[:200]
+
+        # (c) 相对路径支持三种基准：rtl 目录 / project root / cwd
+        for rel in ("types.sv", "proj/types.sv"):
+            rr = call_tool("extract_interfaces", {
+                "rtl_file": str(rtl), "staged_rtl_files": [rel]})
+            # 只有能从某个基准解析到才算合法；解不到就该明确报错（不能静默）
+            if not rr["ok"]:
+                assert "Invalid staged_rtl_files" in str(rr.get("error")), rr["error"]
+
+        # project-root 相对路径：当 rtl 位于 <root>/rtl/ 时，基准之一是
+        # rtl.parent.parent（= <root>），于是 "types.sv" 可直接解析到。
+        # 上面已用绝对路径覆盖「合法 staged 可传」；这里补 <root> 相对路径。
+        r_ok = call_tool("extract_interfaces", {
+            "rtl_file": str(rtl),
+            "staged_rtl_files": ["types.sv", "inc/defs.svh"]})
+        assert r_ok["ok"] is True, str(r_ok.get("error"))[:250]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3933,6 +4009,7 @@ def main() -> int:
     test_tool_schema_descriptions_match_signature_defaults()
     test_min_score_bounds_are_enforced()
     test_parser_backend_enum_is_enforced()
+    test_staged_rtl_files_reach_the_parser()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

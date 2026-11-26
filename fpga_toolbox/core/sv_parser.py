@@ -409,7 +409,9 @@ class SVModuleParser:
         return mods
 
 
-def _find_slang_context(rtl_path: Path) -> Tuple[List[str], List[str]]:
+def _find_slang_context(
+    rtl_path: Path, extra_staged: Optional[List[str]] = None
+) -> Tuple[List[str], List[str]]:
     """为 slang 推导同批编译文件与 include 目录。
 
     真实 RTL 普遍 `import xxx_pkg::*`。只把单个文件喂给 slang 时，它无法解析
@@ -441,6 +443,18 @@ def _find_slang_context(rtl_path: Path) -> Tuple[List[str], List[str]]:
         # 只向上走两层，避免在大仓库里扫描过多目录拖慢 slang
         if len(seen_dirs) >= 3:
             break
+    # 调用方显式指定的同批编译文件（staged_rtl_files）优先级最高：
+    # 上面的自动收集只认 `*_pkg.sv` / `*_if.sv` 两种命名，命名不规范的
+    # package/interface 定义文件（如 `types.sv`）只能靠调用方显式传入。
+    # 缺陷 161：这个参数过去只被写进返回值 `rtl_files` 字段，**从未真正传给
+    # 解析器**，于是它对解析结果零影响（参数描述却承诺 "compiled together"）。
+    for _st in (extra_staged or []):
+        _sp = Path(_st)
+        if not _sp.is_file():
+            continue  # 存在性校验在 iface_extractor 入口做（那里能返回结构化错误）
+        _sa = str(_sp.resolve())
+        if _sa != str(rtl_abs):
+            extra_files.append(_sa)
     # 去重保序
     seen_f = set()
     extra_files = [f for f in extra_files if not (f in seen_f or seen_f.add(f))]
@@ -538,10 +552,10 @@ def _run_slang(
 
 
 def _parse_with_slang(
-    rtl_path: Path, slang_bin: str
+    rtl_path: Path, slang_bin: str, staged_rtl_files: Optional[List[str]] = None
 ) -> Tuple[Optional[List[SVModuleAST]], List[str]]:
     """Optional slang AST JSON backend when slang is installed on PATH."""
-    extra_files, inc_dirs = _find_slang_context(rtl_path)
+    extra_files, inc_dirs = _find_slang_context(rtl_path, staged_rtl_files)
     tree, diags = _run_slang(slang_bin, rtl_path, extra_files, inc_dirs)
     if tree is None:
         return None, diags or ["slang produced no usable AST JSON"]
@@ -655,6 +669,7 @@ def parse_sv_file(
     rtl_path: Path,
     backend: str = "auto",
     diagnostics: Optional[List[str]] = None,
+    staged_rtl_files: Optional[List[str]] = None,
 ) -> List[SVModuleAST]:
     """Parse an RTL file using slang AST when available (backend='auto'/'slang'), else builtin parser.
 
@@ -665,7 +680,7 @@ def parse_sv_file(
     if backend in ("auto", "slang"):
         slang_bin = shutil.which("slang")
         if slang_bin:
-            slang_mods, slang_diags = _parse_with_slang(rtl_path, slang_bin)
+            slang_mods, slang_diags = _parse_with_slang(rtl_path, slang_bin, staged_rtl_files)
             if slang_mods:
                 # 已知限制（实测）：slang 12.x 的 ast-json 不导出 InterfacePort
                 # 的 interfaceDef/modport，只给 {name,kind,addr,isGeneric}。为
