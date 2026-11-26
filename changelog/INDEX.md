@@ -145,3 +145,4 @@
 - [80 · 剔除被 include 的源文件时保留了独立可编译的目标](80-rtl-files-keep-independent-modules.md)
 - [81 · 不带 timescale 的 DUT 会让 TB 构建失败](81-tb-timescale-for-user-rtl.md)
 - [82 · typedef 端口位宽未解析时生成非法或致败代码](82-typedef-port-width-placeholders.md)
+- [83 · interface 打包的总线端口被误报成 DUT 缺端口](83-unexpanded-sv-interface-ports.md)

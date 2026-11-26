@@ -1312,6 +1312,26 @@ def emit_protocol_testbench(
 
     missing_ports = _missing_tb_ports(proto, chosen, rtl_ports)
     if missing_ports:
+        # 若总线端口是用 SV `interface` 打包的，各个平铺信号本来就不在 DUT
+        # 顶层 —— 报「DUT 缺少 psel->psel, ...」会把排查方向完全带偏。
+        # 这种情况如实说明成因。
+        _sv_if = chosen.get("sv_interface") if isinstance(chosen, dict) else None
+        _if_type = (_sv_if or {}).get("interface_type") or ""
+        if _sv_if and not (chosen.get("port_map") or {}):
+            return err_result(
+                "emit_testbench",
+                f"Cannot emit a '{proto}' testbench for {mod_name}: the '{proto}' bus is "
+                f"declared as an SV interface port '{_sv_if.get('port')}' of type "
+                f"'{_if_type}'"
+                + (f" (modport {_sv_if['modport']})" if _sv_if.get("modport") else "")
+                + ". The interface's signals live inside the interface, so they cannot "
+                f"be driven as flat DUT ports; the template would need the individual "
+                f"signals ({', '.join(missing_ports)}). Either flatten the bus into plain "
+                "ports in the RTL, or instantiate the interface in your own testbench "
+                "and bind it to the DUT.",
+                data={"protocol": proto, "sv_interface": _sv_if,
+                      "unexpanded_signal_count": len(missing_ports)},
+            )
         return err_result(
             "emit_testbench",
             f"Cannot emit a '{proto}' testbench for {mod_name}: DUT is missing port(s) "

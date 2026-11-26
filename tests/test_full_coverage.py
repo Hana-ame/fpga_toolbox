@@ -3026,6 +3026,84 @@ def test_typedef_port_width_placeholders_are_legal() -> None:
         assert ".dbg_mode_i('0)" in wrap, wrap
 
 
+def test_unexpanded_sv_interface_ports_are_reported() -> None:
+    """Defect 140: interface 打包的总线端口不能被报成「DUT 缺端口」。
+
+    DUT 顶层只有 `apb_if.slave apb` 一个端口时，各平铺信号（psel/pready/...）
+    都在 interface 内部。旧实现给 extract_interfaces 返回
+    `protocol="apb"` + `port_map={}` + `missing_signals=[]`，**零诊断** ——
+    调用方以为抽到了可用接口；下游 emit_testbench 则报
+    「DUT is missing port(s) psel->psel, ...」，把「端口是 interface 类型」
+    误述成「DUT 漏了端口」，排查方向完全错。
+    """
+    print("coverage: unexpanded SV interface ports are reported honestly")
+    from fpga_toolbox.registry import call_tool
+
+    src = (
+        "interface apb_if (input logic clk, input logic rst_n);\n"
+        "  logic psel, penable, pwrite, pready;\n"
+        "  logic [7:0] paddr;\n"
+        "  logic [31:0] pwdata, prdata;\n"
+        "  logic pslverr;\n"
+        "  modport slave (input psel, penable, pwrite, paddr, pwdata,\n"
+        "                 output pready, prdata, pslverr);\n"
+        "endinterface\n"
+        "module iface_dut (\n"
+        "  input logic clk,\n"
+        "  input logic rst_n,\n"
+        "  apb_if.slave apb\n"
+        ");\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "iface_dut.sv"
+        f.write_text(src, encoding="utf-8")
+        ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
+        assert ex["ok"], str(ex.get("error"))[:200]
+        mod = ex["data"]["modules"][0]
+        # 如实标记：接口未展开
+        assert mod["interfaces_expandable"] is False, mod.get("interfaces_expandable")
+        unexp = mod["unexpanded_sv_interfaces"]
+        assert len(unexp) == 1, unexp
+        assert unexp[0]["port"] == "apb", unexp[0]
+        assert unexp[0]["interface_type"] == "apb_if", unexp[0]
+        assert unexp[0]["modport"] == "slave", unexp[0]
+
+        # 下游错误信息必须指向 interface，而不是「DUT 缺端口」
+        from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+        r = emit_protocol_testbench(str(f), str(Path(td) / "tb"), "apb")
+        assert r["ok"] is False
+        err = str(r.get("error"))
+        assert "SV interface port" in err, err[:300]
+        assert "apb_if" in err, err[:300]
+        # 不再把根因说成「DUT 缺少端口」
+        assert "DUT is missing port(s)" not in err, err[:300]
+        assert (r.get("data") or {}).get("sv_interface", {}).get("interface_type") == "apb_if"
+
+        # 扁平端口的 DUT 必须仍然可解析且 expandable=True
+        flat = Path(td) / "flat.sv"
+        flat.write_text(
+            "module flat_dut (\n"
+            "  input  logic        clk,\n"
+            "  input  logic        rst_n,\n"
+            "  input  logic        psel,\n"
+            "  input  logic        penable,\n"
+            "  input  logic        pwrite,\n"
+            "  input  logic [7:0]  paddr,\n"
+            "  input  logic [31:0] pwdata,\n"
+            "  input  logic [3:0]  pstrb,\n"
+            "  output logic        pready,\n"
+            "  output logic [31:0] prdata,\n"
+            "  output logic        pslverr\n"
+            ");\n"
+            "  assign pready = 1'b1; assign prdata = pwdata; assign pslverr = 1'b0;\n"
+            "endmodule\n", encoding="utf-8")
+        exf = call_tool("extract_interfaces", {"rtl_file": str(flat)})
+        mf = exf["data"]["modules"][0]
+        assert mf["interfaces_expandable"] is True, mf.get("interfaces_expandable")
+        assert mf["unexpanded_sv_interfaces"] == [], mf["unexpanded_sv_interfaces"]
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3074,6 +3152,7 @@ def main() -> int:
     test_rtl_files_keeps_independently_compilable_modules()
     test_tb_builds_for_rtl_without_timescale()
     test_typedef_port_width_placeholders_are_legal()
+    test_unexpanded_sv_interface_ports_are_reported()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

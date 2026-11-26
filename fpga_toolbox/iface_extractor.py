@@ -390,6 +390,23 @@ def classify_module(mod: SVModuleAST) -> Dict[str, Any]:
         "clock": {"port": clk.name, "freq_mhz": 100.0} if clk else None,
         "reset": {"port": rst.name, "active_low": _reset_active_low(rst.name), "sync": True} if rst else None,
         "interfaces": ifaces,
+        # interface 打包的总线端口（SV `interface` + modport）无法用扁平
+        # port_map 表达：期望的 9/18 个信号在 interface 内部，DUT 顶层只有
+        # `apb_if apb` 一个端口。旧实现照样报 protocol="apb" + port_map={} +
+        # missing_signals=[]，**没有任何诊断**，调用方会以为抽到了可用接口；
+        # 下游 emit_testbench 则报「DUT 缺少 psel->psel, ...」——把「端口是
+        # interface 类型」误述成「DUT 漏了端口」，排查方向完全错。
+        # 这里如实标记展开状态，并给出可定位的诊断。
+        "interfaces_expandable": any(bool(i.get("port_map")) for i in ifaces)
+                                 if ifaces else True,
+        "unexpanded_sv_interfaces": [
+            {"port": i["sv_interface"]["port"],
+             "interface_type": i["sv_interface"]["interface_type"],
+             "modport": i["sv_interface"].get("modport") or "",
+             "protocol": i["protocol"]}
+            for i in ifaces
+            if i.get("sv_interface") and not i.get("port_map")
+        ],
         "out_of_scope_ports": oos,
     }
 
