@@ -341,7 +341,17 @@ def _flatten_nets(expr: str) -> List[str]:
 def clean_netlist_for_pt(
     verilog_text: str,
     blackbox_modules: Sequence[str] = ("RDBUS", "CLKCROSSBUS", "CLKCROSSDFF"),
-    output_port_prefixes: Sequence[str] = ("o_",),
+    # 输出端口识别：只认 `o_` 前缀会漏掉大量真实命名（`dout` / `vout` /
+    # `q` / `out` / `data_out` / `valid_o` ...）。漏判的后果是：黑盒实例被删掉
+    # 后，它驱动的网络**没有任何 assign**，成为悬空 wire —— 实测
+    # `RDBUS #(.WIDTH(4)) u1 (.dout(d), .vout(valid))` 清理后
+    # `verilator -Wall` 报 4 条 UNDRIVEN，而 PrimeTime link_design 恰恰拒绝
+    # 未驱动网络，等于把工具想解决的问题换了个形式留下。
+    # 这里扩充到常见的输出命名族；仍只做前缀/后缀匹配（保守），不猜数据流向。
+    output_port_prefixes: Sequence[str] = (
+        "o_", "out_", "out", "dout", "q_", "q", "data_out", "rd_", "rdata",
+    ),
+    output_port_suffixes: Sequence[str] = ("_o", "_out", "_dout", "_q", "out", "dout", "valid"),
 ) -> Tuple[str, Dict[str, Any]]:
     """Clean unresolved parameterized blackbox instances before PrimeTime link_design (§3.1).
 
@@ -404,7 +414,11 @@ def clean_netlist_for_pt(
             body = im.group(1)
             for pm in port_re.finditer(body):
                 pname, conn = pm.group(1), pm.group(2)
-                if any(pname.startswith(pref) for pref in output_port_prefixes):
+                _is_out = (
+                    any(pname.startswith(pref) for pref in output_port_prefixes)
+                    or any(pname.endswith(suf) for suf in output_port_suffixes)
+                )
+                if _is_out:
                     for net in _flatten_nets(conn):
                         if net not in mod_ties:
                             mod_ties.append(net)

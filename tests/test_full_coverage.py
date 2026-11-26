@@ -4016,6 +4016,51 @@ def test_netlist_cleaner_preserves_comments() -> None:
         assert out2.rstrip().endswith("endmodule"), out2
 
 
+def test_netlist_cleaner_ties_off_blackbox_outputs() -> None:
+    """Defect 163: 黑盒输出端口未识别时，清理后留下悬空 wire。
+
+    `clean_pt_netlist` 只把以 `o_` 开头的端口当输出，于是
+    `RDBUS #(.WIDTH(4)) u1 (.dout(d), .vout(valid))` 的输出网络
+    `d` / `valid` 在实例被删后**没有任何 assign**：实测
+    `verilator -Wall` 报 4 条 UNDRIVEN，而 PrimeTime 的 link_design 恰恰拒绝
+    未驱动网络 —— 工具想解决的问题换了个形式留下。
+    """
+    print("coverage: netlist cleaner ties off blackbox outputs")
+    from fpga_toolbox.registry import call_tool
+
+    netlist = (
+        "module top (input clk, output [3:0] q, output v);\n"
+        "  wire [3:0] d;\n"
+        "  wire valid;\n"
+        "  RDBUS #(.WIDTH(4)) u1 (.clk(clk), .din(clk), .dout(d), .vout(valid));\n"
+        "  assign q = d;\n"
+        "  assign v = valid;\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "net.v"
+        dst = root / "clean.v"
+        src.write_text(netlist, encoding="utf-8")
+        r = call_tool("clean_pt_netlist", {
+            "in_verilog": str(src), "out_verilog": str(dst),
+            "blackbox_modules": ["RDBUS"]})
+        assert r["ok"], str(r.get("error"))[:250]
+        out = dst.read_text(encoding="utf-8")
+
+        # 实例必须被删
+        assert "RDBUS" not in out.replace("[fpga_toolbox:pt_clean]", ""), out
+        # 两个输出网络都必须被 tie 到 0（标量形式，PrimeTime 不接受拼接）
+        assert "assign d = 1'b0;" in out, out
+        assert "assign valid = 1'b0;" in out, out
+        assert "assign {d, valid}" not in out, out
+        # tie-off 必须在 endmodule 之前
+        assert out.index("assign d = 1'b0;") < out.index("endmodule"), out
+
+        # 输入端口（clk/din）不能被 tie —— 它们由外部驱动
+        assert "assign clk = 1'b0;" not in out, out
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4081,6 +4126,7 @@ def main() -> int:
     test_parser_backend_enum_is_enforced()
     test_staged_rtl_files_reach_the_parser()
     test_netlist_cleaner_preserves_comments()
+    test_netlist_cleaner_ties_off_blackbox_outputs()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
