@@ -4247,6 +4247,57 @@ def test_direction_suffixed_bus_ports_are_classified() -> None:
         assert ".psel_i(psel_i)" in tb, tb[:600]
 
 
+def test_multi_interface_dut_reports_uncovered_bus() -> None:
+    """Defect 167: 多接口 DUT 只测第一个接口，其余静默悬空。
+
+    一个模块同时暴露两个 APB 从机端口（s0_*/s1_*）时，模板只能驱动一个。
+    旧实现静默取第一个：生成的 TB 里 `s1_*` 一个都不出现 —— 既没连接也没
+    tie-off，s1 侧输入悬空、行为未定义，而工具报 ok=True。用户会以为整个
+    DUT 都验证过了。
+    """
+    print("coverage: multi-interface DUT reports uncovered bus")
+    from fpga_toolbox.protocol_tb_emitter import emit_protocol_testbench
+
+    rtl = (
+        "module twoapb_dut (\n"
+        "  input  logic        clk, input logic rst_n,\n"
+        "  input  logic        s0_psel, input logic s0_penable, input logic s0_pwrite,\n"
+        "  input  logic [7:0]  s0_paddr, input logic [31:0] s0_pwdata, input logic [3:0] s0_pstrb,\n"
+        "  output logic        s0_pready, output logic [31:0] s0_prdata, output logic s0_pslverr,\n"
+        "  input  logic        s1_psel, input logic s1_penable, input logic s1_pwrite,\n"
+        "  input  logic [7:0]  s1_paddr, input logic [31:0] s1_pwdata, input logic [3:0] s1_pstrb,\n"
+        "  output logic        s1_pready, output logic [31:0] s1_prdata, output logic s1_pslverr\n"
+        ");\n"
+        "  assign s0_pready = 1\'b1; assign s0_prdata = s0_pwdata; assign s0_pslverr = 1\'b0;\n"
+        "  assign s1_pready = 1\'b1; assign s1_prdata = s1_pwdata; assign s1_pslverr = 1\'b0;\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        f = root / "twoapb.sv"
+        f.write_text(rtl, encoding="utf-8")
+        r = emit_protocol_testbench(str(f), str(root / "tb"), "apb")
+        assert r["ok"], str(r.get("error"))[:250]
+
+        uncovered = r["data"]["uncovered_interfaces"]
+        assert len(uncovered) == 1, uncovered
+        assert uncovered[0]["group_prefix"] == "s1", uncovered
+        assert uncovered[0]["protocol"] == "apb", uncovered
+        assert uncovered[0]["signal_count"] == 9, uncovered
+
+        codes = [(d["code"], d["path"]) for d in (r.get("diagnostics") or [])]
+        assert ("W056", "interface[s1]") in codes, codes
+
+        # 单接口 DUT 不得产生 W056 假报
+        one = Path(__file__).resolve().parent.parent / "examples/multi_bus_ref/apb_slave.sv"
+        if one.is_file():
+            r2 = emit_protocol_testbench(str(one), str(root / "tb2"), "apb")
+            assert r2["ok"], str(r2.get("error"))[:250]
+            assert r2["data"]["uncovered_interfaces"] == [], r2["data"]
+            codes2 = [d["code"] for d in (r2.get("diagnostics") or [])]
+            assert "W056" not in codes2, codes2
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4316,6 +4367,7 @@ def main() -> int:
     test_secondary_clock_names_are_recognised()
     test_secondary_reset_names_are_recognised()
     test_direction_suffixed_bus_ports_are_classified()
+    test_multi_interface_dut_reports_uncovered_bus()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

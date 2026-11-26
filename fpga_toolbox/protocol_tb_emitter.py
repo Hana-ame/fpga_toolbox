@@ -1295,6 +1295,21 @@ def emit_protocol_testbench(
             f"in any module of {rp.name} (modules: {found}).",
         )
     mod_name = str(m.get("module_name") or rp.stem)
+
+    # **多接口 DUT**：一个模块可能同时暴露多个同/异协议总线端口（如两个 APB
+    # 从机 s0_*/s1_*）。模板只能驱动其中一个 —— 但旧实现静默只取第一个，
+    # 其余接口的端口既不连接也不 tie-off：实测双 APB DUT 生成的 TB 里
+    # `s1_*` 一个都不出现，s1 侧的输入悬空、行为未定义，而工具报 ok=True。
+    # 这里把「未被覆盖的接口」显式报出来（W056），让调用方知道这份 TB
+    # 只验证了 DUT 的一部分。
+    _all_ifaces = [x for x in (m.get("interfaces") or []) if x is not chosen]
+    _uncovered = [
+        {"protocol": x.get("protocol"), "group_prefix": x.get("group_prefix"),
+         "signal_count": len(x.get("port_map") or {})}
+        for x in _all_ifaces
+        if x.get("protocol") in SUPPORTED_MULTI_PROTOCOLS
+        or (x.get("port_map") or {})
+    ]
     # 时钟/复位必须从 RTL 真实推断出来，不能回退到 "clk"/"rst_n" 这类猜的名字：
     # DUT 没有 reset 端口时（extract_interfaces 会报 W011 并给 reset=None），
     # 旧实现仍硬连 `.rst_n(rst_n)`，得到 `%Error-PINNOTFOUND: Pin not found:
@@ -1503,6 +1518,21 @@ def emit_protocol_testbench(
     os.chmod(sim_path, os.stat(sim_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     suites = pcie_suites if proto == "pcie" else [proto]
+    _diags: List[Dict[str, Any]] = []
+    for _u in _uncovered:
+        _g = _u.get("group_prefix") or "default"
+        _diags.append({
+            "severity": "WARNING",
+            "code": "W056",
+            "path": f"interface[{_g}]",
+            "message": (
+                f"the DUT also exposes a '{_u.get('protocol')}' interface (group "
+                f"'{_g}', {_u.get('signal_count')} signal(s)) that this testbench does "
+                "not drive or check. Its ports are left unconnected, so that part of "
+                "the DUT is not verified. Generate a separate testbench for it "
+                "(split the DUT or use a per-interface RTL wrapper)."
+            ),
+        })
     return ok_result(
         "emit_testbench",
         {
@@ -1515,5 +1545,7 @@ def emit_protocol_testbench(
                 "sv_testbench": str(tb_path),
                 "sim_script": str(sim_path),
             },
+            "uncovered_interfaces": _uncovered,
         },
+        diagnostics=_diags,
     )
