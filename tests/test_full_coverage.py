@@ -3104,6 +3104,52 @@ def test_unexpanded_sv_interface_ports_are_reported() -> None:
         assert mf["unexpanded_sv_interfaces"] == [], mf["unexpanded_sv_interfaces"]
 
 
+def test_lint_tb_zero_matches_is_not_silent_clean() -> None:
+    """Defect 141: 目录模式扫到 0 个文件时必须区分「没检查」与「检查通过」。
+
+    `_collect_targets` 在目录模式下只收「tb_ 前缀 / vip 目录 / 含 driver」的
+    SV 文件（刻意的启发式，避免把 DUT 当 TB 检查）。于是 `my_testbench.sv`、
+    `bad_tb.sv` 这类常见命名被静默跳过：一个只含 `bad_tb.sv` 的目录返回
+    `scanned_sv_files=0, clean=true, findings=[]`，调用方以为 TB 已通过检查。
+    """
+    print("coverage: lint_tb distinguishes no-match from clean")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "bad_tb.sv").write_text(
+            "module bad_tb;\n"
+            "  initial begin $display(\"PASS: x\"); end\n"
+            "endmodule\n", encoding="utf-8")
+
+        # 目录模式：文件名不匹配启发式 → 必须显式说明「没扫到文件」
+        r = call_tool("lint_tb", {"target_path": str(root)})
+        d = r["data"]
+        assert d["scanned_sv_files"] == 0, d
+        assert d["scanned_anything"] is False, d
+        codes = [(x["code"], x["severity"]) for x in (r.get("diagnostics") or [])]
+        assert ("W055", "WARNING") in codes, codes
+        # strict 模式下这是硬失败
+        rs = call_tool("lint_tb", {"target_path": str(root), "strict": True})
+        assert rs["ok"] is False, rs.get("error")
+
+        # 直接传文件路径时必须照常检查（不受命名启发式限制）
+        rf = call_tool("lint_tb", {"target_path": str(root / "bad_tb.sv")})
+        df = rf["data"]
+        assert df["scanned_sv_files"] == 1, df
+        assert df["scanned_anything"] is True, df
+
+        # 符合启发式的文件：照常扫描，不报 W055
+        (root / "tb_good.sv").write_text(
+            "module tb_good;\n"
+            "  initial begin $display(\"PASS: x\"); $finish; end\n"
+            "endmodule\n", encoding="utf-8")
+        r2 = call_tool("lint_tb", {"target_path": str(root)})
+        assert r2["data"]["scanned_sv_files"] >= 1, r2["data"]
+        codes2 = [x["code"] for x in (r2.get("diagnostics") or [])]
+        assert "W055" not in codes2, codes2
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3153,6 +3199,7 @@ def main() -> int:
     test_tb_builds_for_rtl_without_timescale()
     test_typedef_port_width_placeholders_are_legal()
     test_unexpanded_sv_interface_ports_are_reported()
+    test_lint_tb_zero_matches_is_not_silent_clean()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

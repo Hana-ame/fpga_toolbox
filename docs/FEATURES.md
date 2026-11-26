@@ -602,6 +602,7 @@ python3 -m fpga_toolbox audit_harness
 | `W052` | `render_visual_report` | `summary.total/passed/failed` 与 `checks` 实际统计不符（报告会印出自相矛盾的结论）|
 | `W053` | `render_visual_report` | `overall_status` 与行级结论矛盾（PASS 却无一行通过 / FAIL 却无一行失败）|
 | `W054` | `emit_testbench` | 输出端口位宽无法解析（typedef/interface 类型），wrapper 未连接该观察端口 |
+| `W055` | `lint_tb` | 目录模式下没有匹配到任何候选文件（`tb_` 前缀 / `vip` / `driver`），"没检查"≠"检查通过" |
 | `W101` | `copy_sandbox` | 被 include 的文件未进沙箱 |
 | `W102` | `index_repo` | 例化了仓库内无定义的模块 |
 

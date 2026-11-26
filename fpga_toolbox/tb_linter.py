@@ -472,10 +472,35 @@ def tool_lint_tb(
     errors = [x for x in findings if x["severity"] == "ERROR"]
     warnings = [x for x in findings if x["severity"] == "WARNING"]
     clean = len(errors) == 0 and (not strict or len(warnings) == 0)
+
+    # **扫了 0 个文件不等于干净**。目录模式下 `_collect_targets` 只收
+    # 「tb_ 前缀 / vip 目录 / driver 命名」的 SV 文件（刻意的启发式，避免把
+    # DUT 当 TB 检查），于是 `my_testbench.sv`、`bad_tb.sv` 这类常见命名会被
+    # 静默跳过：实测一个只含 `bad_tb.sv` 的目录返回
+    # `scanned_sv_files=0, clean=true, findings=[]`，调用方以为 TB 已通过检查。
+    # 这里显式报 W055 并把 `scanned_anything` 置 false，让「没检查」与
+    # 「检查通过」可区分。
+    scanned_anything = bool(sv_files or script_files)
+    if not scanned_anything:
+        findings.append({
+            "severity": "WARNING",
+            "code": "W055",
+            "path": str(p.resolve()),
+            "message": (
+                "lint_tb matched no candidate files under the target path. "
+                "Directory mode only scans SV files whose name starts with 'tb_', "
+                "lives under a 'vip' directory, or contains 'driver'. Pass the file "
+                "path directly to lint it regardless of naming."
+            ),
+        })
+        warnings = [x for x in findings if x["severity"] == "WARNING"]
+        clean = len(errors) == 0 and (not strict or len(warnings) == 0)
+
     data = {
         "target_path": str(p.resolve()),
         "scanned_sv_files": len(sv_files),
         "scanned_script_files": len(script_files),
+        "scanned_anything": scanned_anything,
         "error_count": len(errors),
         "warning_count": len(warnings),
         "clean": clean,
