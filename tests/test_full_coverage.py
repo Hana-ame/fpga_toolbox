@@ -3254,6 +3254,49 @@ def test_numeric_bounds_are_enforced_at_entry() -> None:
         assert r["ok"] is True, r.get("error")
 
 
+def test_eda_remote_tag_cannot_escape_staging_dir() -> None:
+    """Defect 145: tag='..'/'..' 这类纯点 tag 会越界删除远端目录。
+
+    `_TAG_RE = ^[A-Za-z0-9_.-]+$` 允许 '.'，于是 tag='..' 或 tag='.' 通过校验。
+    生成脚本把 tag 拼进 `WORK="/dev/shm/{tag}"`，末尾执行 `rm -rf $WORK`：
+
+    - tag='..' → WORK="/dev/shm/.."  → rm -rf /dev/shm/..  (= /dev)
+    - tag='.'  → WORK="/dev/shm/."   → rm -rf /dev/shm/.   (= /dev/shm 整目录)
+
+    与已修的 remote_work_dir='/' 是同一类「字符白名单挡不住路径语义」问题，
+    只是从 tag 侧绕进来。
+    """
+    print("coverage: eda_campaign tag cannot escape staging dir")
+    from fpga_toolbox.eda_campaign import generate_remote_run_script
+
+    for bad in ("..", ".", "../.."):
+        try:
+            script = generate_remote_run_script("host1", bad, "run.sh", "~/work")
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"tag {bad!r} was accepted; generated WORK line: "
+            + next(ln for ln in script.splitlines() if ln.startswith("WORK=")))
+
+    # 正常 tag 必须仍可用
+    for good in ("ver1", "v1_2-3", "a.b", "run-2024.11"):
+        script = generate_remote_run_script("host1", good, "run.sh", "~/work")
+        assert f'WORK="/dev/shm/{good}"' in script, good
+
+    # 其他参数保持原防护
+    for args in [
+        ("host\nrm -rf /", "t", "run.sh", "~/work"),      # host 换行注入
+        ("host", "t", "../evil.sh", "~/work"),             # script 带路径
+        ("host", "t", "run.sh", "/"),                      # workdir 根
+        ("host", "t", "run.sh", "~/work/.."),              # workdir ..
+    ]:
+        try:
+            generate_remote_run_script(*args)
+        except ValueError:
+            continue
+        raise AssertionError(f"injection accepted: {args}")
+
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -3306,6 +3349,7 @@ def main() -> int:
     test_lint_tb_zero_matches_is_not_silent_clean()
     test_normalizer_surfaces_verilator_errors_and_empty_verification()
     test_numeric_bounds_are_enforced_at_entry()
+    test_eda_remote_tag_cannot_escape_staging_dir()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

@@ -485,6 +485,18 @@ def generate_remote_run_script(
             f"Invalid tag {tag!r}: allowed characters are [A-Za-z0-9_.-]. "
             "The tag is used as a /dev/shm directory name in the generated script."
         )
+    # 字符白名单挡不住**语义**危险：`.` 和 `..` 都只含允许字符，但它们作为
+    # 路径段会让「清理临时目录」越界。旧实现只查字符，实测：
+    #   tag='..'  -> WORK="/dev/shm/.."      -> 脚本执行 rm -rf /dev/shm/..  (= /dev)
+    #   tag='.'   -> WORK="/dev/shm/."       -> rm -rf /dev/shm/.  (= /dev/shm 整目录)
+    # 生成脚本末尾有 `rm -rf $WORK`，所以纯点的 tag 会删掉远超预期的东西
+    # （与已修的 remote_work_dir='/' 属同一类问题，只是从 tag 侧绕进来）。
+    if tag in (".", "..") or ".." in tag.split("."):
+        raise ValueError(
+            f"Invalid tag {tag!r}: '.' and '..' (and any component containing "
+            "'..') are not valid directory names. The tag names a /dev/shm "
+            "directory that the generated script later removes with rm -rf."
+        )
     if not _REMOTE_WORK_DIR_RE.match(remote_work_dir):
         raise ValueError(
             f"Invalid remote_work_dir {remote_work_dir!r}: allowed characters are "
