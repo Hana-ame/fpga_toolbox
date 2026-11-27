@@ -5081,6 +5081,68 @@ def test_empty_report_cannot_claim_pass() -> None:
     assert "W053" not in [d.get("code") for d in (r3.get("diagnostics") or [])]
 
 
+def test_summary_payloads_are_type_checked() -> None:
+    """缺陷 189: coverage_summary / mutation_summary 的非法字段原样透传。
+
+    `normalize_sim_result` 把这两个 summary 直接塞进报告：
+
+        {"coverage_summary": {"line": {"x": 1}},
+         "mutation_summary": {"mutation_score": "abc"}}
+
+    返回 ok=true、零诊断，报告里于是出现「覆盖率 = 一个 dict」
+    「mutation_score = 'abc'」，带着非法类型一路流到 render_visual_report。
+    渲染器恰好容错不崩，但报告数据本身已失真。
+
+    修复：对上游最关键的数值字段做类型检查，非法值丢弃该字段并逐条报
+    W014（"值被忽略"的既有诊断码），其余合法字段保留。
+    """
+    print("coverage: summary payloads are type checked")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / "a.log"
+        log.write_text(
+            "== sim: apb (top=tb_apb) ==\n"
+            "PASS: apb all 1 checks passed\n", encoding="utf-8")
+        base = {"verilator_log_path": str(log), "module_name": "m"}
+
+        r = call_tool("normalize_sim_result", {
+            **base,
+            "coverage_summary": {"line": {"x": 1}, "branch": 50.0},
+            "mutation_summary": {"mutation_score": "abc", "killed": 3},
+        })
+        assert r["ok"], str(r.get("error"))[:200]
+        cov = r["data"]["coverage_summary"]
+        mut = r["data"]["mutation_summary"]
+        # 非法字段被丢弃
+        assert "line" not in cov, cov
+        assert "mutation_score" not in mut, mut
+        # 合法字段保留
+        assert cov["branch"] == 50.0, cov
+        assert mut["killed"] == 3, mut
+        # 逐字段给出可见诊断
+        paths = {(d["code"], d["path"]) for d in (r.get("diagnostics") or [])}
+        assert ("W014", "coverage_summary.line") in paths, paths
+        assert ("W014", "mutation_summary.mutation_score") in paths, paths
+
+        # 全部合法时不得产生假诊断
+        r2 = call_tool("normalize_sim_result", {
+            **base,
+            "coverage_summary": {"line": 87.5, "branch": 60},
+            "mutation_summary": {"mutation_score": 91.0, "killed": 10},
+        })
+        assert r2["ok"], str(r2.get("error"))[:200]
+        assert r2["data"]["coverage_summary"] == {"line": 87.5, "branch": 60}
+        assert r2["data"]["mutation_summary"] == {"mutation_score": 91.0, "killed": 10}
+        assert not [d for d in (r2.get("diagnostics") or []) if d["code"] == "W014"], \
+            r2.get("diagnostics")
+
+        # 非 dict 的 summary（类型校验已在 call_tool 层拦住，这里确保函数层也安全）
+        r3 = call_tool("normalize_sim_result", {**base, "coverage_summary": {}})
+        assert r3["ok"], str(r3.get("error"))[:200]
+        assert r3["data"]["coverage_summary"] == {}, r3["data"]
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5179,6 +5241,7 @@ def main() -> int:
     test_parser_backends_agree_on_widths()
     test_unpacked_array_ports_use_packed_width_only()
     test_empty_report_cannot_claim_pass()
+    test_summary_payloads_are_type_checked()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

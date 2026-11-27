@@ -511,16 +511,44 @@ def tool_normalize_sim_result(
     # all_verified/missing/failed/observed，而非只能从 SUITE_* 规则反推。
     if verilator_log_path:
         report["verilator_suite_identity"] = ident
+    # coverage_summary / mutation_summary 是**透传给下游渲染器**的结构化数据。
+    # 旧实现原样塞进报告：`{"line": {"x": 1}}` 或
+    # `{"mutation_score": "abc"}` 会带着非法类型一路流到 render_visual_report，
+    # 报告里出现「覆盖率 = 一个 dict」「mutation_score = 'abc'」，而 normalize
+    # 返回 ok=true、零诊断（缺陷 189）。这里对上游最关键的数值字段做类型检查，
+    # 非法值**丢弃该字段**并给 W014（"值被忽略"的既有诊断码），保留其余字段。
+    _diags: List[Dict[str, Any]] = []
     if coverage_summary is not None:
-        report["coverage_summary"] = coverage_summary
+        _cov = dict(coverage_summary) if isinstance(coverage_summary, dict) else {}
+        for _k in ("line", "branch", "toggle", "fsm", "expr", "total"):
+            if _k in _cov and not isinstance(_cov[_k], (int, float)):
+                _diags.append({
+                    "severity": "WARNING", "code": "W014",
+                    "path": f"coverage_summary.{_k}",
+                    "message": (f"Ignoring non-numeric coverage value "
+                                f"{_cov[_k]!r} for '{_k}'; numeric percentage expected."),
+                })
+                _cov.pop(_k, None)
+        report["coverage_summary"] = _cov
     if mutation_summary is not None:
-        report["mutation_summary"] = mutation_summary
+        _mut = dict(mutation_summary) if isinstance(mutation_summary, dict) else {}
+        for _k in ("mutation_score", "score", "killed", "survived",
+                   "total", "evaluated"):
+            if _k in _mut and not isinstance(_mut[_k], (int, float)):
+                _diags.append({
+                    "severity": "WARNING", "code": "W014",
+                    "path": f"mutation_summary.{_k}",
+                    "message": (f"Ignoring non-numeric mutation value "
+                                f"{_mut[_k]!r} for '{_k}'; number expected."),
+                })
+                _mut.pop(_k, None)
+        report["mutation_summary"] = _mut
 
     if out_report_json:
         out = Path(out_report_json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    return ok_result("normalize_sim_result", report)
+    return ok_result("normalize_sim_result", report, diagnostics=_diags)
 
 
 if __name__ == "__main__":
