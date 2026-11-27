@@ -1538,10 +1538,12 @@ def test_review_fixes_registry_parser_and_types() -> None:
     src = ("module intty(\n  input logic clk,\n  output int o1,\n  output byte o2,\n"
            "  output shortint o3,\n  output longint o4\n);\nendmodule\n")
     want = {"o1": 32, "o2": 8, "o3": 16, "o4": 64}
+    import shutil as _shutil
+    backends = ("builtin", "slang") if _shutil.which("slang") else ("builtin",)
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "dut.sv"
         f.write_text(src, encoding="utf-8")
-        for backend in ("builtin", "slang"):
+        for backend in backends:
             mods = parse_sv_file(f, backend=backend)
             if not mods:
                 continue
@@ -2622,7 +2624,9 @@ def test_sv_parser_tokenizer_and_header_fixes() -> None:
             "module multi_dut (\n  input  logic [1:0][7:0] d2d,\n"
             "  output logic [3:0][3:0] d2d2,\n  output logic [7:0] flat\n);\n"
             "endmodule\n", encoding="utf-8")
-        for backend in ("builtin", "slang"):
+        import shutil as _shutil
+        backends = ("builtin", "slang") if _shutil.which("slang") else ("builtin",)
+        for backend in backends:
             mods = parse_sv_file(f5, backend=backend)
             if not mods:
                 continue
@@ -2996,7 +3000,13 @@ def test_typedef_port_width_placeholders_are_legal() -> None:
         f = root / "axil_typed.sv"
         f.write_text(rtl, encoding="utf-8")
 
-        # 138: 输入侧 tie_off 不能是 0'b0
+        # 138: 输入侧 tie_off 不能是 0'b0（显式覆盖 builtin 降级后端与默认后端）
+        ex_builtin = call_tool("extract_interfaces", {"rtl_file": str(f), "parser_backend": "builtin"})
+        assert ex_builtin["ok"], str(ex_builtin.get("error"))[:200]
+        oos_b = {o["port"]: o for o in ex_builtin["data"]["modules"][0]["out_of_scope_ports"]}
+        assert oos_b["dbg_mode_i"]["width"] == 0, oos_b["dbg_mode_i"]
+        assert oos_b["dbg_mode_i"]["tie_off"] == "'0", oos_b["dbg_mode_i"]
+
         ex = call_tool("extract_interfaces", {"rtl_file": str(f)})
         assert ex["ok"], str(ex.get("error"))[:200]
         mod = ex["data"]["modules"][0]
@@ -3244,14 +3254,27 @@ def test_numeric_bounds_are_enforced_at_entry() -> None:
             # 不能伪装成「仿真超时」
             assert "timed out" not in err, (bad, err[:200])
 
-        # 合法值照常工作；字符串数字（MCP 客户端常见）仍被接受
+        # 合法值照常工作；字符串数字（MCP 客户端常见）仍被接受。
+        # 无 Verilator 时无法实际执行仿真，但必须放行入口边界检查并落到 E020 环境守卫。
+        from fpga_toolbox.eda_env import probe_eda_env
+        has_vlt = bool(probe_eda_env().get('verilator_ok'))
         for good in (1, 300, "1700"):
             r = call_tool("run_sim", {**base, "timeout_sec": good})
-            assert r["ok"] is True, (good, r.get("error"))
+            if has_vlt:
+                assert r["ok"] is True, (good, r.get("error"))
+            else:
+                assert "must be >= 1" not in str(r.get("error")), (good, r.get("error"))
+                codes = [d.get("code") for d in (r.get("diagnostics") or [])]
+                assert "E020" in codes, (good, codes, r.get("error"))
 
         # 省略该参数时默认生效
         r = call_tool("run_sim", base)
-        assert r["ok"] is True, r.get("error")
+        if has_vlt:
+            assert r["ok"] is True, r.get("error")
+        else:
+            assert "must be >= 1" not in str(r.get("error")), r.get("error")
+            codes = [d.get("code") for d in (r.get("diagnostics") or [])]
+            assert "E020" in codes, (codes, r.get("error"))
 
 
 def test_eda_remote_tag_cannot_escape_staging_dir() -> None:
@@ -4707,6 +4730,128 @@ def test_draft_yaml_exports_all_protocols_and_validates() -> None:
         assert "axi4_lite" in bn, [k for k in bn if k not in _META]
 
 
+
+def test_zero_eda_helper_and_slang_json_pipeline() -> None:
+    """116: 纯 Python 零 EDA 环境下覆盖 eda_env / sim_runner / slang JSON 解析管线。"""
+    print("coverage: zero-EDA pure-Python helpers (parse_verilator_version, collectors, slang JSON)")
+    import json as _json
+    from unittest import mock
+    from fpga_toolbox.eda_env import parse_verilator_version
+    from fpga_toolbox.sim_runner import _collect_waveforms, _collect_logs
+    from fpga_toolbox.core import sv_parser
+
+    # 1) parse_verilator_version
+    assert parse_verilator_version("Verilator 5.054 2026-01-01 rev v5.054") == (5, 54)
+    assert parse_verilator_version("Verilator 4.228 devel") == (4, 228)
+    assert parse_verilator_version("not verilator") is None
+
+    # 2) _collect_waveforms & _collect_logs
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        vcd = root / "sim.vcd"
+        vcd.write_text("$date\n$end\n", encoding="utf-8")
+        empty_fst = root / "empty.fst"
+        empty_fst.write_bytes(b"")
+        logf = root / "run.log"
+        logf.write_text("PASS: ok\n", encoding="utf-8")
+        ignored = root / "readme.md"
+        ignored.write_text("hi\n", encoding="utf-8")
+
+        waves = _collect_waveforms([root, root / "nonexistent"])
+        assert len(waves) == 2, waves
+        by_name = {Path(w["path"]).name: w for w in waves}
+        assert by_name["sim.vcd"]["kind"] == "VCD" and by_name["sim.vcd"]["empty"] is False
+        assert by_name["empty.fst"]["kind"] == "FST" and by_name["empty.fst"]["empty"] is True
+
+        logs = _collect_logs([root, root / "nonexistent"], exclude={str(vcd.resolve())})
+        assert len(logs) == 1 and Path(logs[0]["path"]).name == "run.log", logs
+
+    # 3) _run_slang / _parse_with_slang / _enrich_from_builtin / slang_instantiation_targets
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rtl = root / "top.sv"
+        rtl.write_text(
+            "module top #(parameter int DW = 32) (\n"
+            "  input logic clk,\n"
+            "  input logic [DW-1:0] data_i,\n"
+            "  apb_if.slave apb\n"
+            ");\n"
+            "  vendor_ip u_ip();\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        fake_ast = {
+            "design": {
+                "kind": "Root",
+                "members": [{
+                    "kind": "Instance",
+                    "name": "top",
+                    "body": {
+                        "name": "top",
+                        "members": [
+                            {"kind": "Parameter", "name": "DW", "value": "32"},
+                            {"kind": "Port", "name": "clk", "direction": "In", "type": "logic"},
+                            {"kind": "Port", "name": "data_i", "direction": "In", "type": "logic[31:0]"},
+                            {"kind": "InterfacePort", "name": "apb", "isGeneric": False},
+                        ],
+                    },
+                }],
+            }
+        }
+        fake_cst = {
+            "members": [{
+                "kind": "ModuleDeclaration",
+                "members": [{
+                    "kind": "HierarchyInstantiation",
+                    "type": {"kind": "Identifier", "text": "vendor_ip"},
+                }],
+            }]
+        }
+
+        def _fake_subprocess_run(cmd, **_kwargs):
+            class _R:
+                returncode = 0
+                stderr = ""
+            r = _R()
+            if "--cst-json" in cmd:
+                r.stdout = _json.dumps(fake_cst)
+            else:
+                r.stdout = "Top level design units:\n  top\n" + _json.dumps(fake_ast)
+            return r
+
+        with mock.patch("shutil.which", return_value="/usr/bin/fake-slang"),              mock.patch("subprocess.run", side_effect=_fake_subprocess_run):
+            mods = sv_parser.parse_sv_file(rtl, backend="slang")
+            assert len(mods) == 1 and mods[0].name == "top", mods
+            p_by_name = {p.name: p for p in mods[0].ports}
+            assert p_by_name["data_i"].width == 32, p_by_name
+            # _enrich_from_builtin 应把 slang 缺失的 interface_type/modport 补齐
+            assert p_by_name["apb"].is_interface is True
+            assert p_by_name["apb"].interface_type == "apb_if", p_by_name["apb"]
+            assert p_by_name["apb"].modport == "slave", p_by_name["apb"]
+
+            insts = sv_parser.slang_instantiation_targets(rtl)
+            assert insts == ["vendor_ip"], insts
+
+
+def test_cli_version_flag() -> None:
+    """117: CLI 支持 --version / -V 输出当前版本号。"""
+    print("coverage: cli --version / -V flag")
+    import io as _io
+    import contextlib as _cl
+    from fpga_toolbox import __version__
+    from fpga_toolbox.cli import main as cli_main
+
+    for flag in ("--version", "-V"):
+        buf = _io.StringIO()
+        try:
+            with _cl.redirect_stdout(buf):
+                cli_main([flag])
+            raise AssertionError(f"expected SystemExit(0) for {flag}")
+        except SystemExit as exc:
+            assert exc.code == 0, (flag, exc.code)
+        out = buf.getvalue().strip()
+        assert __version__ in out, (flag, out)
+
 def main() -> int:
     test_cli_in_process_all_paths()
     test_sv_parser_non_ansi_and_bitfield_width()
@@ -4783,6 +4928,8 @@ def main() -> int:
     test_nonstandard_prefix_dut_ports_are_bound_and_wired()
     test_bind_order_is_derived_from_canonical_declarations()
     test_draft_yaml_exports_all_protocols_and_validates()
+    test_zero_eda_helper_and_slang_json_pipeline()
+    test_cli_version_flag()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

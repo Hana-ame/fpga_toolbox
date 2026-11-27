@@ -1,6 +1,6 @@
 # `fpga_toolbox` 完整使用说明书、设计原理与实战示例
 
-> 版本：`v0.5.0+`（13 个注册原子工具 · 11 类总线协议 · 100% 函数测试覆盖率 · Verilator 5.054 + slang 12.2 + cocotb 2.1.0 + Synopsys VCS/DC/PT 自动化）
+> 版本：`v0.5.0+`（13 个注册原子工具 · 12 类总线协议 · 100% 函数测试覆盖率 · Verilator 5.054 + slang 12.2 + cocotb 2.1.0 + Synopsys VCS/DC/PT 自动化）
 
 ---
 
@@ -22,7 +22,7 @@
 
 1. **双后端 AST 解析（`core/sv_parser.py` + `iface_extractor.py`）**：
    - 优先调用 `slang 12.2` 获取工业级 IEEE 1800 SystemVerilog AST（自动处理跨文件 `import pkg::*;`、宏与参数求值）；无 `slang` 时显式降级到内置词法/递归下降解析器（支持 ANSI 与 Verilog-1995 非 ANSI 模块，并发出 `W013` 告警，绝不静默降级）。
-   - 按前缀分组匹配 11 类总线协议（`axi4_lite`、`axi4`、`axi4_stream`、`apb`、`ahb_lite`、`ddr3`、`ddr4`、`hbm`、`pcie`、`spi`、`ethernet`），输出规范端口映射 `port_map` 与真实方向/位宽表 `port_details`。
+   - 按前缀分组匹配 12 类总线协议（`axi4_lite`、`axi4`、`axi4_stream`、`apb`、`ahb_lite`、`ddr3`、`ddr4`、`ddr5`、`hbm`、`pcie`、`spi`、`ethernet`），输出规范端口映射 `port_map` 与真实方向/位宽表 `port_details`。
 2. **双路径测试台生成（`tb_emitter.py` + `protocol_tb_emitter.py`）**：
    - **契约路径（AXI4-Lite / 双侧 AXI4-Lite↔APB 桥）**：由 YAML/JSON 寄存器契约编译为不可变 `CompiledUnitIR`，生成隔离 wrapper、SVA 协议检查器（含 `[SVA:HBEAT]` 心跳防静默通过）、bind 文件、cocotb 测试台、自包含 `Makefile`；检测到双侧 APB master 时自动生成 `{mod}_apb_slave_model.sv` 彻底消除 `WIDTHEXPAND` 与 `P_003` 超时。
    - **多协议自动路径（`protocol="auto"`）**：直接从 `slang` AST 生成显式端口连接（无 `.*` 隐式编译错）、位宽自适应、复位极性自适应（兼容高/低有效复位）的自检 SV 测试台与增量编译 Verilator 运行脚本（PCIe 自动生成 Gen3/4/5 × x1/x4/x16 共 9 档）。
@@ -64,7 +64,7 @@ python3 -m fpga_toolbox audit_harness
 | 1 | `index_repo` | `--project-root` | 扫描全仓 SV/V 模块依赖图，标记未知实例化（`W102`） |
 | 2 | `resolve_deps` | `--project-root --top-module` | 计算顶层模块编译依赖闭包与排序文件清单 |
 | 3 | `copy_sandbox` | `--project-root --relative-files --sandbox-dir` | 带符号链接逃逸拦截与安全标记校验的沙箱隔离拷贝 |
-| 4 | `extract_interfaces` | `--rtl-file [--backend auto\|slang\|builtin] [--emit-draft-yaml]` | 提取时钟/复位/11 类总线接口、真实方向与位宽（`port_details`） |
+| 4 | `extract_interfaces` | `--rtl-file [--backend auto\|slang\|builtin] [--emit-draft-yaml]` | 提取时钟/复位/12 类总线接口、真实方向与位宽（`port_details`） |
 | 5 | `validate_contract` | `--spec-path [--rtl-file]` | 校验寄存器契约（含位域重叠 `E013`、越界 `E014`） |
 | 6 | `emit_testbench` | `--out-dir [--spec-path] [--rtl-file] [--protocol auto\|apb\|axi4\|...]` | 生成 cocotb/SVA/Makefile 或多协议自检 SV 测试台 |
 | 7 | `lint_tb` | `--target-path` | 静态扫描测试台时钟、握手与静默通过缺陷（`C/R/S` 规则） |

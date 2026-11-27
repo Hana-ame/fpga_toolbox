@@ -147,10 +147,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     包级 CLI 主入口：支持 `python3 -m fpga_toolbox <tool_name> --参数 值`
     以及 `list` / `schemas` 辅助查询命令。
     """
+    from . import __version__
+
     p = argparse.ArgumentParser(
         prog="fpga-toolbox",
         description="FPGA 原子化验证工具箱：直接用 `python3 -m fpga_toolbox <工具名> --参数 值` 调用。",
     )
+    p.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="列出全部可用原子工具")
     sub.add_parser("schemas", help="导出全部工具的 MCP / Function-Calling JSON Schema")

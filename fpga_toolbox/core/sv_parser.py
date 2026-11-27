@@ -301,6 +301,7 @@ class SVModuleParser:
                 ports.append(iface_port)
                 continue
             idx = 0
+            explicit_range = False
             while idx < len(item):
                 v = item[idx].value
                 if v in self._DIRS:
@@ -314,15 +315,26 @@ class SVModuleParser:
                     idx += 1
                 elif v == "[":
                     cur_wexpr, cur_w, idx = self._parse_range(item, idx, params)
+                    explicit_range = True
                 else:
                     break
-            name_tok = None
+            tail_idents: List[SVToken] = []
+            saw_scope = False
             for t in item[idx:]:
                 if t.value in ("=", "["):
                     break
-                if t.kind == "IDENT":
-                    name_tok = t
+                if t.value == "::":
+                    saw_scope = True
+                elif t.kind == "IDENT":
+                    tail_idents.append(t)
+            name_tok = tail_idents[-1] if tail_idents else None
             if name_tok:
+                # 若端口名前存在未知类型标识符（如 `input dbg_e dbg_mode_i` 或
+                # `input pkg::t_e sig`）且无显式位宽范围，则属于纯文本无法求值的
+                # typedef 端口：必须记为 width=0，避免下游按 1-bit 生成 1'b0 / 1-bit wire。
+                if (len(tail_idents) >= 2 or saw_scope) and not explicit_range:
+                    type_name = "::".join(t.value for t in tail_idents[:-1]) or "typedef"
+                    cur_wexpr, cur_w = type_name, 0
                 ports.append(SVPortAST(name_tok.value, cur_dir, cur_wexpr, cur_w, name_tok.line))
         return ports
 
@@ -344,6 +356,7 @@ class SVModuleParser:
                     stmt.append(self._adv())
                 self._match(";")
                 idx, wexpr, w = 0, "1", 1
+                explicit_range = False
                 while idx < len(stmt):
                     if stmt[idx].value in self._TYPES:
                         if stmt[idx].value in self._TYPE_WIDTH:
@@ -352,11 +365,24 @@ class SVModuleParser:
                         idx += 1
                     elif stmt[idx].value == "[":
                         wexpr, w, idx = self._parse_range(stmt, idx, params)
+                        explicit_range = True
                     else:
                         break
                 for grp in self._split_top(stmt[idx:]):
-                    ident = next((t for t in grp if t.kind == "IDENT"), None)
+                    grp_idents: List[SVToken] = []
+                    saw_scope = False
+                    for t in grp:
+                        if t.value in ("=", "["):
+                            break
+                        if t.value == "::":
+                            saw_scope = True
+                        elif t.kind == "IDENT":
+                            grp_idents.append(t)
+                    ident = grp_idents[-1] if grp_idents else None
                     if ident:
+                        if (len(grp_idents) >= 2 or saw_scope) and not explicit_range:
+                            wexpr = "::".join(t.value for t in grp_idents[:-1]) or "typedef"
+                            w = 0
                         declared[ident.value] = SVPortAST(ident.value, direction, wexpr, w, ident.line)
             else:
                 self._adv()

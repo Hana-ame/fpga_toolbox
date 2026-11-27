@@ -36,7 +36,7 @@ DOCS = {
     "FEATURES.md": {
         "out": "FEATURES.html",
         "title": "fpga_toolbox 功能手册",
-        "deck": "13 个原子工具、统一信封、37 个诊断码 —— 面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱",
+        "deck": "13 个原子工具、统一信封、47 个诊断码 —— 面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱",
         "kicker": "功能手册",
     },
     "EXAMPLES.md": {
@@ -44,6 +44,12 @@ DOCS = {
         "title": "fpga_toolbox 示例集",
         "deck": "10 个可直接运行的端到端示例，所有输出均为实际运行结果",
         "kicker": "示例集",
+    },
+    "USER_MANUAL.md": {
+        "out": "USER_MANUAL.html",
+        "title": "fpga_toolbox 使用说明书",
+        "deck": "设计原理、13 个原子工具与 12 类总线协议的完整实战指南",
+        "kicker": "使用手册",
     },
 }
 

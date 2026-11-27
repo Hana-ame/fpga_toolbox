@@ -115,6 +115,12 @@ jobs:
       - name: EDA campaign parsers (UVM / DC-PT QoR / PT netlist cleaner)
         run: python tests/test_eda_campaign.py
 
+      - name: Full coverage & defect regression suite
+        run: python tests/test_full_coverage.py
+
+      - name: Six-layer invariant gate
+        run: python scripts/verify_invariants.py --fast
+
       - name: Self-audit gate (anti-silent-pass)
         run: python -m fpga_toolbox audit_harness
 
