@@ -22,7 +22,7 @@
 
 1. **双后端 AST 解析（`core/sv_parser.py` + `iface_extractor.py`）**：
    - 优先调用 `slang 12.2` 获取工业级 IEEE 1800 SystemVerilog AST（自动处理跨文件 `import pkg::*;`、宏与参数求值）；无 `slang` 时显式降级到内置词法/递归下降解析器（支持 ANSI 与 Verilog-1995 非 ANSI 模块，并发出 `W013` 告警，绝不静默降级）。
-   - 按前缀分组匹配 12 类总线协议（`axi4_lite`、`axi4`、`axi4_stream`、`apb`、`ahb_lite`、`ddr3`、`ddr4`、`ddr5`、`hbm`、`pcie`、`spi`、`ethernet`），输出规范端口映射 `port_map` 与真实方向/位宽表 `port_details`。
+   - 按「标准接口 + 绑定层」匹配 12 类总线协议（`axi4_lite`、`axi4`、`axi4_stream`、`apb`、`ahb_lite`、`ddr3`、`ddr4`、`ddr5`、`hbm`、`pcie`、`spi`、`ethernet`），输出规范端口映射 `port_map`、真实方向/位宽表 `port_details`、以及双向拆分的 `split_port_map`。命名风格（`i_psel` / `psel_i` / `p_sel` / `s0_psel` / `PSel` / `mem_ddr3_dq_out`）由绑定层统一处理，详见 `FEATURES.md` 的「标准接口 + 绑定层」一节。
 2. **双路径测试台生成（`tb_emitter.py` + `protocol_tb_emitter.py`）**：
    - **契约路径（AXI4-Lite / 双侧 AXI4-Lite↔APB 桥）**：由 YAML/JSON 寄存器契约编译为不可变 `CompiledUnitIR`，生成隔离 wrapper、SVA 协议检查器（含 `[SVA:HBEAT]` 心跳防静默通过）、bind 文件、cocotb 测试台、自包含 `Makefile`；检测到双侧 APB master 时自动生成 `{mod}_apb_slave_model.sv` 彻底消除 `WIDTHEXPAND` 与 `P_003` 超时。
    - **多协议自动路径（`protocol="auto"`）**：直接从 `slang` AST 生成显式端口连接（无 `.*` 隐式编译错）、位宽自适应、复位极性自适应（兼容高/低有效复位）的自检 SV 测试台与增量编译 Verilator 运行脚本（PCIe 自动生成 Gen3/4/5 × x1/x4/x16 共 9 档）。

@@ -154,22 +154,135 @@ export PYTHONPATH="$(pwd):$PYTHONPATH"
 # 2. （可选）挂载离线/本地 EDA 工具链
 export PATH="$HOME/.local/verilator/bin:$HOME/.local/bin:$PATH"
 
-# 3. 确认工具注册表与环境探活
-python3 -m fpga_toolbox list
-python3 -m fpga_toolbox audit_harness</code></pre></div>
-<hr>
-<h2 id="3-13-个注册原子工具使用说明">3. 13 个注册原子工具使用说明</h2>
-<p>支持三种调用方式：</p>
-<ul><li><strong>统一 CLI</strong>：<code>python3 -m fpga_toolbox &lt;tool_name&gt; --param value</code>（object/array 参数支持 <code>@file.json</code> 或行内 JSON）</li><li><strong>单文件直跑</strong>：<code>python3 fpga_toolbox/&lt;module&gt;.py --param value</code></li><li><strong>Python / MCP 调用</strong>：<code>from fpga_toolbox.registry import call_tool; call_tool("&lt;tool_name&gt;", {...})</code></li></ul>
-<div class="table-wrap"><table><thead><tr><th>#</th><th>工具名</th><th>核心参数</th><th>作用与典型输出</th></tr></thead><tbody><tr><td>1</td><td><code>index_repo</code></td><td><code>--project-root</code></td><td>扫描全仓 SV/V 模块依赖图，标记未知实例化（<code>W102</code>）</td></tr><tr><td>2</td><td><code>resolve_deps</code></td><td><code>--project-root --top-module</code></td><td>计算顶层模块编译依赖闭包与排序文件清单</td></tr><tr><td>3</td><td><code>copy_sandbox</code></td><td><code>--project-root --relative-files --sandbox-dir</code></td><td>带符号链接逃逸拦截与安全标记校验的沙箱隔离拷贝</td></tr><tr><td>4</td><td><code>extract_interfaces</code></td><td>`--rtl-file [--backend auto\</td><td>slang\</td><td>builtin] [--emit-draft-yaml]`</td><td>提取时钟/复位/12 类总线接口、真实方向与位宽（<code>port_details</code>）</td></tr><tr><td>5</td><td><code>validate_contract</code></td><td><code>--spec-path [--rtl-file]</code></td><td>校验寄存器契约（含位域重叠 <code>E013</code>、越界 <code>E014</code>）</td></tr><tr><td>6</td><td><code>emit_testbench</code></td><td>`--out-dir [--spec-path] [--rtl-file] [--protocol auto\</td><td>apb\</td><td>axi4\</td><td>...]`</td><td>生成 cocotb/SVA/Makefile 或多协议自检 SV 测试台</td></tr><tr><td>7</td><td><code>lint_tb</code></td><td><code>--target-path</code></td><td>静态扫描测试台时钟、握手与静默通过缺陷（<code>C/R/S</code> 规则）</td></tr><tr><td>8</td><td><code>run_sim</code></td><td><code>--sim-script [--suite] [--expected-suites] [--waveform] [--require-waveform]</code></td><td>运行仿真、持久化全量日志、核验套件身份与波形新鲜度</td></tr><tr><td>9</td><td><code>run_mutation</code></td><td><code>--workdir --mutation-spec --test-cmd [--min-score 80]</code></td><td>注入真实 RTL 变异、统计杀伤率并保证 <code>try/finally</code> 恢复</td></tr><tr><td>10</td><td><code>normalize_sim_result</code></td><td><code>--module-name [--cocotb-results-json] [--verilator-log-path] [--sva-log-path]</code></td><td>归一化所有仿真日志与逐笔 <code>[CHECK]</code> 为统一 JSON 报告</td></tr><tr><td>11</td><td><code>render_visual_report</code></td><td><code>--report --dep-graph --extracted-interfaces --out-html-path</code></td><td>生成带 SV 语法高亮、方向/位宽标签与分项目标签页的离线 HTML+SVG</td></tr><tr><td>12</td><td><code>clean_pt_netlist</code></td><td><code>--in-verilog --out-verilog [--blackbox-modules]</code></td><td>清理 DC 网表中的参数化黑盒并插入标量 <code>assign = 1'b0;</code> 供 PT 读取</td></tr><tr><td>13</td><td><code>audit_harness</code></td><td><code>[--strict]</code></td><td>运行 19 项故障注入自审计，验证工具链所有护栏未被破坏</td></tr></tbody></table></div>
-<hr>
-<h2 id="4-实战使用示例examples">4. 实战使用示例（Examples）</h2>
-<h3 id="示例-1一键提取任意-rtl-的全部接口方向与位宽">示例 1：一键提取任意 RTL 的全部接口、方向与位宽</h3>
-<div class="code-block"><div class="code-lang">shell</div><pre><code>python3 -m fpga_toolbox extract_interfaces \
-  --rtl-file examples/multi_bus_ref/omni_hub/soc_omni_bus_hub.sv</code></pre></div>
-<p>一次识别出该模块共存的 6 套标准接口（<code>spi</code>、<code>apb</code>、<code>axi4</code>、<code>ethernet</code>、<code>pcie</code>、<code>ddr4</code>）及每个端口的 <code>direction</code> 与 <code>width</code>。</p>
-<h3 id="示例-2多协议自动生成测试台-静态-lint-verilator-实跑含波形">示例 2：多协议自动生成测试台 → 静态 Lint → Verilator 实跑（含波形）</h3>
-<div class="code-block"><div class="code-lang">shell</div><pre><code># 1) 自动生成 AXI4-Full 测试台与运行脚本
+  <!-- Section 1: Architecture & Principles -->
+  <section class="sec rule-top">
+    <h2>1. 系统设计原理与四层确定性架构</h2>
+    <p class="measure">
+      传统验证脚本最大的隐患是“静默假通过”——少跑一个套件、拿错旧二进制、网表黑盒位宽冲突或测试台只打印不断言，退出码却依然是 0。<code>fpga_toolbox</code> 把整个流程拆成 13 个单一职责工具，每个环节都内置机器可判的硬守卫，所有输出统一封装为 <code>{"ok", "tool", "data", "diagnostics", "error"}</code>。
+    </p>
+
+    <figure>
+      <div class="fig-title">13 个原子工具如何组成“静态提取 → 生成 → 防呆 → 实跑 → 变异 → 报告”闭环</div>
+      <svg viewBox="0 0 720 390" width="100%" role="img" aria-label="fpga_toolbox 4-layer deterministic pipeline">
+        <!-- Layer 1 -->
+        <text x="16" y="26" font-family="JetBrains Mono, monospace" font-size="13" fill="#7DD3FC" font-weight="600">层 1 · 静态索引、沙箱隔离与 AST 接口提取</text>
+        <rect x="16" y="38" width="160" height="62" rx="4" fill="#161B26" stroke="#38BDF8" stroke-width="1.5"/>
+        <text x="96" y="64" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">index_repo</text>
+        <text x="96" y="85" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">模块图 + W102 未知例化</text>
+
+        <line x1="176" y1="69" x2="202" y2="69" stroke="#38BDF8" stroke-width="2"/>
+        <rect x="202" y="38" width="150" height="62" rx="4" fill="#161B26" stroke="#38BDF8" stroke-width="1.5"/>
+        <text x="277" y="64" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">resolve_deps</text>
+        <text x="277" y="85" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">编译闭包拓扑排序</text>
+
+        <line x1="352" y1="69" x2="378" y2="69" stroke="#38BDF8" stroke-width="2"/>
+        <rect x="378" y="38" width="146" height="62" rx="4" fill="#161B26" stroke="#38BDF8" stroke-width="1.5"/>
+        <text x="451" y="64" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">copy_sandbox</text>
+        <text x="451" y="85" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">防软链逃逸 + 安全清理</text>
+
+        <line x1="524" y1="69" x2="550" y2="69" stroke="#38BDF8" stroke-width="2"/>
+        <rect x="550" y="38" width="154" height="62" rx="4" fill="#161B26" stroke="#34D399" stroke-width="1.5"/>
+        <text x="627" y="64" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">extract_interfaces</text>
+        <text x="627" y="85" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#6EE7B7">slang AST + 11 类协议</text>
+
+        <!-- Layer 2 -->
+        <text x="16" y="138" font-family="JetBrains Mono, monospace" font-size="13" fill="#6EE7B7" font-weight="600">层 2 · 契约校验、双路径测试台生成与静态 Lint</text>
+        <rect x="16" y="150" width="206" height="64" rx="4" fill="#161B26" stroke="#34D399" stroke-width="1.5"/>
+        <text x="119" y="176" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">validate_contract</text>
+        <text x="119" y="197" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">位域重叠 E013 / 越界 E014</text>
+
+        <line x1="222" y1="182" x2="252" y2="182" stroke="#34D399" stroke-width="2"/>
+        <rect x="252" y="150" width="224" height="64" rx="4" fill="#161B26" stroke="#34D399" stroke-width="1.5"/>
+        <text x="364" y="176" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">emit_testbench</text>
+        <text x="364" y="197" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#6EE7B7">契约 cocotb+Makefile / 多协议 SV</text>
+
+        <line x1="476" y1="182" x2="506" y2="182" stroke="#34D399" stroke-width="2"/>
+        <rect x="506" y="150" width="198" height="64" rx="4" fill="#161B26" stroke="#FBBF24" stroke-width="1.5"/>
+        <text x="605" y="176" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">lint_tb</text>
+        <text x="605" y="197" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#FBBF24">时钟 C / 握手 R / 静默通过 S</text>
+
+        <!-- Layer 3 -->
+        <text x="16" y="252" font-family="JetBrains Mono, monospace" font-size="13" fill="#7DD3FC" font-weight="600">层 3 · 实跑仿真、真实 RTL 变异杀伤与报告渲染</text>
+        <rect x="16" y="264" width="160" height="64" rx="4" fill="#161B26" stroke="#38BDF8" stroke-width="1.5"/>
+        <text x="96" y="290" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">run_sim</text>
+        <text x="96" y="311" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">套件身份 + 波形新鲜度</text>
+
+        <line x1="176" y1="296" x2="202" y2="296" stroke="#38BDF8" stroke-width="2"/>
+        <rect x="202" y="264" width="160" height="64" rx="4" fill="#161B26" stroke="#38BDF8" stroke-width="1.5"/>
+        <text x="282" y="290" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">run_mutation</text>
+        <text x="282" y="311" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#94A3B8">注入杀伤 + 字节级恢复</text>
+
+        <line x1="362" y1="296" x2="388" y2="296" stroke="#38BDF8" stroke-width="2"/>
+        <rect x="388" y="264" width="152" height="64" rx="4" fill="#161B26" stroke="#34D399" stroke-width="1.5"/>
+        <text x="464" y="290" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">normalize_sim</text>
+        <text x="464" y="311" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#6EE7B7">[CHECK]/SVA/XML 归一化</text>
+
+        <line x1="540" y1="296" x2="564" y2="296" stroke="#34D399" stroke-width="2"/>
+        <rect x="564" y="264" width="140" height="64" rx="4" fill="#161B26" stroke="#34D399" stroke-width="1.5"/>
+        <text x="634" y="290" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#F8FAFC" font-weight="600">visual_report</text>
+        <text x="634" y="311" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#6EE7B7">SV 高亮 + 分项目页</text>
+
+        <!-- Layer 4 Footer -->
+        <line x1="16" y1="348" x2="704" y2="348" stroke="#263042" stroke-width="1"/>
+        <text x="16" y="374" font-family="Plus Jakarta Sans, sans-serif" font-size="13.5" fill="#CBD5E1">横向护栏：<tspan font-family="JetBrains Mono, monospace" fill="#7DD3FC">clean_pt_netlist</tspan>（Synopsys PT 黑盒清理）· <tspan font-family="JetBrains Mono, monospace" fill="#6EE7B7">audit_harness</tspan>（19 项故障注入自检）· <tspan font-family="JetBrains Mono, monospace" fill="#FBBF24">registry.py</tspan>（必填/类型/枚举校验）</text>
+      </svg>
+      <figcaption>所有工具均可通过 <code>python3 -m fpga_toolbox &lt;tool&gt;</code>、单文件脚本或 Python/MCP <code>call_tool()</code> 调用。</figcaption>
+    </figure>
+
+    <div class="col-strip">
+      <div class="col-item">
+        <h3>双后端 AST 解析原理</h3>
+        <p><code>sv_parser.py</code> 优先调用 <code>slang 12.2</code> 获取完整编译级 AST（自动解析跨文件包导入与参数求值）；若环境无 <code>slang</code>，显式降级内置解析器并附带 <code>W013</code> 诊断。内置解析器同时兼容 ANSI 与 Verilog-1995 非 ANSI 模块（含依赖参数求值）。</p>
+      </div>
+      <div class="col-item">
+        <h3>双路径 TB 生成原理</h3>
+        <p>契约路径把 YAML/JSON 编译为 <code>CompiledUnitIR</code>，为双侧 AXI4-Lite↔APB 桥自动生成 <code>*_apb_slave_model.sv</code> + <code>Makefile</code> + SVA 心跳；多协议路径直接由 AST 生成显式端口连接、位宽缩放且匹配高/低有效复位极性的 SV 测试台。</p>
+      </div>
+      <div class="col-item">
+        <h3>零假通过守卫原理</h3>
+        <p>从 <code>lint_tb</code> 的静态 <code>C/R/S</code> 规则，到 <code>run_sim</code> 的套件身份与波形时间戳校验，再到 <code>result_normalizer</code> 的截断拦截与 <code>run_mutation</code> 的真实 RTL 故障杀伤，每一层都用确定性断言替代人工目测。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: All 13 Tools Quick Reference (Table 1) -->
+  <section class="sec rule-top">
+    <h2>2. 13 个注册原子工具速查表</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>工具名</th><th>关键 CLI 参数</th><th>核心职责与保护边界</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">index_repo</td><td><code>--project-root</code></td><td>全仓模块索引与依赖图；发现未定义子模块例化时发 <code>W102</code></td></tr>
+          <tr><td class="mono">resolve_deps</td><td><code>--project-root --top-module</code></td><td>计算顶层编译闭包并按依赖顺序输出文件列表</td></tr>
+          <tr><td class="mono">copy_sandbox</td><td><code>--project-root --relative-files --sandbox-dir</code></td><td>沙箱隔离拷贝；拦截符号链接逃逸，拒绝清空未标记目录</td></tr>
+          <tr><td class="mono">extract_interfaces</td><td><code>--rtl-file [--backend] [--emit-draft-yaml]</code></td><td>提取时钟/复位与 11 类总线接口、<code>port_details</code>（真实方向与位宽）</td></tr>
+          <tr><td class="mono">validate_contract</td><td><code>--spec-path [--rtl-file]</code></td><td>校验寄存器契约，捕获位域重叠（<code>E013</code>）与越界（<code>E014</code>）</td></tr>
+          <tr><td class="mono">emit_testbench</td><td><code>--out-dir [--spec-path] [--rtl-file] [--protocol]</code></td><td>生成 cocotb+SVA+Makefile（契约路径）或 7 类总线 SV TB（多协议路径）</td></tr>
+          <tr><td class="mono">lint_tb</td><td><code>--target-path</code></td><td>检查时钟边沿（<code>C1/C2</code>）、单边握手（<code>R2–R4</code>）与静默通过（<code>S1–S4</code>）</td></tr>
+          <tr><td class="mono">run_sim</td><td><code>--sim-script [--suite] [--waveform] [--require-waveform]</code></td><td><code>stdbuf</code> 全量日志落盘、套件身份核验、波形新鲜度校验</td></tr>
+          <tr><td class="mono">run_mutation</td><td><code>--workdir --mutation-spec --test-cmd</code></td><td>真实修改 RTL 测杀伤率；<code>try/finally</code> 逐字节恢复（兼容非 UTF-8）</td></tr>
+          <tr><td class="mono">normalize_sim_result</td><td><code>--module-name [--verilator-log-path] [--sva-log-path]</code></td><td>解析逐笔 <code>[CHECK]</code>、cocotb XML/JSON 与 SVA 心跳为统一报告</td></tr>
+          <tr><td class="mono">render_visual_report</td><td><code>--report --dep-graph --extracted-interfaces --out-html-path</code></td><td>生成离线 HTML+SVG，含字符串安全的 SV 语法高亮与分项目标签页</td></tr>
+          <tr><td class="mono">clean_pt_netlist</td><td><code>--in-verilog --out-verilog</code></td><td>清理 DC 网表中的 <code>RDBUS/CLKCROSS*</code> 黑盒（含转义标识符）并标量 tie-off</td></tr>
+          <tr><td class="mono">audit_harness</td><td><code>[--strict]</code></td><td>19 项故障注入自审计，验证全工具链护栏均处于激活状态</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 3: Concrete Usage Examples -->
+  <section class="sec rule-top">
+    <h2>3. 五大高频实战使用示例（可直接复制运行）</h2>
+    <div class="two-col">
+      <div>
+        <h3>示例 A · 提取六接口全向核心的端口、方向与位宽</h3>
+        <pre><code>python3 -m fpga_toolbox extract_interfaces \
+  --rtl-file examples/multi_bus_ref/omni_hub/soc_omni_bus_hub.sv</code></pre>
+
+        <h3>示例 B · 多协议自动生成 TB → Lint → Verilator 实跑（带波形）</h3>
+        <pre><code><span class="cm"># 自动生成显式端口连接 + 复位极性自适应的 SV 测试台</span>
 python3 -m fpga_toolbox emit_testbench \
   --rtl-file examples/multi_bus_ref/axi4_full_slave.sv \
   --out-dir /tmp/tb_axi4 \

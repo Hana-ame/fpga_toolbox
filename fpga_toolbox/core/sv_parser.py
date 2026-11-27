@@ -61,6 +61,21 @@ _SAFE_BINOPS = {
     ast.Mod: operator.mod,
     ast.LShift: operator.lshift,
     ast.RShift: operator.rshift,
+    ast.BitAnd: operator.and_,
+    ast.BitOr: operator.or_,
+    ast.BitXor: operator.xor,
+}
+
+# 比较运算：三元条件 `localparam DW = SEL ? 64 : 32` 里要用。
+# 真实 RTL 常用这种写法定义总线位宽，旧实现不支持 → 位宽表达式求值失败，
+# 端口位宽静默退化成 1（缺陷 181）。
+_SAFE_CMPOPS = {
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
 }
 
 
@@ -123,6 +138,18 @@ def eval_int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
         lambda m: str(_parse_sv_literal(m.group(0)) or 0),
         expr,
     )
+    # SystemVerilog 的三元条件 `cond ? a : b` 不是 Python 语法，直接交给
+    # ast.parse 会 SyntaxError。先翻译成 Python 的 `a if cond else b`。
+    # 只处理**单个**三元（嵌套三元极少出现在位宽表达式里，遇到就返回 None，
+    # 保持"未知"而不是猜）。
+    if expr.count("?") == 1 and expr.count(":") == 1:
+        _q = expr.index("?")
+        _c = expr.index(":", _q)
+        _cond = expr[:_q].strip()
+        _then = expr[_q + 1:_c].strip()
+        _else = expr[_c + 1:].strip()
+        expr = f"({_then}) if ({_cond}) else ({_else})"
+
     try:
         node = ast.parse(expr, mode="eval").body
     except SyntaxError:
@@ -133,10 +160,25 @@ def eval_int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
             return int(nd.value)
         if isinstance(nd, ast.Name) and nd.id in params:
             return params[nd.id]
-        if isinstance(nd, ast.UnaryOp) and isinstance(nd.op, ast.USub):
-            return -_ev(nd.operand)
+        if isinstance(nd, ast.UnaryOp):
+            if isinstance(nd.op, ast.USub):
+                return -_ev(nd.operand)
+            if isinstance(nd.op, ast.UAdd):
+                return _ev(nd.operand)
+            if isinstance(nd.op, ast.Invert):
+                return ~_ev(nd.operand)
+            if isinstance(nd.op, ast.Not):
+                return 0 if _ev(nd.operand) else 1
         if isinstance(nd, ast.BinOp) and type(nd.op) in _SAFE_BINOPS:
             return _SAFE_BINOPS[type(nd.op)](_ev(nd.left), _ev(nd.right))
+        # 三元条件（SV 与 Python 的 `?:` / `a if c else b` 语义一致）
+        if isinstance(nd, ast.IfExp):
+            return _ev(nd.body) if _ev(nd.test) else _ev(nd.orelse)
+        if isinstance(nd, ast.Compare) and len(nd.ops) == 1 \
+                and type(nd.ops[0]) in _SAFE_CMPOPS:
+            left = _ev(nd.left)
+            right = _ev(nd.comparators[0])
+            return 1 if _SAFE_CMPOPS[type(nd.ops[0])](left, right) else 0
         raise ValueError("unsupported")
 
     try:
@@ -205,6 +247,32 @@ class SVModuleParser:
         if cur:
             groups.append(cur)
         return groups
+
+    def _collect_body_localparams(
+        self, body: List[SVToken], params: Dict[str, int]
+    ) -> Dict[str, int]:
+        """从模块体 token 中收集 `localparam` / `parameter` 声明。
+
+        只处理语句级声明（跳过注释已被 tokenizer 去掉的情形），按出现顺序
+        迭代求解，使后一个 localparam 能引用前一个（`localparam DW = W*2;`）。
+        求值失败的项直接跳过（保持"未知"而不是猜一个值）。
+        """
+        out: Dict[str, int] = dict(params)
+        i = 0
+        n = len(body)
+        while i < n:
+            if body[i].value not in ("localparam", "parameter"):
+                i += 1
+                continue
+            j = i + 1
+            stmt: List[SVToken] = []
+            while j < n and body[j].value != ";":
+                stmt.append(body[j])
+                j += 1
+            if stmt:
+                out.update(self._parse_params(stmt, seed=out))
+            i = j + 1
+        return out
 
     def _parse_params(self, toks: List[SVToken], seed: Optional[Dict[str, int]] = None) -> Dict[str, int]:
         params: Dict[str, int] = dict(seed) if seed else {}
@@ -295,11 +363,51 @@ class SVModuleParser:
 
     def _parse_ansi(self, toks: List[SVToken], params: Dict[str, int]) -> List[SVPortAST]:
         ports, cur_dir, cur_wexpr, cur_w = [], "input", "1", 1
-        for item in self._split_top(toks):
+        # 端口列表内部允许出现 `localparam` / `parameter` 声明（真实 RTL 常见）。
+        # 它们以 `;` 结束、**不是**逗号分隔的端口项，直接用 `_split_top`（按逗号
+        # 切）会把后面的端口吸附进同一条目，导致该端口被整条丢掉 —— 实测
+        #   ( input logic clk, localparam W = 8; localparam DW = W*2;
+        #     input logic [DW-1:0] data_i, output logic [W-1:0] data_o )
+        # 会丢失 data_i。这里先按 `;` 把参数声明段整段切出来单独求值，只把
+        # 剩下的端口部分交给 `_split_top`。
+        port_toks: List[SVToken] = []
+        idx = 0
+        n_toks = len(toks)
+        while idx < n_toks:
+            if toks[idx].value in ("localparam", "parameter"):
+                j = idx + 1
+                stmt: List[SVToken] = []
+                while j < n_toks and toks[j].value != ";":
+                    stmt.append(toks[j])
+                    j += 1
+                if stmt:
+                    params.update(self._parse_params(stmt, seed=params))
+                idx = j + 1
+                continue
+            port_toks.append(toks[idx])
+            idx += 1
+        for item in self._split_top(port_toks):
             iface_port = self._try_parse_interface_port(item)
             if iface_port is not None:
                 ports.append(iface_port)
                 continue
+            # --- 定位端口名与类型前缀 ---
+            #
+            # 一个 ANSI 端口项的形态是：
+            #   [方向] [类型] [packed 维度] 名字 [= 默认值]
+            # 其中「类型」可以是内建（logic/int...）、用户自定义 typedef 名
+            # （dbg_e）、package 限定类型（my_pkg::cfg_t）、interface 类型等。
+            #
+            # 纯文本解析**无法**得知用户自定义类型的位宽。旧实现在遇到非内建
+            # 类型标识符时 `break`，cur_w 保持默认 1 —— 一个 3 位 enum 端口被
+            # 静默报成 1 位：下游 TB 按 1 位连线触发 WIDTHTRUNC（Verilator
+            # 默认 warning-as-error → 构建失败），而 Defect 138/139 的防护
+            # 只在 width==0 时生效，谎报成 1 就直接绕过。slang 后端对同一
+            # 端口给 0，两个后端行为还不一致。
+            #
+            # 正确做法：先把「名字」的位置定出来（= 最后一个不属于类型/维度
+            # 的 IDENT，且其后不再有类型成分），再解析它前面的前缀。类型是
+            # 用户自定义时位宽记为 0（= 未解析），与 slang 后端保持一致。
             idx = 0
             explicit_range = False
             while idx < len(item):
@@ -415,16 +523,34 @@ class SVModuleParser:
                     pass
             if self._match("#") and self._peek() and self._peek().value == "(":
                 params = self._parse_params(self._read_balanced("(", ")"))
+            # **先扫描模块体的 localparam**：ANSI 端口里的 `logic [DW-1:0]`
+            # 常用端口列表**之后**声明的 localparam 定义（`localparam DW = 16;`
+            # 在模块体里）。旧实现等端口解析完才看模块体，参数表为空 → 位宽
+            # 表达式求值失败 → 端口位宽退化成 1、甚至整条端口丢失（缺陷 181
+            # 的第二面）。这里在解析端口前先把体扫一遍拿到 localparam。
+            _body_scan: List[SVToken] = []
+            _scan_i = self.i
+            while _scan_i < self.n and self.tokens[_scan_i].value != "endmodule":
+                _body_scan.append(self.tokens[_scan_i])
+                _scan_i += 1
+            if _body_scan:
+                _body_params = self._collect_body_localparams(_body_scan, params)
+                if _body_params != params:
+                    params = dict(_body_params)
             ports: List[SVPortAST] = []
+            self._last_ansi_toks = None
+            self._last_nonansi_names = None
             if self._peek() and self._peek().value == "(":
                 ptoks = self._read_balanced("(", ")")
                 self._match(";")
                 has_dir = any(t.value in self._DIRS for t in ptoks)
                 has_iface = any(self._try_parse_interface_port(g) is not None for g in self._split_top(ptoks))
                 if has_dir or has_iface:
+                    self._last_ansi_toks = ptoks
                     ports = self._parse_ansi(ptoks, params)
                 else:
                     names = [g[0].value for g in self._split_top(ptoks) if g and g[0].kind == "IDENT"]
+                    self._last_nonansi_names = names
                     ports = self._parse_non_ansi(names, params)
             else:
                 self._match(";")

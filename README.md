@@ -13,7 +13,7 @@
 | 1 | `index_repo` | 解析 RTL 仓库模块、例化关系与头文件索引 |
 | 2 | `resolve_deps` | BFS 计算目标模块传递依赖闭包与 DAG 边 |
 | 3 | `copy_sandbox` | 带防误删保护与 SHA-256 校验的沙箱隔离复制 |
-| 4 | `extract_interfaces` | 抽取 AXI4-Lite / AXI4-Full / AXI4-Stream / APB / AHB-Lite / DDR3 / DDR4 / DDR5 / HBM / PCIe / SPI / Ethernet / SV `interface` 与时钟复位（支持可选 `slang` AST） |
+| 4 | `extract_interfaces` | 抽取 AXI4-Lite / AXI4-Full / AXI4-Stream / APB / AHB-Lite / DDR3 / DDR4 / DDR5 / HBM / PCIe / SPI / Ethernet / SV `interface` 与时钟复位（支持可选 `slang` AST）。命名风格由「标准接口 + 绑定层」统一处理（`i_psel` / `psel_i` / `p_sel` / `s0_psel` / `mem_ddr3_dq_out` 均可绑定），双向信号拆分见 `split_port_map` |
 | 5 | `validate_contract` | 校验 YAML/JSON 边界契约与 `apb-regfile-spec/v2` 位域规则（E000–E015，E015 为位域 bits 顺序反了 hi<lo 的专门提示） |
 | 6 | `emit_testbench` | 契约路径：生成 SV wrapper / SVA / bind 与含写回读、反压压测的 cocotb 测试平台；`protocol=` 路径：直接从 RTL 生成自检 SV testbench + Verilator 运行脚本，支持 `apb`/`axi4`/`ahb_lite`/`ddr3`/`ddr4`/`hbm`/`pcie`（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件） |
 | 7 | `normalize_sim_result` | 归一化 cocotb XML/JSON、SVA 日志与 Verilator 多套件日志（含逐套件身份核对） |

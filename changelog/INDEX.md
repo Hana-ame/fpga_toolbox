@@ -173,13 +173,4 @@
 - [108 · 非标准前缀与双向 dq 的绑定/接线](108-prefix-binding-and-bidirectional-dq.md)
 - [109 · 绑定顺序派生、DDR5 声明、新架构文档](109-bind-order-derivation-and-docs.md)
 - [110 · draft 只导出 AXI/APB 且非 AXI 契约无法校验](110-draft-exports-all-protocols.md)
-- [111 · 验收评审：无 EDA 环境下的解析缺陷、测试强依赖与 CI 漏跑](111-acceptance-review.md)
-- [112 · 修复内置 SV 解析器把自定义 typedef 端口误判为 1-bit](112-builtin-typedef-port-width.md)
-- [113 · 消除 test_full_coverage.py 在纯 Python 环境下对 slang/verilator 的硬依赖](113-eda-free-full-coverage-tests.md)
-- [114 · CI 接入全覆盖回归套件与六层不变量门禁](114-ci-full-coverage-and-invariants.md)
-- [115 · 同步 USER_MANUAL.html 派生校验并补全 ddr5 协议文档](115-docs-sync-user-manual-and-ddr5.md)
-- [116 · 零 EDA 环境下达成 100% 函数覆盖率（169/169，六层不变量全通过）](116-zero-eda-100pct-function-coverage.md)
-- [117 · CLI 补全 --version / -V 标准版本查询参数](117-cli-version-flag.md)
-- [118 · 修正 FEATURES.html 副标题中过期诊断码计数（37 → 47）](118-features-deck-diag-count.md)
-
-> **变更记录约定**：后续任何代码、测试、CI 或文档改动，均在 `changelog/` 下新开独立编号 `.md` 文件（含「现象 / 根因 / 修复 / 验证」）并追加到本索引。
+- [111 · builtin 解析器 P0（typedef 位宽/局部参数）与 CI 门禁缺口](111-builtin-parser-typedef-and-localparam.md)

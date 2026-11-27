@@ -62,7 +62,7 @@ def _check_layer1_bijection() -> Tuple[bool, str]:
 
 
 def _check_layer2_adversarial_invariants() -> Tuple[bool, str]:
-    """Run 13-check fault-injection audit_harness + 5 mathematical anti-false-pass probes."""
+    """Run the 19-check fault-injection audit_harness + 5 mathematical anti-false-pass probes."""
     ah = tool_audit_harness(str(ROOT))
     if not ah["ok"]:
         return False, f"audit_harness failed: {ah.get('error')}"

@@ -560,7 +560,13 @@ def main(argv: list[str]) -> int:
             print(f"  [ok] {meta['out']}: 已生成 ({kb:.1f} KB)")
 
     # 质量自检对两种模式都跑：--check 时检查的是已提交产物
-    for meta in DOCS.values():
+    #
+    # USER_MANUAL.html 是**手工维护**的独立文档（含内嵌 SVG 图，不由 markdown
+    # 派生），所以它不在 DOCS 里、也不会走「重新生成后比对」。但它同样会随
+    # 代码演进滞后（实测仍写 audit_harness「13 项」，而代码已 19 项），且没人
+    # 校验它的死链/锚点。这里把它纳入结构自检（只查结构，不查 md 同步）。
+    _extra_standalone = ("USER_MANUAL.html",)
+    for meta in list(DOCS.values()) + [{"out": _n} for _n in _extra_standalone]:
         out_path = HERE / meta["out"]
         if not out_path.exists():
             continue
