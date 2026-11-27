@@ -398,17 +398,24 @@ def test_install_git_hook_uses_git_toplevel() -> None:
     REPO_ROOT 指向错误位置，误报 "Not a git repository" —— 即使 cwd 在真实仓库里。
     修复后用 git rev-parse --show-toplevel 基于【当前工作目录】定位。
     """
+    import shutil
     import subprocess
 
     root = Path(__file__).resolve().parents[1]
     script = root / "scripts" / "install_git_hook.sh"
     assert script.is_file(), str(script)
 
-    # 语法检查
-    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0, "bash -n failed"
     # 必须用 git rev-parse 定位仓库根（而非仅依赖脚本自身位置）
     body = script.read_text(encoding="utf-8")
     assert "git rev-parse --show-toplevel" in body, "should locate repo via git rev-parse"
+
+    # Windows runner 的 PATH 上没有 bash（git-bash 不在 PATH），无法执行 shell 语法检查与端到端
+    if shutil.which("bash") is None:
+        print("coverage: install_git_hook.sh 静态断言通过；无 bash，跳过 bash -n 与端到端")
+        return
+
+    # 语法检查
+    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0, "bash -n failed"
 
     # 端到端：在临时 git 仓库的【子目录】运行，应成功装上 hook
     with tempfile.TemporaryDirectory() as td:
@@ -4736,6 +4743,7 @@ def test_zero_eda_helper_and_slang_json_pipeline() -> None:
     print("coverage: zero-EDA pure-Python helpers (parse_verilator_version, collectors, slang JSON)")
     import json as _json
     from unittest import mock
+
     from fpga_toolbox.eda_env import parse_verilator_version
     from fpga_toolbox.sim_runner import _collect_waveforms, _collect_logs
     from fpga_toolbox.core import sv_parser
@@ -4836,8 +4844,9 @@ def test_zero_eda_helper_and_slang_json_pipeline() -> None:
 def test_cli_version_flag() -> None:
     """117: CLI 支持 --version / -V 输出当前版本号。"""
     print("coverage: cli --version / -V flag")
-    import io as _io
     import contextlib as _cl
+    import io as _io
+
     from fpga_toolbox import __version__
     from fpga_toolbox.cli import main as cli_main
 
