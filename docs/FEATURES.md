@@ -682,6 +682,7 @@ python3 -m fpga_toolbox audit_harness
 | `W055` | `lint_tb` | 目录模式下没有匹配到任何候选文件（`tb_` 前缀 / `vip` / `driver`），"没检查"≠"检查通过" |
 | `W056` | `emit_testbench` | DUT 还有其它总线接口未被该 TB 驱动/检查，其端口保持悬空 |
 | `W057` | `emit_testbench` | 同一 RTL 文件里还有别的模块带相同协议接口，但 TB 只针对选中的那个 |
+| `W058` | `index_repo` | 同一 module 在多个文件中定义（旧版本/备份残留），一起编译会 `Duplicate declaration` |
 | `W101` | `copy_sandbox` | 被 include 的文件未进沙箱 |
 | `W102` | `index_repo` | 例化了仓库内无定义的模块 |
 

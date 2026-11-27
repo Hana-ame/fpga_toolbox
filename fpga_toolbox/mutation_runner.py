@@ -302,6 +302,21 @@ def tool_run_mutation(
     evaluated = total - errors - skipped
     survived = evaluated - killed
     score = round((killed / evaluated) * 100.0, 2) if evaluated else 0.0
+    # 会计不变式自检：这两条必须恒成立，否则报告里的数字会互相矛盾而无人发现。
+    #   killed + survived == evaluated        （每个被评估的变异非杀即活）
+    #   evaluated + errors + skipped == total （每个变异归入且仅归入一类）
+    # 计算式天然满足，但这里是**防御性断言**：将来若有人改计数逻辑（比如新增
+    # 一种 status 却忘了加进分类），能立即发现而不是产出自相矛盾的分数。
+    if killed + survived != evaluated or evaluated + errors + skipped != total:
+        return err_result(
+            "run_mutation",
+            f"Internal accounting inconsistency: total={total} evaluated={evaluated} "
+            f"killed={killed} survived={survived} errors={errors} skipped={skipped}. "
+            "The mutation score would be meaningless.",
+            data={"total": total, "evaluated": evaluated, "killed": killed,
+                  "survived": survived, "errors": errors, "skipped": skipped,
+                  "results": results},
+        )
     data = {
         "workdir": str(wd.resolve()),
         "total": total,

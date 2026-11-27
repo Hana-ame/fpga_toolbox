@@ -179,3 +179,4 @@
 - [114 · coverage/mutation summary 的非法字段原样透传](114-summary-payload-type-check.md)
 - [115 · 无预期套件时不核对；STARTED 漏成没失败](115-suite-verification-without-expectations.md)
 - [116 · log_files 出现重复条目](116-log-files-dedupe.md)
+- [117 · mutation 会计缺断言；重复定义 module 静默取第一个](117-dup-module-and-mutation-accounting.md)

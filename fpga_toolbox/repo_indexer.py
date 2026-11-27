@@ -239,7 +239,44 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         }
         if unknown:
             unresolved[m.name] = unknown
+    # ---- 重复定义检测 (W058) ----
+    # 同一个 module 被**多个文件**各自定义时，索引按文件顺序取第一个当作归属，
+    # 其余定义静默消失。但 resolve_deps 会把两个文件都放进 rtl_files，一起交给
+    # 编译器就是 `Duplicate declaration of module`（Verilator 默认
+    # warning-as-error → 构建失败）。真实成因很常见：目录里残留旧版本文件、
+    # `_bak`/`_old` 备份、或从别处拷来的同名模块。
+    # 注意排除「include 展开」造成的假重名：被 include 的源文件里的模块会同时
+    # 出现在自己文件和 includer 的解析结果里，但 owner 归属只认真正声明处，
+    # 这里用「文件是否真的在原文里声明了该 module」过滤。
+    dup_defs: Dict[str, List[str]] = {}
+    for mname in modules:
+        defs: List[str] = []
+        for fp in rtl_files:
+            src_txt = sources[fp]
+            if not re.search(rf"\bmodule\s+{re.escape(mname)}\b", src_txt):
+                continue
+            rel = fp.relative_to(root).as_posix()
+            # 被 include 的文件不是独立编译单元（缺陷 133），不算重复定义
+            if rel in included_files:
+                continue
+            defs.append(rel)
+        if len(defs) > 1:
+            dup_defs[mname] = sorted(defs)
+
     diags = [
+        {
+            "severity": "WARNING",
+            "code": "W058",
+            "path": mname,
+            "message": (
+                f"Module '{mname}' is defined in {len(files)} files ({', '.join(files)}). "
+                "The index uses the first one, but compiling them together fails with "
+                "'Duplicate declaration of module'. Remove the stale/backup copy."
+            ),
+        }
+        for mname, files in sorted(dup_defs.items())
+    ]
+    diags += [
         {
             "severity": "WARNING",
             "code": "W102",

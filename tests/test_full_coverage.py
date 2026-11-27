@@ -5254,6 +5254,111 @@ def test_log_files_are_deduplicated() -> None:
         assert any("apb_dedup" in os.path.basename(p) for p in paths), paths
 
 
+def test_mutation_accounting_is_self_consistent() -> None:
+    """缺陷 194: mutation 报告的数字必须自洽。
+
+    `run_mutation` 的计数语义是：
+        total     = 变异总数
+        evaluated = total - errors - skipped   （真正测得结果的）
+        killed    = 测试台杀掉的
+        survived  = evaluated - killed          （没杀掉的）
+
+    两条不变式必须恒成立：
+        killed + survived == evaluated          （每个被评估的变异非杀即活）
+        evaluated + errors + skipped == total   （每个变异归入且仅归入一类）
+
+    计算式天然满足，但历史上出现过 `survived = total - killed`（把 ERROR 也算成
+    存活）导致分数被污染的问题。这里既验证不变式，也验证代码里真的加了防御性
+    断言（而不是只靠"当前实现碰巧对"）。
+    """
+    print("coverage: mutation accounting is self consistent")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "d.sv").write_text(
+            "module d (input logic a, output logic b);\n  assign b = a & 1'b1;\n"
+            "endmodule\n", encoding="utf-8")
+        (root / "spec.json").write_text(json.dumps({"mutations": [
+            {"id": "m1", "file": "d.sv", "old": "a & 1'b1", "new": "a | 1'b1"},
+            {"id": "m2", "file": "d.sv", "old": "module d", "new": "module d /*X*/"},
+            {"id": "m3", "file": "nope.sv", "old": "x", "new": "y"},   # ERROR
+            {"id": "m4", "file": "d.sv", "old": "no-such-text", "new": "z"},  # SKIP
+        ]}), encoding="utf-8")
+
+        r = call_tool("run_mutation", {
+            "workdir": str(root), "mutation_spec": str(root / "spec.json"),
+            "test_cmd": ["true"], "min_score": 0})
+        d = r["data"]
+        # 不变式 1：被评估的变异非杀即活
+        assert d["killed"] + d["survived"] == d["evaluated"], d
+        # 不变式 2：每个变异归入且仅归入一类
+        assert (d["evaluated"] + d["errors"] + d["skipped"] == d["total"]), d
+        # results 里的状态计数必须与汇总字段一致
+        st = [x["status"] for x in (d.get("results") or [])]
+        assert sum(1 for x in st if x.startswith("KILLED")) == d["killed"], (st, d)
+        assert st.count("SURVIVED") == d["survived"], (st, d)
+        assert st.count("ERROR") == d["errors"], (st, d)
+        assert st.count("SKIP_UNMATCHED") == d["skipped"], (st, d)
+        # 分数定义：killed / evaluated（分母为 0 时 0.0）
+        exp = round((d["killed"] / d["evaluated"]) * 100.0, 2) if d["evaluated"] else 0.0
+        assert d["mutation_score"] == exp, (d["mutation_score"], exp)
+
+
+def test_duplicate_module_definitions_are_reported() -> None:
+    """缺陷 195: 同一 module 在多个文件定义时静默取第一个，零诊断。
+
+    真实成因很常见：目录里残留旧版本文件、`_bak`/`_old` 备份、从别处拷来的
+    同名模块。索引按文件顺序取第一个当归属，另一个定义静默消失；但
+    `resolve_deps` 会把**两个文件都**放进 `rtl_files`，一起交给编译器就是
+
+        %Warning-MODDUP: Duplicate declaration of module: 'x'
+        %Error: Exiting due to 1 warning(s)     （Verilator 默认 warning-as-error）
+
+    修复：`index_repo` 检出重复定义并报 W058，列出所有文件。
+
+    同时要排除「`include 展开」造成的假重名：被 include 的源文件里的模块会同时
+    出现在自己文件和 includer 的解析结果里，但那不是重复定义。
+    """
+    print("coverage: duplicate module definitions are reported")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "a.sv").write_text(
+            "module dupmod(input logic clk, output logic q);\n  assign q = 1'b1;\n"
+            "endmodule\n", encoding="utf-8")
+        (root / "b.sv").write_text(
+            "module dupmod(input logic clk, output logic q);\n  assign q = 1'b0;\n"
+            "endmodule\n"
+            "module user(input logic clk, output logic q);\n"
+            "  dupmod u(.clk(clk), .q(q));\nendmodule\n", encoding="utf-8")
+
+        r = call_tool("index_repo", {"project_root": str(root)})
+        assert r["ok"], str(r.get("error"))[:200]
+        w058 = [d for d in (r.get("diagnostics") or []) if d["code"] == "W058"]
+        assert len(w058) == 1, r.get("diagnostics")
+        assert w058[0]["path"] == "dupmod", w058[0]
+        # 两个文件都要被点名
+        msg = w058[0]["message"]
+        assert "a.sv" in msg and "b.sv" in msg, msg
+
+        # include 展开的假重名不得误报
+        inc_root = root / "_inc"
+        inc_root.mkdir()
+        (inc_root / "real.sv").write_text(
+            "module helper_mod(input logic a, output logic b);\n  assign b = a;\n"
+            "endmodule\n", encoding="utf-8")
+        (inc_root / "top.sv").write_text(
+            '`include "real.sv"\n'
+            "module top_wrap(input logic clk, output logic q);\n"
+            "  helper_mod u(.a(clk), .b(q));\nendmodule\n", encoding="utf-8")
+        r2 = call_tool("index_repo", {"project_root": str(inc_root)})
+        assert r2["ok"], str(r2.get("error"))[:200]
+        assert not [d for d in (r2.get("diagnostics") or []) if d["code"] == "W058"], \
+            r2.get("diagnostics")
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5355,6 +5460,8 @@ def main() -> int:
     test_summary_payloads_are_type_checked()
     test_suite_verification_works_without_expected_list()
     test_log_files_are_deduplicated()
+    test_mutation_accounting_is_self_consistent()
+    test_duplicate_module_definitions_are_reported()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
