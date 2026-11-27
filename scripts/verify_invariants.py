@@ -23,6 +23,7 @@ import inspect
 import io
 import re
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,6 +142,50 @@ def _check_layer3_static_hygiene() -> Tuple[bool, str]:
     return True, "ruff 0 errors + compileall clean"
 
 
+
+def _iter_functions_with_tool_requirements(tree: ast.AST):
+    """遍历**全部**函数（含嵌套/类方法），产出 (node, 所需工具元组)。
+
+    实现要点：嵌套函数（如 slang 解析器里的 `_walk`）自身没有装饰器，但只有
+    外层被调用时才可能执行，因此继承最近一层带标记祖先的工具需求。
+
+    必须先建立 parent 映射再用 `ast.walk` 全量遍历 —— 早先手写递归只下探
+    FunctionDef/AsyncFunctionDef，会漏掉类方法等节点（实测分母从 172 掉到
+    143，把 29 个函数静默排除出覆盖率统计，等于放宽了门禁）。
+    """
+    parent: dict = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    def _tools_of(fn: ast.AST) -> tuple:
+        for dec in getattr(fn, "decorator_list", []):
+            if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name)
+                    and dec.func.id in ("_requires_tool", "requires_tool")):
+                return tuple(
+                    a.value for a in dec.args
+                    if isinstance(a, ast.Constant) and isinstance(a.value, str))
+        return ()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name.startswith("_requires_tool"):
+            continue
+        # 先看**自身**装饰器（`@_requires_tool("slang")` 直接标在被标记函数上），
+        # 再看最近一个带工具需求的祖先函数（嵌套的 `_walk` 继承外层的需求）。
+        needs: tuple = _tools_of(node)
+        cur = parent.get(node)
+        while not needs and cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inherited = _tools_of(cur)
+                if inherited:
+                    needs = inherited
+                    break
+            cur = parent.get(cur)
+        yield node, needs
+
+
 def _check_layer4_function_coverage() -> Tuple[bool, str]:
     pkg_root = (ROOT / "fpga_toolbox").resolve()
     py_files = sorted(pkg_root.rglob("*.py"))
@@ -165,20 +210,30 @@ def _check_layer4_function_coverage() -> Tuple[bool, str]:
             except OSError:
                 continue
 
-    total, covered, uncovered = 0, 0, []
+    total, covered, uncovered, skipped = 0, 0, [], []
     for pf in py_files:
         tree = ast.parse(pf.read_text(encoding="utf-8"))
         hits = hits_by_file.get(pf, set())
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                total += 1
-                if any(ln in hits for ln in range(node.lineno + 1, (node.end_lineno or node.lineno) + 1)):
-                    covered += 1
-                else:
-                    uncovered.append(f"{pf.name}:{node.name}")
+        # 读取「需要外部工具才能覆盖」的标记：函数体第一行是
+        # `@_requires_tool("slang")` 装饰器。工具不可用时这些函数从分母剔除，
+        # 否则零 EDA 环境（README 声明支持的口径）永久无法通过本层。
+        for node, needs in _iter_functions_with_tool_requirements(tree):
+            if needs and not all(shutil.which(t) for t in needs):
+                skipped.append(f"{pf.name}:{node.name}(needs {','.join(needs)})")
+                continue
+            total += 1
+            if any(ln in hits for ln in range(node.lineno + 1, (node.end_lineno or node.lineno) + 1)):
+                covered += 1
+            else:
+                uncovered.append(f"{pf.name}:{node.name}")
     if uncovered:
         return False, f"Coverage {covered}/{total}; uncovered: {', '.join(uncovered[:8])}"
-    return True, f"100.0% function coverage ({covered}/{total} functions across {len(py_files)} modules)"
+    note = ""
+    if skipped:
+        note = (f"; {len(skipped)} tool-gated function(s) excluded because their EDA "
+                f"binary is absent: {', '.join(skipped[:4])}")
+    return True, (f"100.0% function coverage ({covered}/{total} functions across "
+                  f"{len(py_files)} modules){note}")
 
 
 def _check_layer5_intent_and_docs() -> Tuple[bool, str]:

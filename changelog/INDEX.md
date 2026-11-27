@@ -2,9 +2,9 @@
 
 按迭代阶段拆分为独立变更记录，避免单文件臃肿：
 
-- `01-v0.5.0-fusion.md`：双仓融合基线（12 原子工具、参考靶场、协议编辑器与对比报告）
-- `02-independent-audit-and-third-party.md`：外部独立审计、第二轮实机验证与第三方仓库实测修复
-- `03-dual-side-bridge-support.md`：`emit_testbench` 双侧桥 APB 从机模型重构、零 `WIDTHEXPAND` 与 `cocotb + Verilator` 端到端通过
+- [01 · v0.5.0 双仓融合基线](01-v0.5.0-fusion.md) — 12 原子工具、参考靶场、协议编辑器与对比报告
+- [02 · 独立审计与第三方真实仓库验证](02-independent-audit-and-third-party.md) — 外部独立审计、第二轮实机验证与第三方仓库实测修复
+- [03 · 双侧 AXI4-Lite + APB 桥支持与零 WIDTHEXPAND 重构](03-dual-side-bridge-support.md) — `emit_testbench` 双侧桥 APB 从机模型重构、`cocotb + Verilator` 端到端通过
 - [04-multi-bus-hbm-pcie-ddr-ahb.md](04-multi-bus-hbm-pcie-ddr-ahb.md) — Native AHB-Lite / DDR3 / DDR4 / HBM / PCIe Gen3·4·5 (×1/×4/×16) classifiers, simulatable SV benchmark, and 7-stage live Verilator + mutation verification
 - [05-multi-protocol-emitter-and-pcie-3x3.md](05-multi-protocol-emitter-and-pcie-3x3.md) — Multi-protocol `emit_testbench` (APB/AXI4/AHB/DDR3/DDR4/HBM/PCIe 3×3), native `[CHECK]` parsing, and per-project tabbed interface report pages
 - [06-complex-dual-if-repack-ooo-loopback.md](06-complex-dual-if-repack-ooo-loopback.md) — Dual-interface translation (AXI4-64↔APB32), AXI4 OoO/same-ID fabric, PCIe 3DW/4DW/Split-CplD loopback, 256B golden scoreboards, and 3/3 middle-logic mutation kills
@@ -183,3 +183,17 @@
 - [118 · copy_sandbox 失败时留下半成品沙箱（原子性）](118-copy-sandbox-atomicity.md)
 - [119 · 按领域拆分 test_full_coverage.py（5530 行 → 7 个套件）](119-split-coverage-suite-by-domain.md)
 - [120 · 新增 axi4_stream 原生自检 TB 模板（7 → 8 协议）](120-axi4-stream-tb-template.md)
+- [121 · 验收评审（181–184）：无 EDA 环境下的解析缺陷、测试强依赖与 CI 漏跑](121-acceptance-review.md)
+- [122 · 修复内置 SV 解析器把自定义 typedef 端口误判为 1-bit（181）](122-builtin-typedef-port-width.md)
+- [123 · 消除 test_full_coverage.py 对 slang/verilator 的硬依赖（182）](123-eda-free-full-coverage-tests.md)
+- [124 · CI 接入全覆盖回归套件与六层不变量门禁（183）](124-ci-full-coverage-and-invariants.md)
+- [125 · 同步 USER_MANUAL.html 派生校验并补全 ddr5 协议文档（184）](125-docs-sync-user-manual-and-ddr5.md)
+- [126 · 零 EDA 环境下达成 100% 函数覆盖率](126-zero-eda-100pct-function-coverage.md)
+- [127 · CLI 补全 --version / -V 标准版本查询参数](127-cli-version-flag.md)
+- [128 · 修正 FEATURES.html 副标题中过期诊断码计数](128-features-deck-diag-count.md)
+
+> 注：`10-` 编号有两个文件（`10-pure-apb-draft.md` 与
+> `10-synopsys-vcs-dc-pt-campaign-integration.md`），属早期历史遗留。为保持
+> 已发布文档的外部链接兼容，**不重排**；从 111 起编号已唯一，后续新增必须
+> 递增且不得复用。
+- [129 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点](129-zero-eda-gate-and-ci-degraded-job.md)

@@ -1296,16 +1296,43 @@ def test_axi4_stream_template_runs_and_catches_stuck_ready() -> None:
     """
     print("coverage: axi4_stream template runs & catches stuck TREADY")
     import shutil as _shutil
-    from pathlib import Path as _P
 
-    vlt = _shutil.which("verilator") or "/usr/local/bin/verilator"
-    if not _shutil.which("verilator"):
-        for cand in (_P.home() / ".local/verilator/bin/verilator",):
-            if cand.is_file():
-                vlt = str(cand)
-                break
-    if not _P(vlt).is_file():
-        print("  (skipped: verilator not installed)")
+    # 可用性探测必须与**实际调用口径**一致：runner 脚本内部直接调用
+    # `verilator`（走 PATH），所以这里也只能认 PATH。
+    # 旧写法额外回退到 ~/.local/verilator/bin/verilator 这个**绝对路径**,
+    # 于是「探测说可用」但「runner 在 PATH 里找不到」——在人为隔离 PATH 的
+    # 零 EDA 环境（CI 容器、评审沙箱）里，测试不去 skip 反而 hard-fail。
+    # 这正是 review 182 要求的「无 Verilator 时跳过」没生效的原因。
+    # 先做**纯 Python** 结构断言：模板生成、模块名、errs 位宽、方向表都
+    # 不需要 Verilator。旧写法把这几项和真实仿真绑在同一个函数里、并在
+    # 「无 verilator」时整体 return，于是零 EDA 环境下 _emit_axi4_stream_tb
+    # 一次都没被调用 —— Layer 4 覆盖率门禁把它记成未覆盖函数而失败，
+    # 尽管它根本不依赖任何 EDA 工具（评审 182 背后的真实原因）。
+    with tempfile.TemporaryDirectory() as _td0:
+        _dut0 = Path(_td0) / "axs0.sv"
+        _dut0.write_text("""`timescale 1ns/1ps
+module axs0 (
+  input  logic          aclk,
+  input  logic          aresetn,
+  input  logic [31:0]   s_axis_tdata,
+  input  logic          s_axis_tvalid,
+  output logic          s_axis_tready
+);
+  assign s_axis_tready = 1'b1;
+endmodule
+""", encoding="utf-8")
+        _r0 = call_tool("emit_testbench", {
+            "rtl_file": str(_dut0), "out_dir": str(Path(_td0) / "o0"),
+            "protocol": "axi4_stream"})
+        assert _r0["ok"], str(_r0.get("error"))[:300]
+        _txt0 = Path(_r0["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+        assert "module tb_axs0_axi4_stream;" in _txt0, _txt0[:300]
+        assert "int            errs = 0;" in _txt0, "errs must be int, not logic"
+        assert Path(_r0["data"]["artifacts"]["sim_script"]).is_file()
+
+    vlt = _shutil.which("verilator")
+    if not vlt:
+        print("  (structure verified; skipped real Verilator run: not installed)")
         return
 
     good = """`timescale 1ns/1ps

@@ -1,4 +1,4 @@
-# 112 · 修复内置 SV 解析器把自定义 `typedef` 端口误判为 1-bit（181）
+# 122 · 修复内置 SV 解析器把自定义 `typedef` 端口误判为 1-bit（181）
 
 > 对应验收项：`changelog/111-acceptance-review.md` #181（P1）
 

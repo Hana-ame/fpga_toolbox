@@ -1,4 +1,4 @@
-# 115 · 同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）
+# 125 · 同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）
 
 > 对应验收项：`changelog/111-acceptance-review.md` #184（P2）
 

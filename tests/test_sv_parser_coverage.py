@@ -601,6 +601,69 @@ def test_parser_backends_agree_on_widths() -> None:
                         if b.get(k) != sl.get(k)]
                 assert not diff, (tag, diff)
 
+def test_cross_backend_enrichment_runs_without_slang() -> None:
+    """`_enrich_from_builtin` 不需要 slang 二进制，必须能独立覆盖。
+
+    它只在 slang 后端路径里被调用，所以此前只有装了 slang 的机器能覆盖到。
+    但它本身只依赖 builtin 解析器 + 传入的 slang 模块列表 —— 传空列表或
+    「slang 解析不出位宽」的假模块都能完整走完，零 EDA 环境也应覆盖。
+
+    语义：用 builtin 结果补齐 slang 缺失的 interface_type/modport 与位宽；
+    slang 侧已有值时不得覆盖；builtin 自己也是 0（typedef/未知类型）时不得
+    拿 0 去覆盖（否则「未知位宽」的保守语义会被污染成 0）。
+    """
+    print("coverage: cross-backend enrichment runs without slang")
+    from fpga_toolbox.core.sv_parser import (
+        SVModuleAST,
+        SVPortAST,
+        _enrich_from_builtin,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "t.sv"
+        f.write_text(
+            "module t (\n"
+            "  input  logic        clk,\n"
+            "  input  logic [7:0]  data_i,\n"
+            "  input  pkg_if.mp    bus_i\n"
+            ");\n"
+            "endmodule\n", encoding="utf-8")
+
+        # 1) 空列表：走完即返回，不抛异常
+        _enrich_from_builtin(f, [])
+        # 2) 文件不存在：内部异常被吞掉，不向上抛
+        _enrich_from_builtin(Path(td) / "nope.sv", [])
+
+        # 3) slang 给出 width<=0（`<error>`）的普通端口 → 用 builtin 位宽补齐
+        mod = SVModuleAST(
+            name="t", file_path=str(f), parameters={}, ports=(
+                SVPortAST(name="clk", direction="input", width_expr="<error>",
+                          width=0, line=1),
+                SVPortAST(name="data_i", direction="input", width_expr="<error>",
+                          width=0, line=2),
+            ))
+        # 注意：_enrich_from_builtin 用 `slang_mods[:] = enriched` 原地替换
+        # 列表**元素**（frozen dataclass 不能就地改），所以必须从列表重新取，
+        # 原来的 `mod` 引用仍是旧对象。
+        mods = [mod]
+        _enrich_from_builtin(f, mods)
+        by_name = {p.name: p for p in mods[0].ports}
+        # clk 是标量，builtin 只收 width>0 的普通端口 → 这里 1>0，应被补齐为 1
+        assert by_name["data_i"].width == 8, by_name["data_i"]
+        assert by_name["data_i"].width_expr == "[7:0]", by_name["data_i"].width_expr
+
+        # 4) slang 已有正确位宽时不得被覆盖
+        mod2 = SVModuleAST(
+            name="t", file_path=str(f), parameters={}, ports=(
+                SVPortAST(name="data_i", direction="input", width_expr="[15:0]",
+                          width=16, line=1),
+            ))
+        mods2 = [mod2]
+        _enrich_from_builtin(f, mods2)
+        assert mods2[0].ports[0].width == 16, mods2[0].ports[0]
+        assert mods2[0].ports[0].width_expr == "[15:0]", mods2[0].ports[0].width_expr
+
+
 def test_unpacked_array_ports_use_packed_width_only() -> None:
     r"""缺陷 186: slang 后端把 unpacked 维度也算进端口位宽。
 
@@ -818,6 +881,7 @@ def main() -> int:
     test_localparam_ternary_and_body_declared_params()
     test_parser_backends_agree_on_widths()
     test_unpacked_array_ports_use_packed_width_only()
+    test_cross_backend_enrichment_runs_without_slang()
     test_parser_backend_enum_is_enforced()
     test_review_fixes_registry_parser_and_types()
     test_power_on_reset_names_detected()

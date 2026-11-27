@@ -131,6 +131,12 @@ jobs:
       - name: Six-layer invariant gate
         run: python scripts/verify_invariants.py --fast
 
+      # Layer 4（100% 函数覆盖率）此前从未在 CI 跑过，所以「无 slang 时解析器
+      # 退化」「测试强依赖 verilator」这类问题长期漏网（评审 181/182/183）。
+      # 有 slang 的矩阵节点跑完整门禁，覆盖数应为 171/171。
+      - name: Six-layer invariant gate (full, includes Layer 4 coverage)
+        run: python scripts/verify_invariants.py --full
+
       - name: Self-audit gate (anti-silent-pass)
         run: python -m fpga_toolbox audit_harness
 
@@ -152,6 +158,62 @@ jobs:
 
       - name: Console entry point
         run: fpga-toolbox list
+
+  # 零 EDA 降级口径：README 声明「零 EDA 强依赖，仅 PyYAML」，因此必须有一个
+  # 只装 PyYAML 的节点，验证全部测试与六层门禁在该环境下同样通过。
+  # 这条是评审 181/182/183 的根因防护：此前 CI 装了 slang，把「无 slang 时
+  # builtin 后端把 typedef 端口误判成 1-bit」和「测试强依赖 verilator」
+  # 全部掩盖了。
+  test-no-eda:
+    name: test (ubuntu-latest, py3.11, zero EDA tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install runtime deps only (no slang / verilator / ruff)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pyyaml>=6.0"
+
+      - name: Prove the environment is genuinely EDA-free
+        run: |
+          for tool in slang verilator ruff; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "::error::$tool unexpectedly present; this job must be zero-EDA"
+              exit 1
+            fi
+          done
+          echo "confirmed: slang/verilator/ruff absent"
+
+      - name: Core suites in degraded mode
+        run: |
+          python tests/test_regression.py
+          python tests/test_fusion_and_cross_repo.py
+          python tests/test_eda_campaign.py
+
+      - name: Domain suites in degraded mode
+        run: |
+          python tests/test_sv_parser_coverage.py
+          python tests/test_protocol_emitter_coverage.py
+          python tests/test_iface_binding_coverage.py
+          python tests/test_sim_and_normalizer_coverage.py
+          python tests/test_security_coverage.py
+          python tests/test_repo_and_sandbox_coverage.py
+          python tests/test_tooling_coverage.py
+
+      # 零 EDA 下 Layer 3 应自动降级为 compileall，Layer 4 应把「必须 fork
+      # slang 才能执行」的函数显式排除（并在输出里说明），而不是判失败。
+      - name: Six-layer invariant gate (full, zero-EDA)
+        run: python scripts/verify_invariants.py --full
+
+      - name: Self-audit gate
+        run: python -m fpga_toolbox audit_harness
 
   build:
     name: build distributions

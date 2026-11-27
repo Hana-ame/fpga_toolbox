@@ -701,6 +701,63 @@ def test_log_files_are_deduplicated() -> None:
         # 且确实记录了本次的日志
         assert any("apb_dedup" in os.path.basename(p) for p in paths), paths
 
+def test_artifact_collectors_are_pure_filesystem_functions() -> None:
+    """`_collect_waveforms` / `_collect_logs` 是纯文件系统函数，必须直测。
+
+    它们此前只通过 `run_sim` 间接覆盖。在零 EDA 环境（README 声明的支持口径）
+    `run_sim` 会在 Verilator 检查处提前失败，测试随即 `return`，于是这两个
+    ​函数一次都不执行 —— Layer 4 的 100% 覆盖率门禁把它们的未覆盖记为失败，
+    而它们根本不依赖任何 EDA 工具。这不是「环境导致的不可达」，而是测试写法
+    把纯函数绑在了需要 Verilator 的路径上。
+
+    顺带固化两条真实语义：
+      * 波形按**后缀**识别，并按 realpath 去重（重叠目录不重复计数）；
+      * 日志排除已作为波形处理的文件，且与波形同样按 realpath 去重。
+    """
+    print("coverage: artifact collectors are pure filesystem functions")
+    from fpga_toolbox.sim_runner import _collect_logs, _collect_waveforms
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sub = root / "nested"
+        sub.mkdir()
+
+        # 波形：VCD / FST 两种后缀，另有 0 字节文件（empty 标记必须为真）
+        (root / "wave.vcd").write_text("$dumpvars\n", encoding="utf-8")
+        (sub / "wave2.fst").write_text("fstdata", encoding="utf-8")
+        (root / "empty.vcd").write_text("", encoding="utf-8")
+        # 日志：三种后缀 + 一个应被忽略的无关文件
+        (root / "sim.log").write_text("PASS\n", encoding="utf-8")
+        (sub / "report.rpt").write_text("timing clean\n", encoding="utf-8")
+        (sub / "notes.txt").write_text("hello\n", encoding="utf-8")
+        (root / "ignored.md").write_text("not an artifact\n", encoding="utf-8")
+
+        # --- 波形收集：同一目录传两次（重叠）也只记一次 ---
+        waves = _collect_waveforms([root, root])
+        names = sorted(Path(w["path"]).name for w in waves)
+        assert names == ["empty.vcd", "wave.vcd", "wave2.fst"], names
+        assert all(w["kind"] in ("VCD", "FST") for w in waves), waves
+        empty = [w for w in waves if Path(w["path"]).name == "empty.vcd"][0]
+        assert empty["empty"] is True and empty["size_bytes"] == 0, empty
+        # 不存在的目录必须被安静跳过，而不是抛错
+        assert _collect_waveforms([root / "does_not_exist"]) == []
+
+        # --- 日志收集：排除波形，后缀白名单，realpath 去重 ---
+        wave_keys = {str(Path(w["path"]).resolve()) for w in waves}
+        logs = _collect_logs([root, sub], exclude=wave_keys)
+        lognames = sorted(Path(x["path"]).name for x in logs)
+        assert lognames == ["notes.txt", "report.rpt", "sim.log"], lognames
+        # 传 [root, sub]（sub 是 root 的子目录）时不能出现重复条目
+        real = [os.path.realpath(x["path"]) for x in logs]
+        assert len(real) == len(set(real)), real
+        # 波形绝不能被当成日志重复登记
+        assert not any(x["path"].endswith((".vcd", ".fst")) for x in logs), logs
+
+        # 显式 exclude 生效：把 sim.log 排除后就不该出现
+        logs2 = _collect_logs([root], exclude=wave_keys | {str((root / "sim.log").resolve())})
+        assert "sim.log" not in [Path(x["path"]).name for x in logs2], logs2
+
+
 def test_lint_tb_zero_matches_is_not_silent_clean() -> None:
     """Defect 141: 目录模式扫到 0 个文件时必须区分「没检查」与「检查通过」。
 
@@ -759,6 +816,7 @@ def main() -> int:
     test_summary_payloads_are_type_checked()
     test_suite_verification_works_without_expected_list()
     test_log_files_are_deduplicated()
+    test_artifact_collectors_are_pure_filesystem_functions()
     test_lint_tb_zero_matches_is_not_silent_clean()
     print("ALL test_sim_and_normalizer_coverage.py TESTS PASSED")
     return 0

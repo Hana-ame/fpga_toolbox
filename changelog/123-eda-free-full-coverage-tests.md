@@ -1,4 +1,4 @@
-# 113 · 消除 `test_full_coverage.py` 在纯 Python 环境下对 `slang`/`verilator` 的硬依赖（182）
+# 123 · 消除 `test_full_coverage.py` 在纯 Python 环境下对 `slang`/`verilator` 的硬依赖（182）
 
 > 对应验收项：`changelog/111-acceptance-review.md` #182（P1）
 
