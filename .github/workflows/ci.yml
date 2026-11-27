@@ -115,8 +115,18 @@ jobs:
       - name: EDA campaign parsers (UVM / DC-PT QoR / PT netlist cleaner)
         run: python tests/test_eda_campaign.py
 
-      - name: Full coverage & defect regression suite
-        run: python tests/test_full_coverage.py
+      - name: Domain regression suites (SV parser / protocol TB / iface binding)
+        run: |
+          python tests/test_sv_parser_coverage.py
+          python tests/test_protocol_emitter_coverage.py
+          python tests/test_iface_binding_coverage.py
+
+      - name: Domain regression suites (sim & normalizer / security / repo & sandbox / tooling)
+        run: |
+          python tests/test_sim_and_normalizer_coverage.py
+          python tests/test_security_coverage.py
+          python tests/test_repo_and_sandbox_coverage.py
+          python tests/test_tooling_coverage.py
 
       - name: Six-layer invariant gate
         run: python scripts/verify_invariants.py --fast

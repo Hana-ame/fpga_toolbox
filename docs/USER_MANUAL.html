@@ -223,7 +223,15 @@ ruff check fpga_toolbox tests
 python3 tests/test_regression.py
 python3 tests/test_fusion_and_cross_repo.py
 python3 tests/test_eda_campaign.py
-python3 tests/test_full_coverage.py
+
+# 按领域拆分的回归套件（也可单独跑出问题的那个领域）
+python3 tests/test_sv_parser_coverage.py          # SV 解析器双后端
+python3 tests/test_protocol_emitter_coverage.py  # 7 协议 TB 模板
+python3 tests/test_iface_binding_coverage.py     # 接口识别 + canonical 绑定
+python3 tests/test_sim_and_normalizer_coverage.py # 仿真结果与伪 PASS 拦截
+python3 tests/test_security_coverage.py          # 路径逃逸 / 注入 / 越界
+python3 tests/test_repo_and_sandbox_coverage.py  # 仓库索引 / 沙箱原子性
+python3 tests/test_tooling_coverage.py           # CLI / registry / 可视化 / 门禁
 
 # Verilator 实时多协议参考仿真（34 套仿真）
 bash examples/multi_bus_ref/sim.sh all
