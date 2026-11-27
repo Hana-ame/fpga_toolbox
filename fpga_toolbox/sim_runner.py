@@ -218,6 +218,7 @@ def _fst_available(verilator_bin: str) -> tuple[bool, str]:
                 [verilator_bin, "--binary", "--trace-fst", "-j", "1", "-Wno-fatal",
                  "--top-module", "probe", str(sv), "-o", "sim", "-Mdir", str(Path(td) / "obj")],
                 capture_output=True, text=True, timeout=180, check=False,
+                encoding="utf-8", errors="replace",
             )
         except (OSError, _sp.TimeoutExpired) as exc:
             return False, f"could not probe --trace-fst: {exc}"

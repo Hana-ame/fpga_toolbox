@@ -119,11 +119,13 @@ def _check_layer3_static_hygiene() -> Tuple[bool, str]:
         r_ruff = subprocess.run(
             ["ruff", "check", "fpga_toolbox", "tests", "scripts"],
             cwd=ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
     except FileNotFoundError:
         r_comp = subprocess.run(
             [sys.executable, "-m", "compileall", "-q", "fpga_toolbox", "tests", "scripts"],
             cwd=ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
         if r_comp.returncode != 0:
             return False, f"compileall failed: {r_comp.stderr}"
@@ -136,6 +138,7 @@ def _check_layer3_static_hygiene() -> Tuple[bool, str]:
     r_comp = subprocess.run(
         [sys.executable, "-m", "compileall", "-q", "fpga_toolbox", "tests", "scripts"],
         cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     if r_comp.returncode != 0:
         return False, f"compileall failed: {r_comp.stderr}"
@@ -247,7 +250,14 @@ def _check_layer5_intent_and_docs() -> Tuple[bool, str]:
         return False, f"Tools missing from docs/USER_MANUAL.md: {missing_docs}"
 
     # 2. Docs HTML derivation sync
-    r_doc = subprocess.run([sys.executable, "docs/build_docs_html.py", "--check"], cwd=ROOT, capture_output=True, text=True)
+    # 显式 UTF-8：build_docs_html.py 的输出含中文（「已生成」「自检通过」），
+    # Windows 上 text=True 用 cp1252 解码会抛
+    # UnicodeDecodeError: 'charmap' codec can't decode byte 0x90
+    # —— CI Windows job 实测崩在这里，表现为「Layer 5 失败」而真实原因是编码。
+    r_doc = subprocess.run(
+        [sys.executable, "docs/build_docs_html.py", "--check"],
+        cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", errors="replace")
     if r_doc.returncode != 0:
         return False, f"build_docs_html.py --check failed: {r_doc.stdout} {r_doc.stderr}"
 
@@ -258,6 +268,7 @@ def _check_layer5_intent_and_docs() -> Tuple[bool, str]:
     r_cl = subprocess.run(
         [sys.executable, "scripts/sync_changelog_index.py", "--check"],
         cwd=ROOT, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     if r_cl.returncode != 0:
         return False, (
@@ -324,7 +335,27 @@ def _check_layer6_rtl_and_tb_integrity() -> Tuple[bool, str]:
     return True, f"{len(duts)}/{len(duts)} DUTs parsed cleanly + 5/5 TB dirs lint_tb 0 errors / 0 warnings"
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdout/stderr 强制成 UTF-8。
+
+    Windows 上控制台默认用 locale 编码（cp1252），而本脚本的输出里含 em dash
+    「—」与中文说明。CI 的 Windows job 实测直接崩：
+
+        UnicodeEncodeError: 'charmap' codec can't encode characters in position 52-53
+
+    崩在「打印 Layer 3 结果」这一步，导致后续 Layer 4 根本没跑 —— 表现为
+    「门禁在某层失败」，而真实原因是**输出编码**，排查方向会被完全带偏。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main() -> int:
+    _force_utf8_stdio()
     ap = argparse.ArgumentParser(description="fpga_toolbox six-layer invariant & intent-drift gate")
     ap.add_argument("--fast", action="store_true", help="Skip full coverage trace (pre-commit mode)")
     ap.add_argument("--full", action="store_true", help="Run all 6 layers including 100% function coverage trace")

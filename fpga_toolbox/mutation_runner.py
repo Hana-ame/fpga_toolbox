@@ -188,6 +188,10 @@ def tool_run_mutation(
     try:
         baseline = subprocess.run(
             test_cmd, cwd=str(wd), capture_output=True, text=True,
+            # 显式 UTF-8：Windows 上 text=True 走 locale（cp1252），变异测试的
+            # 输出含非 ASCII（中文诊断/路径）时抛 UnicodeDecodeError，表现为
+            # 「基线跑不起来」而不是编码问题。
+            encoding="utf-8", errors="replace",
             timeout=timeout_sec, check=False,
         )
     except FileNotFoundError as exc:
@@ -275,7 +279,10 @@ def tool_run_mutation(
         mutated_bytes = original_bytes.replace(old_b, new_b, 1)
         try:
             fp.write_bytes(mutated_bytes)
-            proc = subprocess.run(test_cmd, cwd=str(wd), capture_output=True, text=True, timeout=timeout_sec, check=False)
+            proc = subprocess.run(
+                test_cmd, cwd=str(wd), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=timeout_sec, check=False)
             if proc.returncode != 0:
                 killed += 1
                 results.append({"id": m["id"], "status": "KILLED", "returncode": proc.returncode, "desc": m["desc"]})

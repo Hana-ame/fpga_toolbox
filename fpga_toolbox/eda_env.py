@@ -77,7 +77,9 @@ def probe_eda_env() -> Dict[str, Any]:
     v_msg = "verilator not found"
     if vbin:
         try:
-            proc = subprocess.run([vbin, "--version"], capture_output=True, text=True, timeout=5, check=False)
+            proc = subprocess.run(
+                [vbin, "--version"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=5, check=False)
             v_ver = parse_verilator_version(proc.stdout + proc.stderr)
             if v_ver is None:
                 v_msg = f"could not parse verilator version from '{vbin}'"

@@ -432,7 +432,9 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             if _a14_platform_skip:
                 return 0, "", True
             try:
-                proc = _sub.run(["bash", *args], cwd=cwd, capture_output=True, text=True)
+                proc = _sub.run(
+                    ["bash", *args], cwd=cwd, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace")
                 return proc.returncode, proc.stdout + proc.stderr, False
             except FileNotFoundError:
                 return 0, "", True
