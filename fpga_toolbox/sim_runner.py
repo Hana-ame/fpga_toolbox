@@ -84,20 +84,37 @@ def verify_suite_identities(log_text: str, expected_suites: List[str]) -> Dict[s
                          line, re.IGNORECASE):
                 if results.get(current) != "PASS" or current not in summaries:
                     results[current] = "FAIL"
-    # 启动过但没有**自己的**结束汇总行 => 中途崩溃，判 FAIL（不能沿用 PASS）
+    # 启动过但没有**自己的**结束汇总行 => 中途崩溃，判 FAIL。
+    # 旧实现只转换 `status == "PASS"`，而**从未打印汇总行**的套件状态是
+    # "STARTED"，它被漏掉了：实测「apb 打印 PASS，axi4 只打印 header 就崩溃」
+    # 得到 observed={'apb':'PASS','axi4':'STARTED'}、failed=[]、
+    # all_verified=true —— 一个崩溃的套件没让终局判负（缺陷 191）。
+    # 三态都要覆盖：PASS（曾判过通过）、STARTED（一条汇总都没有）、以及
+    # 其它非 FAIL 状态（保守一律转 FAIL）。
     for name, status in list(results.items()):
-        if status == "PASS" and name not in summaries:
+        if status != "FAIL" and name not in summaries:
             results[name] = "FAIL"
     missing = [s for s in expected_suites if s not in results]
-    failed = [s for s in expected_suites if results.get(s) != "PASS" and s not in missing]
+    # failed 必须包含**实际观察到的** FAIL，而不只是预期里的：
+    # 旧实现 `failed = [s for s in expected_suites ...]`，调用方不传
+    # expected_suites 时恒为 []，于是「apb PASS + axi4 崩溃」得到
+    # failed=[]、all_verified=true —— 一个真实崩溃被报告成核对通过
+    # （缺陷 191）。这里把观察到的 FAIL 一并纳入（保序去重）。
+    failed: List[str] = [s for s in expected_suites
+                         if results.get(s) != "PASS" and s not in missing]
+    for _n, _st in results.items():
+        if _st == "FAIL" and _n not in failed and _n not in missing:
+            failed.append(_n)
     return {
         "expected": expected_suites,
         "observed": results,
         "summaries": summaries,
         "missing": missing,
         "failed": failed,
-        # all_verified 保持原语义：「预期的套件没有缺失/失败」，因此没有预期
-        # 套件时为 True（自审计 A6 依赖这一点：不能对「无预期」假报警）。
+        # all_verified：「没有缺失、没有失败」—— 现在 failed 也覆盖实际观察到
+        # 的 FAIL，因此无预期套件时若日志里有套件崩溃，这里会正确地变 False。
+        # 没有任何观察结果时仍为 True（自审计 A6 依赖：不能对「无预期且无观察」
+        # 假报警），「是否真的观察过」由 observed_any 单独表达。
         "all_verified": not missing and not failed,
         # 但 `all_verified=True` + `observed={}` 会被误读成「核对通过」，实际
         # 是什么都没核对（`expected_suites` 为空且日志里也没有任何 suite 头）。
@@ -367,7 +384,14 @@ def tool_run_sim(
     elapsed = time.time() - started_at
 
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    identity = verify_suite_identities(combined, expected_suites) if expected_suites else None
+    # 即使调用方没给 expected_suites，也要核对**实际启动过的**套件：
+    # verify_suite_identities 会把「打印了 header 却没有结束汇总行」（崩溃/超时）
+    # 的套件判 FAIL。旧实现 `if expected_suites else None` 直接跳过整段核对，
+    # 于是不传 expected_suites 时 `suite_identity` 恒为 null —— 一份日志里明明有
+    # 两个套件的完整汇总行，却既没核对身份、也没检查完成度（缺陷 190）。
+    # 现在始终核对；expected 为空表示「不要求特定套件」，但观察到的每个套件
+    # 仍必须自己证明跑完。
+    identity = verify_suite_identities(combined, expected_suites or [])
 
     # ---- 完整日志持久化 ----
     # 旧实现只在返回值里放 stdout_tail/stderr_tail（各 4000/2000 字符），

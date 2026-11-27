@@ -2544,7 +2544,9 @@ def test_residual_and_suite_rerun_gates() -> None:
              "== sim: apb (top=t) ==\n")
     rr = verify_suite_identities(trunc, ["apb"])
     assert rr["all_verified"] is False, rr
-    assert rr["observed"]["apb"] == "STARTED", rr["observed"]
+    # 截断的重跑不能算通过。缺陷 191 修复后「启动过但没有自己的汇总行」在任何
+    # 状态下都归为 FAIL（旧实现只转 PASS，STARTED 会被漏成"没失败"）。
+    assert rr["observed"]["apb"] == "FAIL", rr["observed"]
 
     # 重跑也完整通过 -> 仍 PASS
     both = ("== sim: apb (top=t) ==\nPASS: apb ok\n"
@@ -5143,6 +5145,73 @@ def test_summary_payloads_are_type_checked() -> None:
         assert r3["data"]["coverage_summary"] == {}, r3["data"]
 
 
+def test_suite_verification_works_without_expected_list() -> None:
+    """缺陷 190/191: 不传 expected_suites 时完全不核对；STARTED 漏成"没失败"。
+
+    190: `run_sim` 里
+             identity = verify_suite_identities(...) if expected_suites else None
+         于是不传 expected_suites 时 `suite_identity` 恒为 null —— 日志里明明有
+         两个套件的完整汇总行，却既没核对身份、也没检查完成度。
+
+    191: `verify_suite_identities` 的「启动过但没有汇总行 → FAIL」只转换
+         `status == "PASS"`，从未打印汇总行的套件状态是 `STARTED`，被漏掉：
+
+             apb 打印 PASS，axi4 只打印 header 就崩溃
+             → observed={'apb':'PASS','axi4':'STARTED'}, failed=[],
+               all_verified=true
+
+         一个真实崩溃被报告成核对通过。且 `failed` 只从 expected_suites 里取，
+         无预期时恒为 []。
+    """
+    print("coverage: suite verification works without expected list")
+    from fpga_toolbox.sim_runner import verify_suite_identities
+
+    # 191a: STARTED 必须转成 FAIL
+    log_crash = "== sim: apb ==\nPASS: apb ok\n== sim: axi4 ==\n[CHECK] id=C1\n"
+    r = verify_suite_identities(log_crash, [])
+    assert r["observed"].get("axi4") == "FAIL", r["observed"]
+    assert "axi4" in r["failed"], r
+    assert r["all_verified"] is False, r
+    assert r["observed_any"] is True and r["verified_any"] is False, r
+
+    # 191b: 有预期时同样正确
+    r2 = verify_suite_identities(log_crash, ["apb", "axi4"])
+    assert set(r2["failed"]) == {"axi4"}, r2
+    assert r2["all_verified"] is False, r2
+
+    # 无预期 + 全干净 -> all_verified 保持 True（不假报警，自审计 A6 依赖）
+    r3 = verify_suite_identities("== sim: apb ==\nPASS: apb ok\n", [])
+    assert r3["all_verified"] is True, r3
+    assert r3["failed"] == [], r3
+    assert r3["observed_any"] is True, r3
+
+    # 完全没有套件 -> all_verified True 但 observed_any False（区分「没核对」）
+    r4 = verify_suite_identities("", [])
+    assert r4["all_verified"] is True, r4
+    assert r4["observed_any"] is False, r4
+    assert r4["verified_any"] is False, r4
+
+    # 190: run_sim 不传 expected_suites 时也必须产出非 null 的核对结果
+    from fpga_toolbox.registry import call_tool
+    with tempfile.TemporaryDirectory() as td:
+        sh = Path(td) / "s.sh"
+        sh.write_text(
+            "#!/bin/bash\n"
+            'echo "== sim: apb =="\n'
+            'echo "PASS: apb ok"\n'
+            'echo "== sim: axi4 =="\n'
+            'echo "PASS: axi4 ok"\n', encoding="utf-8")
+        sh.chmod(0o755)
+        rr = call_tool("run_sim", {"sim_script": str(sh)})
+        # 有 Verilator 时才可能真跑；没有则 run_sim 会因环境错误退出
+        if rr["ok"]:
+            ident = (rr["data"] or {}).get("suite_identity")
+            assert ident is not None, rr["data"]
+            assert ident["observed_any"] is True, ident
+            assert set(ident["observed"]) == {"apb", "axi4"}, ident
+            assert ident["all_verified"] is True, ident
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5242,6 +5311,7 @@ def main() -> int:
     test_unpacked_array_ports_use_packed_width_only()
     test_empty_report_cannot_claim_pass()
     test_summary_payloads_are_type_checked()
+    test_suite_verification_works_without_expected_list()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
