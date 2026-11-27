@@ -129,7 +129,8 @@
 
 ## 合并期缺陷修复（multi-bus-pass 合并审查）
 
-- [10-pure-apb-draft.md](10-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出
+- [10-pure-apb-draft.md](10-pure-apb-draft.md) — **已迁移**（转发文件）：正文在 [`130-pure-apb-draft.md`](130-pure-apb-draft.md)，此处保留以兼容旧外链
+- [130 · 纯 APB 设备的 draft 契约自相矛盾](130-pure-apb-draft.md) — `extract_interfaces --emit-draft-yaml` 曾对纯 APB 设备写入空 `axi4_lite` 段，导致自家 validator 报 17 条 E001；仅在有 AXI 接口（或两种都没有）时写出（原 `10-pure-apb-draft.md`，编号冲突已迁移，旧路径保留转发文件）
 - [11-sandbox-symlink-escape.md](11-sandbox-symlink-escape.md) — `copy_sandbox` 曾跟随项目内符号链接把项目外文件拷进沙箱（隔离泄漏）；补 `resolve(strict=True)` 真实路径校验
 - [12-unknown-instantiation-w102.md](12-unknown-instantiation-w102.md) — `index_repo` 曾静默丢弃仓库外模块的例化；改用 slang CST 的 `HierarchyInstantiation` 精确检出并报 `W102`，`resolve_deps` 透传 `closure_is_complete`
 - [13-windows-decoding-and-process-lessons.md](13-windows-decoding-and-process-lessons.md) — Windows cp1252 解码崩溃（`subprocess text=True` → `UnicodeDecodeError` → `AttributeError`），以及三个开发过程错误（stash 致代码漏提交、脆断言、测试依赖 CI 缺失环境）
@@ -192,8 +193,12 @@
 - [127 · CLI 补全 --version / -V 标准版本查询参数](127-cli-version-flag.md)
 - [128 · 修正 FEATURES.html 副标题中过期诊断码计数](128-features-deck-diag-count.md)
 
-> 注：`10-` 编号有两个文件（`10-pure-apb-draft.md` 与
-> `10-synopsys-vcs-dc-pt-campaign-integration.md`），属早期历史遗留。为保持
-> 已发布文档的外部链接兼容，**不重排**；从 111 起编号已唯一，后续新增必须
-> 递增且不得复用。
+> 注：`10-` 历史上曾有两个文件（`10-pure-apb-draft.md` 与
+> `10-synopsys-vcs-dc-pt-campaign-integration.md`，来自不同分支各自独立编号）。
+> 现已把前者迁移为 `130-pure-apb-draft.md`，并在原路径保留一个**转发文件**
+> 以兼容已发布的外部链接；编号自此唯一。后续新增必须取当前最大编号 + 1，
+> 不得复用（`scripts/verify_invariants.py` Layer 5 会自动校验）。
 - [129 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点](129-zero-eda-gate-and-ci-degraded-job.md)
+- [131 · CI 显式 slang 矩阵维度 + changelog 索引自动化](131-ci-slang-matrix-changelog-automation.md)
+- [132 · 零依赖 MCP stdio server（serve-mcp）](132-mcp-stdio-server.md)
+- [133 · 补齐 ddr5/spi/ethernet 原生 TB 模板（8 → 11 协议）](133-ddr5-spi-ethernet-tb-templates.md)

@@ -55,20 +55,34 @@ jobs:
           PY
 
   test:
-    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    name: test (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.slang == false && ', no slang' || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # slang 维度是**显式**的：装了 slang 的节点会断言 slang 真的可用，
+          # 降级节点会断言它确实不在。否则 `continue-on-error` 的安装步骤一旦
+          # 下载失败，节点会静默退化成降级节点 —— 名义上测了 slang 路径，实际
+          # 只测了 builtin 回退，把内置解析器的回归掩盖掉。
           - os: ubuntu-24.04
             python: "3.10"
+            slang: true
           - os: ubuntu-latest
             python: "3.11"
+            slang: true
           - os: ubuntu-latest
             python: "3.13"
+            slang: true
           - os: windows-latest
             python: "3.13"
+            slang: true
+          # 唯一的降级节点：不装 slang，专测内置解析器 + 六层门禁的「无 slang」
+          # 口径（ruff 仍装在 lint job、verilator 由 ubuntu runner 自带或无）。
+          # 更极端的「连 verilator/ruff 都没有」由独立的 test-no-eda job 覆盖。
+          - os: ubuntu-latest
+            python: "3.11"
+            slang: false
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +100,8 @@ jobs:
       # slang 用于 W102 未知例化检测（token 启发式无法区分 `vendor_ip u(` 与
       # `function int foo(`，会海量误报）。装上是让该特性在 CI 真正被验证；
       # 装不上不失败——工具按设计降级为不报未知，测试会显式跳过相关断言。
-      - name: Install slang (optional, enables W102 CST backend)
+      - name: Install slang (enables W102 CST backend)
+        if: matrix.slang
         continue-on-error: true
         shell: bash
         run: |
@@ -104,6 +119,29 @@ jobs:
             slang_bin="$(find "$RUNNER_TEMP" -name slang -type f -perm -u+x | head -1)"
             cp "$slang_bin" "$RUNNER_TEMP/bin/"
             echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          fi
+
+      # 双向断言：让「有 slang」与「无 slang」两个分支都成为**可验证的事实**，
+      # 而不是靠安装步骤是否碰巧成功。矩阵节点名里写了什么就必须是什么。
+      - name: Assert slang availability matches the matrix
+        shell: bash
+        run: |
+          if command -v slang >/dev/null 2>&1; then
+            have=true
+            slang --version 2>&1 | head -2 || true
+          else
+            have=false
+          fi
+          want="${{ matrix.slang }}"
+          echo "matrix.slang=$want, detected=$have"
+          if [ "$want" = "true" ] && [ "$have" != "true" ]; then
+            echo "::error::this matrix node claims slang but slang is not installed;"
+            echo "::error::the builtin fallback would silently mask parser regressions"
+            exit 1
+          fi
+          if [ "$want" = "false" ] && [ "$have" = "true" ]; then
+            echo "::error::this is the no-slang degraded node but slang is present"
+            exit 1
           fi
 
       - name: Core regression suite
@@ -127,6 +165,7 @@ jobs:
           python tests/test_security_coverage.py
           python tests/test_repo_and_sandbox_coverage.py
           python tests/test_tooling_coverage.py
+          python tests/test_mcp_server.py
 
       - name: Six-layer invariant gate
         run: python scripts/verify_invariants.py --fast
@@ -159,11 +198,14 @@ jobs:
       - name: Console entry point
         run: fpga-toolbox list
 
-  # 零 EDA 降级口径：README 声明「零 EDA 强依赖，仅 PyYAML」，因此必须有一个
-  # 只装 PyYAML 的节点，验证全部测试与六层门禁在该环境下同样通过。
-  # 这条是评审 181/182/183 的根因防护：此前 CI 装了 slang，把「无 slang 时
-  # builtin 后端把 typedef 端口误判成 1-bit」和「测试强依赖 verilator」
-  # 全部掩盖了。
+  # 零 EDA 降级口径（最极端的一档）：README 声明「零 EDA 强依赖，仅 PyYAML」，
+  # 因此必须有一个**只装 PyYAML** 的节点，验证全部测试与六层门禁在该环境下
+  # 同样通过。与矩阵里的 `slang: false` 节点分工：
+  #   * 矩阵节点  → 无 slang，但 verilator / ruff 可能可用（正常开发机形态）
+  #   * 本 job    → slang / verilator / ruff 全都没有（README 承诺的最低口径）
+  # 这两档共同构成评审 181/182/183 的根因防护：此前所有节点都装 slang，
+  # 把「无 slang 时 builtin 后端把 typedef 端口误判成 1-bit」和「测试强依赖
+  # verilator」全掩盖了。
   test-no-eda:
     name: test (ubuntu-latest, py3.11, zero EDA tools)
     runs-on: ubuntu-latest
@@ -206,6 +248,7 @@ jobs:
           python tests/test_security_coverage.py
           python tests/test_repo_and_sandbox_coverage.py
           python tests/test_tooling_coverage.py
+          python tests/test_mcp_server.py
 
       # 零 EDA 下 Layer 3 应自动降级为 compileall，Layer 4 应把「必须 fork
       # slang 才能执行」的函数显式排除（并在输出里说明），而不是判失败。

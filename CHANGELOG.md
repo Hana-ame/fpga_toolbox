@@ -236,3 +236,24 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ## [0.4.0] - Prior Baseline
 - 原始 `hana-ame/fpga_toolbox` 8 个原子工具、MCP Schema 导出、CLI 三层入口与沙箱防误删契约。
+
+<!-- BEGIN AUTO-GENERATED CHANGELOG SUMMARY -->
+<!-- 本段由 scripts/sync_changelog_index.py 自动生成，请勿手工编辑。
+     完整清单见 changelog/INDEX.md；运行 `python3 scripts/sync_changelog_index.py --write` 重新生成。 -->
+
+### 最近 12 条变更
+
+- **133** · [功能增强 · 补齐 ddr5 / spi / ethernet 原生 TB 模板（8 → 11 协议）](changelog/133-ddr5-spi-ethernet-tb-templates.md)
+- **132** · [功能增强 · 零依赖 MCP stdio server（`serve-mcp`）](changelog/132-mcp-stdio-server.md)
+- **131** · [功能增强 · CI 显式 slang 矩阵维度 + changelog 索引自动化](changelog/131-ci-slang-matrix-changelog-automation.md)
+- **130** · [纯 APB 设备的 draft 契约自相矛盾](changelog/130-pure-apb-draft.md)
+- **129** · [缺陷修复 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点（评审 182/183 的根因）](changelog/129-zero-eda-gate-and-ci-degraded-job.md)
+- **128** · [修正 `FEATURES.html` 副标题中过期诊断码计数（37 → 47）](changelog/128-features-deck-diag-count.md)
+- **127** · [CLI 补全 `--version` / `-V` 标准版本查询参数](changelog/127-cli-version-flag.md)
+- **126** · [零 EDA 环境下达成 100% 函数覆盖率（169/169，六层不变量全通过）](changelog/126-zero-eda-100pct-function-coverage.md)
+- **125** · [同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）](changelog/125-docs-sync-user-manual-and-ddr5.md)
+- **124** · [CI 接入全覆盖回归套件与六层不变量门禁（183）](changelog/124-ci-full-coverage-and-invariants.md)
+- **123** · [消除 `test_full_coverage.py` 在纯 Python 环境下对 `slang`/`verilator` 的硬依赖（182）](changelog/123-eda-free-full-coverage-tests.md)
+- **122** · [修复内置 SV 解析器把自定义 `typedef` 端口误判为 1-bit（181）](changelog/122-builtin-typedef-port-width.md)
+
+<!-- END AUTO-GENERATED CHANGELOG SUMMARY -->

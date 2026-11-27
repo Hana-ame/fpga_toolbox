@@ -866,9 +866,26 @@ def test_waveform_and_log_capture(tmp: Path) -> None:
         return p
 
     def verilator_usable() -> bool:
-        """run_sim 要求 Verilator >= 5.040。没有就跳过需要真跑仿真的断言。"""
+        """run_sim 要求 Verilator >= 5.040，**且必须在 PATH 上能直接调用**。
+
+        为什么要额外加 PATH 条件：`find_verilator()` 按产品设计会回退到
+        `~/.local/verilator/bin/verilator` 这类绝对路径（让用户不改 PATH 也能用
+        自建的 Verilator）。但 `run_sim` 生成的 runner 脚本内部调用的是裸
+        `verilator` 命令，**走 PATH 查找**。两者口径不一致时会出现：
+
+            probe_eda_env() 说「可用」→ 测试不跳过 → runner 里 `verilator`
+            not found → 断言失败
+
+        在人为隔离 PATH 的零 EDA 环境（CI 的 test-no-eda job、评审沙箱）里
+        100% 复现。所以这里要求「>= 5.040」和「PATH 可见」**同时**成立，
+        与 runner 的真实调用口径一致（评审 182 同类问题的第二次修正）。
+        """
         try:
+            import shutil as _sh
+
             from fpga_toolbox.eda_env import probe_eda_env
+            if not _sh.which("verilator"):
+                return False
             return bool(probe_eda_env()["verilator"]["meets_min_version"])
         except Exception:  # noqa: BLE001 - 探测失败按不可用处理
             return False

@@ -118,6 +118,7 @@ blockquote ul { margin:8px 0; }
     <a class="lv2" href="#1-设计原理与核心架构">1. 设计原理与核心架构</a>
     <a class="lv3" href="#四大核心机制原理">四大核心机制原理</a>
     <a class="lv2" href="#2-安装与环境准备">2. 安装与环境准备</a>
+    <a class="lv3" href="#mcp-服务入口serve-mcp">MCP 服务入口（serve-mcp）</a>
     <a class="lv2" href="#3-13-个注册原子工具使用说明">3. 13 个注册原子工具使用说明</a>
     <a class="lv2" href="#4-实战使用示例examples">4. 实战使用示例（Examples）</a>
     <a class="lv3" href="#示例-1一键提取任意-rtl-的全部接口方向与位宽">示例 1：一键提取任意 RTL 的全部接口、方向与位宽</a>
@@ -156,7 +157,27 @@ export PATH="$HOME/.local/verilator/bin:$HOME/.local/bin:$PATH"
 
 # 3. 确认工具注册表与环境探活
 python3 -m fpga_toolbox list
-python3 -m fpga_toolbox audit_harness</code></pre></div>
+python3 -m fpga_toolbox audit_harness
+
+# 4. （可选）作为 MCP 服务接入 Agent 客户端
+python3 -m fpga_toolbox serve-mcp</code></pre></div>
+<h3 id="mcp-服务入口serve-mcp">MCP 服务入口（<code>serve-mcp</code>）</h3>
+<p><code>serve-mcp</code> 在 <strong>stdio</strong> 上提供 MCP（Model Context Protocol，JSON-RPC 2.0） 服务，让 Agent 客户端直接调用这 13 个原子工具。<strong>零外部依赖</strong> —— 只用标准库， 不需要安装 <code>mcp</code> 包，与「仅 PyYAML」的部署口径一致。</p>
+<p>Claude Desktop 配置示例（<code>claude_desktop_config.json</code>）：</p>
+<div class="code-block"><div class="code-lang">json</div><pre><code>{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}</code></pre></div>
+<p>支持的方法：<code>initialize</code> / <code>notifications/initialized</code> / <code>tools/list</code> / <code>tools/call</code> / <code>ping</code> / <code>shutdown</code> / <code>exit</code>。</p>
+<p>协议行为有三条硬约定（都是实现时踩过的坑）：</p>
+<ol><li><strong>stdout 只能有协议消息</strong>。工具执行期间任何 <code>print</code> 都会被临时重定向到<p>stderr，否则客户端解析失败后只会表现为「工具超时」。</p></li><li><strong>工具失败不是协议失败</strong>。工具返回 <code>ok: false</code> 时，<code>tools/call</code> 仍是正常<p>响应（<code>isError: true</code>），完整 <code>ToolResult</code> 信封在 <code>content[0].text</code> 里。</p></li><li><strong>一条坏消息不能杀死 server</strong>。坏 JSON 回 <code>-32700</code>、未知方法回 <code>-32601</code>、<p>非法参数回 <code>-32602</code>，之后继续服务。</p></li></ol>
+<div class="code-block"><div class="code-lang">shell</div><pre><code># 手工冒烟：列工具
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python3 -m fpga_toolbox serve-mcp</code></pre></div>
 <hr>
 <h2 id="3-13-个注册原子工具使用说明">3. 13 个注册原子工具使用说明</h2>
 <p>支持三种调用方式：</p>

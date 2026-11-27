@@ -48,6 +48,46 @@ export PATH="$HOME/.local/verilator/bin:$HOME/.local/bin:$PATH"
 # 3. 确认工具注册表与环境探活
 python3 -m fpga_toolbox list
 python3 -m fpga_toolbox audit_harness
+
+# 4. （可选）作为 MCP 服务接入 Agent 客户端
+python3 -m fpga_toolbox serve-mcp
+```
+
+### MCP 服务入口（`serve-mcp`）
+
+`serve-mcp` 在 **stdio** 上提供 MCP（Model Context Protocol，JSON-RPC 2.0）
+服务，让 Agent 客户端直接调用这 13 个原子工具。**零外部依赖** —— 只用标准库，
+不需要安装 `mcp` 包，与「仅 PyYAML」的部署口径一致。
+
+Claude Desktop 配置示例（`claude_desktop_config.json`）：
+
+```json
+{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}
+```
+
+支持的方法：`initialize` / `notifications/initialized` / `tools/list` /
+`tools/call` / `ping` / `shutdown` / `exit`。
+
+协议行为有三条硬约定（都是实现时踩过的坑）：
+
+1. **stdout 只能有协议消息**。工具执行期间任何 `print` 都会被临时重定向到
+   stderr，否则客户端解析失败后只会表现为「工具超时」。
+2. **工具失败不是协议失败**。工具返回 `ok: false` 时，`tools/call` 仍是正常
+   响应（`isError: true`），完整 `ToolResult` 信封在 `content[0].text` 里。
+3. **一条坏消息不能杀死 server**。坏 JSON 回 `-32700`、未知方法回 `-32601`、
+   非法参数回 `-32602`，之后继续服务。
+
+```bash
+# 手工冒烟：列工具
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python3 -m fpga_toolbox serve-mcp
 ```
 
 ---

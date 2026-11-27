@@ -379,8 +379,9 @@ python3 -m fpga_toolbox emit_testbench \
  "artifacts": {"sv_testbench": "...", "sim_script": "..."}}}
 ```
 
-8 种协议可用：`apb` / `axi4` / `axi4_stream` / `ahb_lite` / `ddr3` / `ddr4` /
-`hbm` / `pcie`（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。
+11 种协议可用：`apb` / `axi4` / `axi4_stream` / `ahb_lite` / `ddr3` / `ddr4` /
+`ddr5` / `hbm` / `pcie` / `spi` / `ethernet`（PCIe 自动展开
+Gen3·4·5 × x1·x4·x16 共 9 套件）。
 
 `axi4_stream` 是 sink（从端）模板：AXI4-Stream 没有地址、没有读通道，唯一的
 流控是 TREADY/TVALID 握手，所以自检围绕「握手是否真的完成」而不是地址/数据
@@ -388,6 +389,16 @@ python3 -m fpga_toolbox emit_testbench \
 相等、TVALID 期间 payload 必须稳定、TKEEP/TLAST 包边界。可选的
 `TLAST`/`TKEEP`/`TID`/`TDEST`/`TUSER` 按 DUT 是否真的暴露来决定是否生成，
 所以只有 `TDATA`/`TVALID`/`TREADY` 三个信号的最小实现同样能跑。
+
+`ddr5` / `spi` / `ethernet` 三个模板同样各自独立（都不复用总线时序）：
+
+| 协议 | TB 扮演 | 自检内容 |
+|---|---|---|
+| `ddr5` | DRAM 器件 | CA 总线命令拍、CS_n/ACT_n 互斥、**差分 CK 必须互补**、读命令后必须出现 `rd_valid` |
+| `spi` | SPI 从设备（flash/sensor） | CS_n 成帧、**每帧恰好 8 个 SCLK 沿**、空闲时钟静止（带 2 拍回落窗口）、全双工回环 |
+| `ethernet` | 链路对端（peer MAC/PHY） | TX 帧长 **>= 60 字节**（最小帧硬约束）、`tx_en` 流式成帧、数据无 X |
+
+三者的故障注入都已验证会 FAIL 而不是假装通过（短帧、帧截断、TREADY 方向写反）。
 
 生成的 TB 自带 Verilator 运行脚本，跑起来是这样的：
 

@@ -251,6 +251,20 @@ def _check_layer5_intent_and_docs() -> Tuple[bool, str]:
     if r_doc.returncode != 0:
         return False, f"build_docs_html.py --check failed: {r_doc.stdout} {r_doc.stderr}"
 
+    # 2b. changelog 索引一致性 + 顶层 CHANGELOG.md 摘要同步。
+    #     历史上出现过两个 `10-*.md` 撞号、`01`–`03` 长期是反引号而非链接、
+    #     新增条目忘记登记 INDEX 等漂移。这些靠人工 review 不可靠（评审 184
+    #     也是人工翻出来的），改为门禁自动校验。
+    r_cl = subprocess.run(
+        [sys.executable, "scripts/sync_changelog_index.py", "--check"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if r_cl.returncode != 0:
+        return False, (
+            "changelog 索引/摘要校验失败（运行 python3 scripts/sync_changelog_index.py --write 修复）：\n"
+            + (r_cl.stdout or "") + (r_cl.stderr or "")
+        )
+
     # 3. No broken relative links in README.md and docs/USER_MANUAL.md
     for mf in (ROOT / "README.md", manual_p):
         t = mf.read_text(encoding="utf-8")

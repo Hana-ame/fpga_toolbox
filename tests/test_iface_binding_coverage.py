@@ -558,12 +558,14 @@ def test_bind_order_is_derived_from_canonical_declarations() -> None:
         assert ifaces[0]["protocol"] == "ddr5", ifaces[0]["protocol"]
         assert len(ifaces[0]["port_map"]) == 11, sorted(ifaces[0]["port_map"])
         assert mod["out_of_scope_ports"] == [], mod["out_of_scope_ports"]
-        assert "ddr5" not in SUPPORTED_MULTI_PROTOCOLS, SUPPORTED_MULTI_PROTOCOLS
+        # ddr5 此前只在 canonical_iface 里（分类器能认、emitter 无模板）。
+        # 本轮补齐了 ddr5 原生模板，因此断言反转为「已支持」。
+        assert "ddr5" in SUPPORTED_MULTI_PROTOCOLS, SUPPORTED_MULTI_PROTOCOLS
         em = emit_protocol_testbench(str(f), str(Path(td) / "tb"), None)
-        assert em["ok"] is False
-        err = str(em.get("error"))
-        assert "no testbench template" in err, err[:300]
-        assert "ddr5" in err, err[:300]
+        assert em["ok"] is True, str(em.get("error"))[:300]
+        assert em["data"]["protocol"] == "ddr5", em["data"]["protocol"]
+        # 生成物必须真的按 ddr5 语义命名（cable: tb_<mod>_ddr5）
+        assert em["data"]["artifacts"]["sv_testbench"].endswith("_ddr5.sv")
 
 def test_draft_yaml_exports_all_protocols_and_validates() -> None:
     """Defect 179/180: draft 只导出 AXI/APB，且非 AXI 契约无法通过校验。

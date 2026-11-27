@@ -157,6 +157,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="列出全部可用原子工具")
     sub.add_parser("schemas", help="导出全部工具的 MCP / Function-Calling JSON Schema")
+    sub.add_parser(
+        "serve-mcp",
+        help="在 stdio 上启动 MCP (JSON-RPC 2.0) 服务，供 Agent 客户端接入（零外部依赖）",
+    )
 
     # 每个工具同时注册为一级子命令，参数由 inputSchema 自动生成
     for tname, meta in TOOL_REGISTRY.items():
@@ -170,6 +174,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if ns.cmd == "schemas":
         print(json.dumps(list_tool_schemas(), indent=2, ensure_ascii=False))
         return 0
+    if ns.cmd == "serve-mcp":
+        # 注意：这条分支必须在 TOOL_REGISTRY[ns.cmd] 之前返回。
+        # serve-mcp 不是原子工具，查注册表会 KeyError。
+        from .mcp_server import main as mcp_main
+
+        return mcp_main([])
 
     meta = TOOL_REGISTRY[ns.cmd]
     # 参数抽取（含 @file 读取/JSON 解析）可能失败（非 UTF-8 文件、JSON 语法错）。

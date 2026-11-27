@@ -1030,6 +1030,37 @@ def test_detected_but_unsupported_protocol_is_distinguished() -> None:
     # axi4_lite 必须在分类器里但不在 emitter 支持列表里（前提校验）
     assert "axi4_lite" not in SUPPORTED_MULTI_PROTOCOLS, SUPPORTED_MULTI_PROTOCOLS
 
+    # 反向前提：本轮补齐的 ddr5/spi/ethernet 必须**在**支持列表里，且能真正
+    # 生成模板。这段放在这里（不依赖 verilator 的套件里）而不是只放在
+    # 「真实跑仿真」的用例中 —— 否则零 EDA 环境下这几个 emit 函数永不被调用，
+    # Layer 4 覆盖率门禁会判未覆盖（实测踩中：176/178，spi/ethernet 未覆盖）。
+    for _proto, _ports in (
+        ("ddr5", "  output logic ddr5_ck_t, output logic ddr5_ck_c,\n"
+                 "  output logic ddr5_cs_n, output logic ddr5_act_n,\n"
+                 "  output logic [6:0] ddr5_ca, output logic [1:0] ddr5_ba,\n"
+                 "  output logic [1:0] ddr5_bg, inout wire [15:0] ddr5_dq,\n"
+                 "  output logic ddr5_rd_valid\n"),
+        ("spi", "  output logic spi_sclk, output logic spi_cs_n,\n"
+                "  output logic spi_mosi, input logic spi_miso\n"),
+        ("ethernet", "  input logic gmii_rx_dv, input logic [7:0] gmii_rx_data,\n"
+                     "  output logic gmii_tx_en, output logic [7:0] gmii_tx_data\n"),
+    ):
+        assert _proto in SUPPORTED_MULTI_PROTOCOLS, (_proto, SUPPORTED_MULTI_PROTOCOLS)
+        with tempfile.TemporaryDirectory() as _td:
+            _f = Path(_td) / f"{_proto}.sv"
+            _f.write_text(
+                "`timescale 1ns/1ps\n"
+                f"module {_proto}_probe (\n"
+                "  input logic clk, input logic rst_n,\n"
+                + _ports +
+                ");\nendmodule\n", encoding="utf-8")
+            _em = emit_protocol_testbench(str(_f), str(Path(_td) / "tb"), _proto)
+            assert _em["ok"], (_proto, str(_em.get("error"))[:300])
+            assert _em["data"]["protocol"] == _proto, _em["data"]["protocol"]
+            _tb = Path(_em["data"]["artifacts"]["sv_testbench"])
+            assert _tb.is_file() and _tb.suffix == ".sv", _tb
+            assert "int            errs = 0;" in _tb.read_text(encoding="utf-8"), _proto
+
     rtl = (
         "module axi_master_dut (\n"
         "  input  logic        aclk,\n"
@@ -1268,8 +1299,11 @@ def test_master_role_is_explained_on_direction_mismatch() -> None:
         err = str(r.get("error"))
         assert "master" in err, err[:400]
         assert "slave" in err, err[:400]
-        # 必须解释「模板是从设备视角」
-        assert "template" in err.lower(), err[:400]
+        # 必须解释「TB 扮演对端角色」。文案改用 testbench 而非笼统的 template，
+        # 并针对每个协议给准确角色（APB 是 bus slave，SPI 是 SPI slave，
+        # Ethernet 是 link partner）—— 旧文案一律说 "bus slave" 会误导。
+        assert "testbench" in err.lower(), err[:400]
+        assert "bus slave" in err.lower(), err[:400]
         d = r.get("data") or {}
         assert d.get("role") == "master", d
         assert d.get("direction_mismatches"), d
@@ -1400,6 +1434,222 @@ endmodule
         assert rb["ok"] is False, "direction mismatch must be rejected before emit"
         assert "tready" in (rb.get("error") or "").lower(), rb.get("error")
 
+def test_ddr5_spi_ethernet_templates_run_and_detect_faults() -> None:
+    """新增的 ddr5 / spi / ethernet 三个模板：真实跑通 + 能抓住真实故障。
+
+    三个协议都不能复用既有总线模板，各有独立语义：
+      * DDR5 —— CA 总线编码命令（不再像 DDR4 用 adr 高位）、差分 CK 必须
+        互补、rd_valid 必须与读命令对齐；
+      * SPI  —— 无地址无 ready，靠 CS_n 成帧 + SCLK 逐位移位，全双工；
+        帧内 SCLK 沿数必须 == 8 位；
+      * Ethernet —— 收发双通道、tx_en 流式成帧、最小帧 60 字节硬约束。
+
+    这里既验证「合法 DUT 跑绿」，也验证「故障 DUT 必须 FAIL」——只测前者
+    等于没测（模板可能在什么都看不出来的时候也打印 PASS）。
+
+    首次实现时踩到并已修复的真实问题：
+      1. SPI 空闲时钟检查在 CS_n 刚拉高那一拍误报 —— Mode0 master 收尾时要把
+         SCLK 从 1 拉回 0，那是合法的，需给 2 拍回落窗口。
+      2. 三个协议的方向表缺失，导致 TREADY/MISO 之类写反的 DUT 不会被拦，
+         而是生成一个永远等不到响应的 TB（挂死而不报错）。
+      3. 错误文案硬编码 "acts as a bus slave"，对 SPI/Ethernet 误导 —— 它们
+         的 TB 角色是「从设备」和「链路对端」，不是总线从机。
+    """
+    print("coverage: ddr5/spi/ethernet templates run & detect faults")
+    import shutil as _shutil
+
+    # 只认 PATH —— 必须与实际调用口径一致。runner 脚本内部走 `verilator`
+    # 命令（PATH 查找）；若这里额外回退到 ~/.local/... 的**绝对路径**，会出现
+    # 「探测说可用、runner 却跑不起来」的不一致：在人为隔离 PATH 的零 EDA
+    # 环境里，测试不去跳过反而 hard-fail（axi4_stream 那个测试踩过同样的坑）。
+    vlt = _shutil.which("verilator")
+    if not vlt:
+        print("  (structure verified; skipped real Verilator runs: not installed)")
+        return
+
+    from fpga_toolbox.protocol_tb_emitter import SUPPORTED_MULTI_PROTOCOLS
+
+    # 三类协议都必须已注册（此前只在 canonical_iface 里，emitter 报 no template）
+    for proto in ("ddr5", "spi", "ethernet", "axi4_stream"):
+        assert proto in SUPPORTED_MULTI_PROTOCOLS, (proto, SUPPORTED_MULTI_PROTOCOLS)
+
+    good = {
+        "ddr5": """`timescale 1ns/1ps
+module ddr5_ok (
+  input  logic clk, input logic rst_n,
+  output logic ddr5_ck_t, output logic ddr5_ck_c, output logic ddr5_cs_n,
+  output logic ddr5_act_n,
+  output logic [6:0] ddr5_ca, output logic [1:0] ddr5_ba, output logic [1:0] ddr5_bg,
+  inout  wire  [15:0] ddr5_dq, output logic ddr5_dqs_t, output logic ddr5_dqs_c,
+  output logic ddr5_rd_valid
+);
+  logic [7:0] cyc;
+  assign ddr5_ck_t = clk; assign ddr5_ck_c = ~clk;
+  assign ddr5_dqs_t = 1'b1; assign ddr5_dqs_c = 1'b0;
+  assign ddr5_dq = 16'hzzzz;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin cyc <= 0; ddr5_cs_n <= 1; ddr5_act_n <= 1; ddr5_ca <= 0;
+                   ddr5_ba <= 0; ddr5_bg <= 0; ddr5_rd_valid <= 0; end
+    else begin
+      cyc <= cyc + 1;
+      case (cyc)
+        8'd5:  begin ddr5_cs_n <= 0; ddr5_act_n <= 0; ddr5_ca <= 7'h11; end
+        8'd6:  begin ddr5_cs_n <= 1; ddr5_act_n <= 1; end
+        8'd10: begin ddr5_cs_n <= 0; ddr5_act_n <= 1; ddr5_ca <= 7'h21; end  // RD
+        8'd11: begin ddr5_cs_n <= 1; end
+        8'd20: begin ddr5_rd_valid <= 1; end
+        8'd21: begin ddr5_rd_valid <= 0; end
+        default: ;
+      endcase
+    end
+  end
+endmodule
+""",
+        "spi": """`timescale 1ns/1ps
+module spi_ok (
+  input  logic clk, input logic rst_n,
+  output logic spi_sclk, output logic spi_cs_n, output logic spi_mosi,
+  input  logic spi_miso
+);
+  logic [2:0] div;
+  logic [3:0] bitn;
+  logic       busy;
+  logic       started;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      div <= 0; bitn <= 0; spi_sclk <= 0; spi_cs_n <= 1; spi_mosi <= 0;
+      busy <= 1; started <= 0;
+    end else if (busy) begin
+      if (!started) begin
+        started <= 1; spi_cs_n <= 0;   // 帧起始：拉低片选
+      end else begin
+        div <= div + 1;
+        if (div == 3'(3)) begin
+          div <= 0;
+          if (!spi_sclk) spi_sclk <= 1;
+          else begin
+            spi_sclk <= 0;
+            spi_mosi <= ~spi_mosi;
+            if (bitn == 4'(7)) begin bitn <= 0; busy <= 0; spi_cs_n <= 1; end
+            else bitn <= bitn + 1;
+          end
+        end
+      end
+    end
+  end
+endmodule
+""",
+        "ethernet": """`timescale 1ns/1ps
+module eth_ok (
+  input  logic clk, input logic rst_n,
+  input  logic gmii_rx_dv, input logic [7:0] gmii_rx_data,
+  output logic gmii_tx_en, output logic [7:0] gmii_tx_data
+);
+  assign gmii_tx_en = gmii_rx_dv;
+  assign gmii_tx_data = gmii_rx_data;
+endmodule
+""",
+    }
+    faults = {
+        "spi": """`timescale 1ns/1ps
+module spi_bad (
+  input  logic clk, input logic rst_n,
+  output logic spi_sclk, output logic spi_cs_n, output logic spi_mosi,
+  input logic spi_miso
+);
+  // 帧内只给 4 个 SCLK 沿（帧截断），空闲时乱跳
+  logic [3:0] c;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin c <= 0; spi_sclk <= 0; spi_cs_n <= 1; spi_mosi <= 0; end
+    else begin
+      c <= c + 1;
+      if (c < 8) begin spi_cs_n <= 0; spi_sclk <= c[0]; end
+      else begin spi_cs_n <= 1; spi_sclk <= c[1]; end
+    end
+  end
+endmodule
+""",
+        "ethernet": """`timescale 1ns/1ps
+module eth_bad (
+  input  logic clk, input logic rst_n,
+  input  logic gmii_rx_dv, input logic [7:0] gmii_rx_data,
+  output logic gmii_tx_en, output logic [7:0] gmii_tx_data
+);
+  // 发出 5 字节超短帧（远低于 60 字节最小帧）
+  logic [3:0] c;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin c <= 0; gmii_tx_en <= 0; gmii_tx_data <= 0; end
+    else begin
+      c <= c + 1;
+      gmii_tx_en <= (c < 5);
+      gmii_tx_data <= {{4'h0, c}};
+    end
+  end
+endmodule
+""",
+    }
+
+    # 先做**纯 Python** 结构断言：模板生成本身不需要 Verilator。若把这段和
+    # 真实仿真绑在一起、无 verilator 时整体 return，零 EDA 环境下
+    # _emit_spi_tb / _emit_ethernet_tb / _emit_ddr5_tb 一次都不会被调用，
+    # Layer 4 覆盖率门禁会记成未覆盖而失败（与 axi4_stream 模板同一个坑）。
+    with tempfile.TemporaryDirectory() as _td0:
+        for _proto in ("ddr5", "spi", "ethernet"):
+            _f = Path(_td0) / f"s_{_proto}.sv"
+            _f.write_text(good[_proto], encoding="utf-8")
+            _r = call_tool("emit_testbench", {
+                "rtl_file": str(_f), "out_dir": str(Path(_td0) / f"o_{_proto}"),
+                "protocol": _proto})
+            assert _r["ok"], (_proto, str(_r.get("error"))[:300])
+            _txt = Path(_r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+            # 模块名必须与 runner 的 --top-module 一致
+            assert f"_{_proto};" in _txt, (_proto, _txt[:200])
+            # errs 必须是 int（logic 溢出会掩盖失败）
+            assert "int            errs = 0;" in _txt, (_proto, "errs must be int")
+
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+
+        def _emit_run(proto: str, tag: str, src: str):
+            dut = tdp / f"{tag}.sv"
+            dut.write_text(src, encoding="utf-8")
+            r = call_tool("emit_testbench", {
+                "rtl_file": str(dut), "out_dir": str(tdp / f"o_{tag}"),
+                "protocol": proto})
+            assert r["ok"], (proto, tag, str(r.get("error"))[:300])
+            run = Path(r["data"]["artifacts"]["sim_script"])
+            cp = subprocess.run(
+                ["bash", str(run)], cwd=str(run.parent), capture_output=True,
+                text=True, env={**os.environ, "VERILATOR": vlt}, timeout=900)
+            return cp.returncode, cp.stdout + cp.stderr
+
+        # ---- 合法 DUT 必须跑绿 ----
+        for proto, src in good.items():
+            rc, log = _emit_run(proto, f"{proto}_ok", src)
+            assert rc == 0, (proto, log[-900:])
+            assert f"PASS: {proto}" in log, (proto, log[-900:])
+
+        # ---- 故障 DUT 必须 FAIL（否则模板只是"跑完"，没有"验证"）----
+        for proto, src in faults.items():
+            rc, log = _emit_run(proto, f"{proto}_bad", src)
+            assert rc != 0, (proto, "faulty DUT must fail; log tail:", log[-900:])
+            assert f"FAIL: {proto}" in log or "status=FAIL" in log, (proto, log[-900:])
+
+        # ---- 方向写反必须在生成前被拦（否则会生成挂死的 TB）----
+        baddir = tdp / "baddir.sv"
+        baddir.write_text(
+            "module baddir (input logic clk, input logic rst_n,\n"
+            "  output logic spi_sclk, output logic spi_cs_n,\n"
+            "  output logic spi_mosi, output logic spi_miso); endmodule\n",
+            encoding="utf-8")
+        rb = call_tool("emit_testbench", {
+            "rtl_file": str(baddir), "out_dir": str(tdp / "o_bd"), "protocol": "spi"})
+        assert rb["ok"] is False, "miso direction mismatch must be rejected"
+        # 文案要说清 TB 扮演的是 SPI 从设备，而不是笼统的 "bus slave"
+        err = (rb.get("error") or "").lower()
+        assert "spi slave" in err or "peripheral" in err, rb.get("error")
+
+
 
 def main() -> int:
     test_protocol_tb_emitter_axi4_ahb_ddr4()
@@ -1421,6 +1671,7 @@ def main() -> int:
     test_multiple_candidate_modules_are_disclosed()
     test_master_role_is_explained_on_direction_mismatch()
     test_axi4_stream_template_runs_and_catches_stuck_ready()
+    test_ddr5_spi_ethernet_templates_run_and_detect_faults()
     print("ALL test_protocol_emitter_coverage.py TESTS PASSED")
     return 0
 
