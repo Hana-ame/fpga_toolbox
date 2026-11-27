@@ -163,13 +163,24 @@ def _collect_waveforms(dirs: List[Path]) -> List[Dict[str, Any]]:
 
 
 def _collect_logs(dirs: List[Path], exclude: set[str]) -> List[Dict[str, Any]]:
-    """收集完整日志文件（.log / .txt / .rpt），排除已作为波形处理的文件。"""
+    """收集完整日志文件（.log / .txt / .rpt），排除已作为波形处理的文件。
+
+    去重是必需的：调用方传的目录列表常出现重叠（脚本所在目录与 log_dir 相同、
+    或一个目录是另一个的父目录），旧实现逐个 `rglob` 直接 append，于是同一个
+    文件被记录多次 —— 实测 `run_sim(sim_script=<dir>/s.sh, log_dir=<同目录>)`
+    返回两条完全相同的 `log_files` 条目（缺陷 193）。按 **realpath** 去重
+    （符号链接/相对路径写法不同但指向同一文件时也要合并）。
+    """
     found: List[Dict[str, Any]] = []
+    seen: set[str] = set()
     for d in dirs:
         if not d.is_dir():
             continue
         for p in sorted(d.rglob("*")):
-            if not p.is_file() or str(p.resolve()) in exclude:
+            if not p.is_file():
+                continue
+            key = str(p.resolve())
+            if key in exclude or key in seen:
                 continue
             if p.suffix.lower() not in (".log", ".txt", ".rpt"):
                 continue
@@ -177,6 +188,7 @@ def _collect_logs(dirs: List[Path], exclude: set[str]) -> List[Dict[str, Any]]:
                 size = p.stat().st_size
             except OSError:
                 size = 0
+            seen.add(key)
             found.append({"path": str(p), "size_bytes": size, "empty": size == 0})
     return found
 

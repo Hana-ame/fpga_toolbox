@@ -178,3 +178,4 @@
 - [113 · 空报告宣称 PASS；多接口 TB 未连接端口风险未披露](113-empty-report-and-multibus-ports.md)
 - [114 · coverage/mutation summary 的非法字段原样透传](114-summary-payload-type-check.md)
 - [115 · 无预期套件时不核对；STARTED 漏成没失败](115-suite-verification-without-expectations.md)
+- [116 · log_files 出现重复条目](116-log-files-dedupe.md)

@@ -5212,6 +5212,48 @@ def test_suite_verification_works_without_expected_list() -> None:
             assert ident["all_verified"] is True, ident
 
 
+def test_log_files_are_deduplicated() -> None:
+    """缺陷 193: 重叠的搜索目录导致 log_files 出现重复条目。
+
+    `run_sim` 的搜索目录是 `[脚本所在目录] + [log_dir]`。当两者相同（或一个是
+    另一个的父目录）时，旧 `_collect_logs` 逐个 `rglob` 直接 append，同一个
+    文件被记录多次：
+
+        run_sim(sim_script=<dir>/s.sh, log_dir=<同一目录>)
+        → log_files 里两条完全相同的 path
+
+    修复：按 realpath 去重（符号链接/相对路径写法不同但指向同一文件时也合并）。
+    """
+    print("coverage: log files are deduplicated")
+    import os
+
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sh = root / "s.sh"
+        sh.write_text(
+            "#!/bin/bash\n"
+            'echo "== sim: apb =="\n'
+            'echo "PASS: apb ok"\n', encoding="utf-8")
+        sh.chmod(0o755)
+
+        r = call_tool("run_sim", {
+            "sim_script": str(sh),
+            "log_dir": str(root),          # 与脚本目录相同 → 必然重叠
+            "suite": "apb_dedup",
+        })
+        if not r["ok"]:
+            # 无 Verilator 等环境下 run_sim 可能整体失败，跳过产物断言
+            return
+        logs = (r["data"] or {}).get("log_files") or []
+        paths = [x["path"] for x in logs]
+        # 关键：不能有重复
+        assert len(paths) == len(set(os.path.realpath(p) for p in paths)), paths
+        # 且确实记录了本次的日志
+        assert any("apb_dedup" in os.path.basename(p) for p in paths), paths
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5312,6 +5354,7 @@ def main() -> int:
     test_empty_report_cannot_claim_pass()
     test_summary_payloads_are_type_checked()
     test_suite_verification_works_without_expected_list()
+    test_log_files_are_deduplicated()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
