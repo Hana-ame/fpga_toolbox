@@ -739,13 +739,19 @@ def _parse_with_slang(
                     # [n:m]）错误回退成 1 位。
                     tstr = re.sub(r"^\d+\s+", "", tstr)          # 剥地址前缀
                     tstr = re.sub(r"^\w+\.", "", tstr)            # 剥模块限定符 complex.
-                    # 解包数组端口（如 T din[N]）：slang 把解包维度也写进 type
-                    # 的 [0:N-1]，packed 维度在前、解包在后。宽度应取二者乘积，
-                    # 但这里只取 packed 部分（保守：不重复计解包维度）。
-                    # 多维 packed：`logic[1:0][7:0]` 的总位宽是各维**乘积**
-                    # （=16）。旧实现 re.search 只取第一维 -> 2 位，实测
-                    # `input logic [1:0][7:0] d2d` 被报成 width=2（真相 16）。
-                    _rngs = re.findall(r"\[(\d+):(\d+)\]", tstr)
+                    # 端口位宽只算 **packed** 维度。slang 的 type 字段用 `$`
+                    # 前缀明确标记 unpacked 维度：
+                    #     logic[7:0]$[0:3]   → packed [7:0]=8 位，unpacked [0:3]
+                    #     logic$[0:1]        → 无 packed 维度，标量 1 位
+                    #     logic[1:0][1:0]    → 两个 packed 维度，乘积 = 4
+                    # 旧实现用 `re.findall(r"\[(\d+):(\d+)\]")` 把 unpacked
+                    # 维度也算进去，于是 `input logic [7:0] a [0:3]` 被报成
+                    # 8*4=32 位（真相 8 位）——与 builtin 后端不一致，且下游 TB
+                    # 会按 32 位连线（WIDTHTRUNC/WIDTHEXPAND，Verilator 默认
+                    # warning-as-error）。缺陷 186。
+                    # 必须先剥掉 `$[...]`（unpacked）再取 packed 维度。
+                    _packed = re.sub(r"\$\s*\[(?:\d+):(?:\d+)\]", "", tstr)
+                    _rngs = re.findall(r"\[(\d+):(\d+)\]", _packed)
                     if _rngs:
                         w = 1
                         for _hi, _lo in _rngs:
@@ -870,10 +876,16 @@ def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
     except Exception:
         return
     builtin_ports = {}
+    # 普通端口的位宽（用于补齐 slang 的 `<error>` 位宽）。只收位宽 > 0 的，
+    # 因为 builtin 的 0 表示「自己也解析不出来」（typedef / 未知类型），
+    # 拿 0 去覆盖没有意义。
+    builtin_widths: Dict[str, Tuple[int, str]] = {}
     for bm in builtin_mods:
         for bp in bm.ports:
             if bp.is_interface and bp.interface_type:
                 builtin_ports.setdefault(bp.name, (bp.interface_type, bp.modport))
+            elif not bp.is_interface and bp.width > 0:
+                builtin_widths.setdefault(bp.name, (bp.width, bp.width_expr))
 
     enriched = []
     changed = False
@@ -886,6 +898,24 @@ def _enrich_from_builtin(rtl_path: Path, slang_mods: List[SVModuleAST]) -> None:
                     name=sp_.name, direction=sp_.direction, width_expr=sp_.width_expr,
                     width=sp_.width, line=sp_.line, is_interface=True,
                     interface_type=itype, modport=modp,
+                )
+                changed = True
+            elif (not sp_.is_interface and sp_.width <= 0
+                  and sp_.name in builtin_widths):
+                # slang 对「端口位宽引用了**模块体内**声明的 parameter/
+                # localparam」这种合法写法会把 type 解析成 `<error>`，于是端口
+                # 位宽退化成 0（缺陷 185）。实测：
+                #   module m (input logic [W-1:0] p_i);
+                #     parameter W = 12;
+                #   builtin → 12，slang → 0
+                # 参数本身 slang 是能读到的（params={'W':12}），只是端口类型
+                # 求值失败。builtin 的 token 解析对这类表达式反而正确，因此用
+                # builtin 的位宽补齐；builtin 也解不出（=0）时保持 0（未知）。
+                _w, _wexpr = builtin_widths[sp_.name]
+                new_ports[i] = SVPortAST(
+                    name=sp_.name, direction=sp_.direction,
+                    width_expr=_wexpr or sp_.width_expr, width=_w,
+                    line=sp_.line,
                 )
                 changed = True
         enriched.append(SVModuleAST(sm.name, sm.file_path, sm.parameters, tuple(new_ports), sm.parser_backend))

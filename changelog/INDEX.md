@@ -174,3 +174,4 @@
 - [109 · 绑定顺序派生、DDR5 声明、新架构文档](109-bind-order-derivation-and-docs.md)
 - [110 · draft 只导出 AXI/APB 且非 AXI 契约无法校验](110-draft-exports-all-protocols.md)
 - [111 · builtin 解析器 P0（typedef 位宽/局部参数）与 CI 门禁缺口](111-builtin-parser-typedef-and-localparam.md)
+- [112 · slang 后端位宽两处退化：模块体参数、unpacked 维度](112-slang-width-parity.md)

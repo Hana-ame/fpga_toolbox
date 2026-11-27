@@ -4898,6 +4898,140 @@ def test_localparam_ternary_and_body_declared_params() -> None:
             assert got["data_i"] == want_dw, (name, got)
 
 
+def test_parser_backends_agree_on_widths() -> None:
+    """缺陷 185: slang 后端对「模块体声明的 parameter」引用的端口位宽退化为 0。
+
+    ```systemverilog
+    module m (
+      input  logic [W-1:0] p_i,
+      output logic [D-1:0] p_o
+    );
+      parameter W = 12;
+      localparam D = 24;
+    endmodule
+    ```
+
+    builtin → p_i=12 / p_o=24（token 解析能求值）
+    slang   → p_i=0  / p_o=0 （AST 里该端口的 `type` 是 `<error>`）
+
+    slang 的 `members` 里实际**能**读到 `Parameter name=W value=12`，只是端口
+    类型求值失败 → type 变 `<error>` → 位宽退化成 0。参数声明在模块头 `#()`
+    里时两个后端都正确，只有「模块体参数 + 端口位宽引用」这条路径不一致。
+
+    修复：`_enrich_from_builtin` 在 slang 给 width<=0 时用 builtin 的位宽补齐
+    （builtin 也是 0 则保持 0 = 未知，不用 0 覆盖 0）。
+    """
+    print("coverage: parser backends agree on widths")
+    from fpga_toolbox.core.sv_parser import parse_sv_file
+
+    body_param = (
+        "module fz_body (\n"
+        "  input  logic [W-1:0] p_i,\n"
+        "  output logic [D-1:0] p_o\n"
+        ");\n"
+        "  parameter W = 12;\n"
+        "  localparam D = 24;\n"
+        "endmodule\n")
+    hdr_param = (
+        "module fz_hdr #(\n"
+        "  parameter W = 12,\n"
+        "  parameter D = 24\n"
+        ") (\n"
+        "  input  logic [W-1:0] p_i,\n"
+        "  output logic [D-1:0] p_o\n"
+        ");\n"
+        "endmodule\n")
+
+    with tempfile.TemporaryDirectory() as td:
+        # 模块体参数：两个后端都必须给出 12 / 24
+        f1 = Path(td) / "body.sv"
+        f1.write_text(body_param, encoding="utf-8")
+        for backend in _available_backends():
+            mods = parse_sv_file(f1, backend=backend)
+            assert mods, backend
+            got = {p.name: p.width for p in mods[0].ports}
+            assert got.get("p_i") == 12, (backend, got)
+            assert got.get("p_o") == 24, (backend, got)
+
+        # 模块头参数：两个后端本来就一致，确认没被补齐逻辑破坏
+        f2 = Path(td) / "hdr.sv"
+        f2.write_text(hdr_param, encoding="utf-8")
+        for backend in _available_backends():
+            mods = parse_sv_file(f2, backend=backend)
+            assert mods, backend
+            got = {p.name: p.width for p in mods[0].ports}
+            assert got.get("p_i") == 12, (backend, got)
+            assert got.get("p_o") == 24, (backend, got)
+
+        # 一致性总检：多形态声明在可用后端之间不得有差异
+        if set(_available_backends()) >= {"builtin", "slang"}:
+            forms = {
+                "logic": "input  logic [7:0] a_i, output logic [15:0] a_o",
+                "signed": "input  logic signed [5:0] s_i",
+                "atoms": "input int i32, input byte i8, input shortint i16, input longint i64",
+                "multidim": "input logic [1:0][7:0] m16, output logic [3:0][3:0] m16o",
+                "reverse": "input logic [0:7] rev",
+                "inout": "inout wire [15:0] dq",
+                "names": "input logic [7:0] a, b, c, output logic [7:0] d, e",
+                "implicit": "input [7:0] plain_i, output [15:0] plain_o",
+            }
+            for tag, ports in forms.items():
+                f = Path(td) / f"f_{tag}.sv"
+                f.write_text(f"module f_{tag} (\n  {ports}\n);\nendmodule\n",
+                             encoding="utf-8")
+                b = {p.name: (p.direction, p.width)
+                     for p in parse_sv_file(f, backend="builtin")[0].ports}
+                sl = {p.name: (p.direction, p.width)
+                      for p in parse_sv_file(f, backend="slang")[0].ports}
+                diff = [(k, b.get(k), sl.get(k)) for k in set(b) | set(sl)
+                        if b.get(k) != sl.get(k)]
+                assert not diff, (tag, diff)
+
+
+def test_unpacked_array_ports_use_packed_width_only() -> None:
+    """缺陷 186: slang 后端把 unpacked 维度也算进端口位宽。
+
+    ```systemverilog
+    input logic [7:0] a [0:3]     // packed 8 位，unpacked 4 个元素
+    input logic       g [2]        // 无 packed 维度 → 标量 1 位
+    ```
+
+    | 端口 | builtin | slang（旧） |
+    |---|---|---|
+    | `a` | 8 ✓ | **32**（8×4）|
+    | `b` `[3:0] b [0:1]` | 4 ✓ | **8** |
+    | `g` `g [2]` | 1 ✓ | **2** |
+
+    slang 的 type 字段其实用 `$` 前缀明确标记 unpacked 维度
+    （`logic[7:0]$[0:3]`），但旧实现用 `re.findall(r"\[(\d+):(\d+)\]")`
+    把两者都匹配到并相乘。端口位宽只应算 packed 部分 —— 否则下游 TB 按
+    32 位连线接 8 位端口，Verilator 报 WIDTHTRUNC/WIDTHEXPAND（默认
+    warning-as-error）。
+    """
+    print("coverage: unpacked array ports use packed width only")
+    from fpga_toolbox.core.sv_parser import parse_sv_file
+
+    src = (
+        "module fz_unp (\n"
+        "  input  logic [7:0]     a [0:3],\n"
+        "  output logic [15:0]    b [0:1],\n"
+        "  input  logic           g [2],\n"
+        "  input  logic [3:0][7:0] packed_only,\n"
+        "  input  logic [7:0]     mixed [0:1],\n"
+        "  output logic [1:0][1:0][1:0] triple\n"
+        ");\nendmodule\n")
+    want = {"a": 8, "b": 16, "g": 1, "packed_only": 32, "mixed": 8, "triple": 8}
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "unp.sv"
+        f.write_text(src, encoding="utf-8")
+        for backend in _available_backends():
+            mods = parse_sv_file(f, backend=backend)
+            assert mods, backend
+            got = {p.name: p.width for p in mods[0].ports}
+            for name, exp in want.items():
+                assert got.get(name) == exp, (backend, name, got)
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -4993,6 +5127,8 @@ def main() -> int:
     test_draft_yaml_exports_all_protocols_and_validates()
     test_builtin_parser_unknown_typedef_width()
     test_localparam_ternary_and_body_declared_params()
+    test_parser_backends_agree_on_widths()
+    test_unpacked_array_ports_use_packed_width_only()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 
