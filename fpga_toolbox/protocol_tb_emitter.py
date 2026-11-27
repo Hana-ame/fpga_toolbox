@@ -1713,8 +1713,10 @@ def emit_protocol_testbench(
                 f"the DUT also exposes a '{_u.get('protocol')}' interface (group "
                 f"'{_g}', {_u.get('signal_count')} signal(s)) that this testbench does "
                 "not drive or check. Its ports are left unconnected, so that part of "
-                "the DUT is not verified. Generate a separate testbench for it "
-                "(split the DUT or use a per-interface RTL wrapper)."
+                "the DUT is not verified - and in some tools unconnected multi-bus DUT "
+                "ports can even break elaboration (the emitted TB sets lint_off "
+                "PINMISSING for the same reason). Generate a separate testbench for it "
+                "(split the DUT, or wrap each interface in its own module)."
             ),
         })
     return ok_result(

@@ -5032,6 +5032,55 @@ def test_unpacked_array_ports_use_packed_width_only() -> None:
                 assert got.get(name) == exp, (backend, name, got)
 
 
+def test_empty_report_cannot_claim_pass() -> None:
+    """缺陷 188: 0 条检查 + overall_status=PASS 被判一致（零证据通过）。
+
+    W053 原本只在 `n > 0` 时检查「PASS 但无一条通过」，于是
+
+        {"checks": [], "overall_status": "PASS", "summary": {全部 0}}
+
+    得到 `consistency_ok=True`、零诊断 —— 一份没有任何证据行的报告宣称通过。
+    而同性质的「全部 SKIP 却 PASS」反倒会被 W053 抓到（`n > 0` 成立），
+    两种情形处理不一致。
+
+    修复：`n == 0` 且 overall=PASS 时同样报 W053。
+    """
+    print("coverage: empty report cannot claim pass")
+    from fpga_toolbox.registry import call_tool
+
+    def _render(rep):
+        with tempfile.TemporaryDirectory() as td:
+            return call_tool("render_visual_report", {
+                "report": rep,
+                "dep_graph": {"nodes": [], "edges": []},
+                "extracted_interfaces": [],
+                "out_html_path": str(Path(td) / "r.html")})
+
+    # 0 条检查 + PASS → 必须不一致
+    r = _render({"module": "m",
+                 "summary": {"total": 0, "passed": 0, "failed": 0},
+                 "checks": [], "overall_status": "PASS"})
+    assert r["ok"], str(r.get("error"))[:200]
+    assert r["data"]["consistency_ok"] is False, r["data"]
+    codes = [d.get("code") for d in (r.get("diagnostics") or [])]
+    assert "W053" in codes, codes
+
+    # 0 条检查 + FAIL → 不矛盾（什么都不做就是失败，合理）
+    r2 = _render({"module": "m",
+                  "summary": {"total": 0, "passed": 0, "failed": 0},
+                  "checks": [], "overall_status": "FAIL"})
+    assert r2["data"]["consistency_ok"] is True, r2["data"]
+    assert "W053" not in [d.get("code") for d in (r2.get("diagnostics") or [])]
+
+    # 正常 PASS 不受影响（不假报）
+    r3 = _render({"module": "m",
+                  "summary": {"total": 1, "passed": 1, "failed": 0},
+                  "checks": [{"rule_id": "r", "status": "PASS"}],
+                  "overall_status": "PASS"})
+    assert r3["data"]["consistency_ok"] is True, r3["data"]
+    assert "W053" not in [d.get("code") for d in (r3.get("diagnostics") or [])]
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5129,6 +5178,7 @@ def main() -> int:
     test_localparam_ternary_and_body_declared_params()
     test_parser_backends_agree_on_widths()
     test_unpacked_array_ports_use_packed_width_only()
+    test_empty_report_cannot_claim_pass()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

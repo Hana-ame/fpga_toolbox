@@ -85,7 +85,17 @@ def _check_report_data_consistency(report: Dict[str, Any],
                                 "dashboard would show two contradictory conclusions."),
                 })
     overall = str(report.get("overall_status", "")).strip().upper()
-    if overall == "PASS" and n > 0 and counted["PASS"] == 0:
+    # 0 条检查却宣称 PASS = 零证据通过，是最严重的一种矛盾。旧条件 `n > 0`
+    # 把这种情形整段跳过（实测 `checks=[] + overall_status=PASS` 得到
+    # consistency_ok=True、零诊断），而「全部 SKIP 却 PASS」反倒会被下面的
+    # W053 抓到 —— 两种同性质的问题处理不一致。
+    if overall == "PASS" and n == 0:
+        diags.append({
+            "severity": "WARNING", "code": "W053", "path": "report.overall_status",
+            "message": ("overall_status=PASS but the report contains no checks at all. "
+                        "A pass with zero evidence rows is not a verification result."),
+        })
+    elif overall == "PASS" and n > 0 and counted["PASS"] == 0:
         diags.append({
             "severity": "WARNING", "code": "W053", "path": "report.overall_status",
             "message": (f"overall_status=PASS but none of the {n} check(s) passed "
