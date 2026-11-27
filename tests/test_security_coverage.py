@@ -198,7 +198,7 @@ def test_security_hardening_injection_xss_verilator_hijack() -> None:
     """
     print("coverage: injection ($ vs \\Z, '..' paths), /tmp verilator hijack, report XSS")
     from fpga_toolbox.eda_campaign import generate_remote_run_script
-    from fpga_toolbox.eda_env import _is_owned_by_me, find_verilator
+    from fpga_toolbox.eda_env import _is_owned_by_me, find_verilator, parse_verilator_version
 
     # ---- 1) 末尾换行注入：四个参数都必须被拒 ----
     for args in (("host1\n", "t", "run.sh"), ("host1", "t\n", "run.sh"),
@@ -227,6 +227,23 @@ def test_security_hardening_injection_xss_verilator_hijack() -> None:
     assert v != "/tmp/verilator/bin/verilator", v
     # _is_owned_by_me 对非 /tmp 路径直接放行；对不存在的路径返回 False
     assert _is_owned_by_me("/nonexistent/verilator") is False
+
+    # ---- 3b) 版本解析是纯字符串函数，不该只在装了 verilator 时才被覆盖 ----
+    # 它此前唯一的调用点在 `probe_eda_env` 里、必须先成功执行 `verilator
+    # --version` 才到达，于是 CI（无 verilator）把这一个函数记成未覆盖，
+    # Layer 4 判 170/171 失败。直接测它既覆盖了函数，也固化了解析语义：
+    # 只认 `Verilator X.Y`，其它输出（Git 版本、banner、乱码）返回 None。
+    assert parse_verilator_version("Verilator 5.054 2026-11-01 rev v5.054") == (5, 54)
+    assert parse_verilator_version("Verilator 4.038 2020-12-01") == (4, 38)
+    # 兜底分支：无法识别时返回 None，绝不能瞎猜一个版本
+    for junk in ("", "verilator", "Verilator", "5.054", "V5.054", None):
+        try:
+            assert parse_verilator_version(junk) is None, junk
+        except AssertionError:
+            raise
+        except TypeError:
+            # 传 None 时 re.search 抛 TypeError 也算显式失败而非静默
+            pass
 
     # ---- 4a) XSS：所有输入字段都不得原样落进 HTML ----
     with tempfile.TemporaryDirectory() as td:
