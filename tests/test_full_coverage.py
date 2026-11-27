@@ -469,7 +469,8 @@ def test_mutation_target_containment() -> None:
         # 绝对路径越界
         spec_abs = wd / "m_abs.yaml"
         spec_abs.write_text(
-            f'mutations:\n  - id: M01\n    file: "{outside}"\n    old: "EXT_ORIG"\n    new: "MUT"\n',
+            # 单引号标量：Windows 绝对路径含反斜杠，双引号标量会被当成转义序列
+            f"mutations:\n  - id: M01\n    file: '{outside}'\n    old: EXT_ORIG\n    new: MUT\n",
             encoding="utf-8")
         # 全部变异都越界 => 一个都评估不到 => 必须 ok=False（分数未定义），
         # 而不是像旧实现那样报一个「0% 或 100%」的分数。这条同时锁住缺陷 113
@@ -4755,7 +4756,7 @@ def test_zero_eda_helper_and_slang_json_pipeline() -> None:
 
     from fpga_toolbox.core import sv_parser
     from fpga_toolbox.eda_env import parse_verilator_version
-    from fpga_toolbox.sim_runner import _collect_waveforms, _collect_logs
+    from fpga_toolbox.sim_runner import _collect_logs, _collect_waveforms
 
     # 1) parse_verilator_version
     assert parse_verilator_version("Verilator 5.054 2026-01-01 rev v5.054") == (5, 54)
