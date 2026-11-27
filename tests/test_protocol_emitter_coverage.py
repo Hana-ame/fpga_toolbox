@@ -1413,7 +1413,10 @@ endmodule
             run = Path(r["data"]["artifacts"]["sim_script"])
             assert run.is_file(), run
             cp = subprocess.run(
-                ["bash", str(run)], cwd=str(od), capture_output=True, text=True,
+                ["bash", str(run)], cwd=str(od), capture_output=True,
+                # 显式 UTF-8：Windows 的 text=True 走 locale（cp1252），
+                # Verilator 输出里的非 ASCII 会解码失败
+                encoding="utf-8", errors="replace",
                 env={**os.environ, "VERILATOR": vlt}, timeout=600)
             results[tag] = (cp.returncode, cp.stdout + cp.stderr)
         rc_good, log_good = results["good"]
@@ -1620,7 +1623,8 @@ endmodule
             run = Path(r["data"]["artifacts"]["sim_script"])
             cp = subprocess.run(
                 ["bash", str(run)], cwd=str(run.parent), capture_output=True,
-                text=True, env={**os.environ, "VERILATOR": vlt}, timeout=900)
+                encoding="utf-8", errors="replace",
+                env={**os.environ, "VERILATOR": vlt}, timeout=900)
             return cp.returncode, cp.stdout + cp.stderr
 
         # ---- 合法 DUT 必须跑绿 ----

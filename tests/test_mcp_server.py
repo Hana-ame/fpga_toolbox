@@ -189,8 +189,11 @@ def test_mcp_cli_subcommand_end_to_end() -> None:
     payload = "\n".join(json.dumps(m) for m in msgs) + "\n"
     cp = subprocess.run(
         [sys.executable, "-m", "fpga_toolbox", "serve-mcp"],
-        cwd=str(ROOT), input=payload, capture_output=True, text=True, timeout=120,
+        cwd=str(ROOT), input=payload, capture_output=True, timeout=120,
         env={**os.environ, "PYTHONPATH": str(ROOT)},
+        # 显式 UTF-8：Windows 上 text=True 用 locale 编码（cp1252）解码，
+        # 工具返回体里的中文诊断会抛 UnicodeDecodeError（CI Windows job 实测）。
+        encoding="utf-8", errors="replace",
     )
     assert cp.returncode == 0, (cp.returncode, cp.stderr[-500:])
     lines = [ln for ln in cp.stdout.splitlines() if ln.strip()]

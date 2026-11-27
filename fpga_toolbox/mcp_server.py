@@ -191,10 +191,31 @@ class _RpcError(Exception):
 _NO_RESPONSE = object()
 
 
+def _force_utf8(stream: TextIO) -> TextIO:
+    """把 stdio 流强制重配成 UTF-8。
+
+    MCP 规定 JSON-RPC 消息是 UTF-8。但 Windows 上 `sys.stdin`/`sys.stdout`
+    默认用 **locale 编码**（常见 cp1252），任何非 ASCII 字节都会抛
+
+        UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 ...
+
+    实测 CI Windows job：`tools/call` 返回体里有中文诊断信息，读取时直接崩，
+    而 Linux/macOS 上默认就是 UTF-8，本地永远复现不出来。
+    `reconfigure` 只对 TextIOWrapper 有效；调用方传入的 StringIO（单测）没有
+    该方法，用 hasattr 兜底。
+    """
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # 流已关闭/不支持时保持原样
+            pass
+    return stream
+
+
 def serve(stdin: Optional[TextIO] = None, stdout: Optional[TextIO] = None) -> int:
     """主循环：逐行读 JSON-RPC 消息，逐行写响应（newline-delimited）。"""
-    stdin = stdin or sys.stdin
-    stdout = stdout or sys.stdout
+    stdin = _force_utf8(stdin) if stdin is not None else _force_utf8(sys.stdin)
+    stdout = _force_utf8(stdout) if stdout is not None else _force_utf8(sys.stdout)
     server = McpServer()
     for line in stdin:
         line = line.strip()
