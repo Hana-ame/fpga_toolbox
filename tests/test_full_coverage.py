@@ -409,13 +409,22 @@ def test_install_git_hook_uses_git_toplevel() -> None:
     body = script.read_text(encoding="utf-8")
     assert "git rev-parse --show-toplevel" in body, "should locate repo via git rev-parse"
 
-    # Windows runner 的 PATH 上没有 bash（git-bash 不在 PATH），无法执行 shell 语法检查与端到端
-    if shutil.which("bash") is None:
-        print("coverage: install_git_hook.sh 静态断言通过；无 bash，跳过 bash -n 与端到端")
+    # Windows runner 的 PATH 上可能只有 WSL 的 bash 桩（`bash` 存在但一跑就报
+    # "Windows Subsystem for Linux has no installed distributions"），因此不能只看
+    # shutil.which，必须实跑一次确认可用，否则跳过 shell 语法检查与端到端。
+    bash = shutil.which("bash")
+    if bash:
+        try:
+            if subprocess.run([bash, "-c", "exit 0"], capture_output=True, timeout=30).returncode != 0:
+                bash = None
+        except Exception:
+            bash = None
+    if not bash:
+        print("coverage: install_git_hook.sh 静态断言通过；无可用的 bash，跳过 bash -n 与端到端")
         return
 
     # 语法检查
-    assert subprocess.run(["bash", "-n", str(script)]).returncode == 0, "bash -n failed"
+    assert subprocess.run([bash, "-n", str(script)]).returncode == 0, "bash -n failed"
 
     # 端到端：在临时 git 仓库的【子目录】运行，应成功装上 hook
     with tempfile.TemporaryDirectory() as td:
@@ -425,7 +434,7 @@ def test_install_git_hook_uses_git_toplevel() -> None:
         sub.mkdir(parents=True, exist_ok=True)
         # 把脚本复制到子目录运行（模拟用户从别处执行）
         (sub / "install_git_hook.sh").write_bytes(script.read_bytes())
-        r = subprocess.run(["bash", "install_git_hook.sh"], cwd=str(sub),
+        r = subprocess.run([bash, "install_git_hook.sh"], cwd=str(sub),
                            capture_output=True, text=True)
         assert r.returncode == 0, f"rc={r.returncode} {r.stderr[:200]}"
         hook = wd / ".git" / "hooks" / "pre-commit"
@@ -434,7 +443,7 @@ def test_install_git_hook_uses_git_toplevel() -> None:
 
     # 非 git 目录 → 退出码 1 + 可读提示
     with tempfile.TemporaryDirectory() as td:
-        r = subprocess.run(["bash", str(script)], cwd=td, capture_output=True, text=True)
+        r = subprocess.run([bash, str(script)], cwd=td, capture_output=True, text=True)
         assert r.returncode == 1, f"rc={r.returncode}"
         assert "Not a git repository" in r.stderr, r.stderr[:200]
 
@@ -4744,9 +4753,9 @@ def test_zero_eda_helper_and_slang_json_pipeline() -> None:
     import json as _json
     from unittest import mock
 
+    from fpga_toolbox.core import sv_parser
     from fpga_toolbox.eda_env import parse_verilator_version
     from fpga_toolbox.sim_runner import _collect_waveforms, _collect_logs
-    from fpga_toolbox.core import sv_parser
 
     # 1) parse_verilator_version
     assert parse_verilator_version("Verilator 5.054 2026-01-01 rev v5.054") == (5, 54)
