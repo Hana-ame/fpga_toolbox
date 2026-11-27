@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -1278,6 +1280,99 @@ def test_master_role_is_explained_on_direction_mismatch() -> None:
             rs = emit_protocol_testbench(str(slave), str(root / "tb2"), "apb")
             assert rs["ok"] is True, str(rs.get("error"))[:300]
 
+def test_axi4_stream_template_runs_and_catches_stuck_ready() -> None:
+    """axi4_stream 模板：真实 Verilator 跑通 + 卡死 DUT 必须 FAIL。
+
+    这个模板是本轮新增的（此前 axi4_stream 被分类器识别但 emitter 报
+    "no testbench template"）。首次实现踩到两个真实问题，都固化在断言里：
+
+    1. **模块名必须与 runner 的 --top-module 一致**。runner 统一用
+       `tb_{mod}_{proto}`，模板若自己起名 `tb_{mod}_axis`，Verilator 直接报
+       "Specified --top-module ... was not found in design"，构建失败。
+    2. **errs 必须是 int，不能是 `logic`**。`logic errs` 只有 1 位，累加偶数
+       次错误会溢出回 0 —— 一个完全卡死的 DUT 产生 5 次握手超时 + 1 次 beat
+       计数不符共 6 次错误，反而打印 "PASS" 并 rc=0。这正是本工具最该防的
+       假通过，却在自己的模板里复现了。
+    """
+    print("coverage: axi4_stream template runs & catches stuck TREADY")
+    import shutil as _shutil
+    from pathlib import Path as _P
+
+    vlt = _shutil.which("verilator") or "/usr/local/bin/verilator"
+    if not _shutil.which("verilator"):
+        for cand in (_P.home() / ".local/verilator/bin/verilator",):
+            if cand.is_file():
+                vlt = str(cand)
+                break
+    if not _P(vlt).is_file():
+        print("  (skipped: verilator not installed)")
+        return
+
+    good = """`timescale 1ns/1ps
+module axs_fifo (
+  input  logic          aclk,
+  input  logic          aresetn,
+  input  logic [31:0]   s_axis_tdata,
+  input  logic          s_axis_tvalid,
+  output logic          s_axis_tready,
+  input  logic          s_axis_tlast,
+  input  logic [3:0]    s_axis_tkeep
+);
+  assign s_axis_tready = 1'b1;
+endmodule
+"""
+    stuck = """`timescale 1ns/1ps
+module axs_stuck (
+  input  logic          aclk,
+  input  logic          aresetn,
+  input  logic [31:0]   s_axis_tdata,
+  input  logic          s_axis_tvalid,
+  output logic          s_axis_tready
+);
+  assign s_axis_tready = 1'b0;
+endmodule
+"""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        results = {}
+        for tag, src in (("good", good), ("stuck", stuck)):
+            dut = tdp / f"{tag}.sv"
+            dut.write_text(src, encoding="utf-8")
+            od = tdp / f"out_{tag}"
+            r = call_tool("emit_testbench", {
+                "rtl_file": str(dut), "out_dir": str(od), "protocol": "axi4_stream"})
+            assert r["ok"], (tag, str(r.get("error"))[:300])
+            tb = Path(r["data"]["artifacts"]["sv_testbench"])
+            txt = tb.read_text(encoding="utf-8")
+            # 模块名必须匹配 runner 的 --top-module（tb_{DUT模块名}_{proto}）
+            dut_mod = {"good": "axs_fifo", "stuck": "axs_stuck"}[tag]
+            assert f"module tb_{dut_mod}_axi4_stream;" in txt, txt[:400]
+            # errs 必须是 int（logic 会溢出掩盖失败）
+            assert "int            errs = 0;" in txt, "errs must be int, not logic"
+            run = Path(r["data"]["artifacts"]["sim_script"])
+            assert run.is_file(), run
+            cp = subprocess.run(
+                ["bash", str(run)], cwd=str(od), capture_output=True, text=True,
+                env={**os.environ, "VERILATOR": vlt}, timeout=600)
+            results[tag] = (cp.returncode, cp.stdout + cp.stderr)
+        rc_good, log_good = results["good"]
+        assert rc_good == 0, log_good[-800:]
+        assert "PASS: axi4_stream" in log_good, log_good[-800:]
+        # 卡死 DUT：必须 rc!=0 且打印 FAIL，绝不能"0 beats accepted"还 PASS
+        rc_stuck, log_stuck = results["stuck"]
+        assert rc_stuck != 0, (
+            "stuck-TREADY DUT must fail the run, got rc=0:\n" + log_stuck[-800:])
+        assert "FAIL: axi4_stream" in log_stuck, log_stuck[-800:]
+        assert "AXIS_TIMEOUT" in log_stuck, log_stuck[-800:]
+        # 方向表生效：从机的 TREADY 写成 input 必须被拦
+        baddir = tdp / "baddir.sv"
+        baddir.write_text(good.replace(
+            "output logic          s_axis_tready,", "input  logic          s_axis_tready,"), encoding="utf-8")
+        rb = call_tool("emit_testbench", {
+            "rtl_file": str(baddir), "out_dir": str(tdp / "out_bd"), "protocol": "axi4_stream"})
+        assert rb["ok"] is False, "direction mismatch must be rejected before emit"
+        assert "tready" in (rb.get("error") or "").lower(), rb.get("error")
+
 
 def main() -> int:
     test_protocol_tb_emitter_axi4_ahb_ddr4()
@@ -1298,6 +1393,7 @@ def main() -> int:
     test_multi_interface_dut_reports_uncovered_bus()
     test_multiple_candidate_modules_are_disclosed()
     test_master_role_is_explained_on_direction_mismatch()
+    test_axi4_stream_template_runs_and_catches_stuck_ready()
     print("ALL test_protocol_emitter_coverage.py TESTS PASSED")
     return 0
 

@@ -182,3 +182,4 @@
 - [117 · mutation 会计缺断言；重复定义 module 静默取第一个](117-dup-module-and-mutation-accounting.md)
 - [118 · copy_sandbox 失败时留下半成品沙箱（原子性）](118-copy-sandbox-atomicity.md)
 - [119 · 按领域拆分 test_full_coverage.py（5530 行 → 7 个套件）](119-split-coverage-suite-by-domain.md)
+- [120 · 新增 axi4_stream 原生自检 TB 模板（7 → 8 协议）](120-axi4-stream-tb-template.md)

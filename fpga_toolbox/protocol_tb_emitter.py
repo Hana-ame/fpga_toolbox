@@ -5,6 +5,7 @@ natively generate compilable, lint-clean, self-checking SystemVerilog testbenche
 and Verilator run scripts directly from ``extract_interfaces`` (slang AST) for:
   * apb        (APB3/4 slave: reset read, PSTRB write, RO, W1C, PSLVERR)
   * axi4       (AXI4-Full burst slave: INCR4/INCR8 + ID + RLAST + SLVERR)
+  * axi4_stream(AXI4-Stream sink: TREADY handshake + TKEEP/TLAST packet boundaries)
   * ahb_lite   (AHB-Lite pipelined slave: RW/RO + HREADYOUT + HRESP error)
   * ddr3       (DDR3 controller: ACT/WR/RD CL=2 + multi-bank + PRE)
   * ddr4       (DDR4 controller: ACT_n + BG/BA 64-bit + DM_DBI_n byte mask)
@@ -23,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .core.types import err_result, ok_result
 from .iface_extractor import tool_extract_interfaces
 
-SUPPORTED_MULTI_PROTOCOLS = ("apb", "axi4", "ahb_lite", "ddr3", "ddr4", "hbm", "pcie")
+SUPPORTED_MULTI_PROTOCOLS = ("apb", "axi4", "axi4_stream", "ahb_lite", "ddr3", "ddr4", "hbm", "pcie")
 
 # 各协议 testbench 模板**实际硬连**的端口。分类器只需若干个信号就能认出协议
 # （APB 只需 4 个），但 TB 模板会连全部 9 个 —— 若 RTL 缺其中任何一个（如 APB3
@@ -40,6 +41,11 @@ REQUIRED_TB_PORTS: Dict[str, Tuple[str, ...]] = {
         "rdata", "rresp", "rvalid", "rready",
     ),
     "ahb_lite": ("hsel", "haddr", "htrans", "hwrite", "hsize", "hwdata", "hrdata", "hresp"),
+    # AXI4-Stream 的最小合法实现只有 TDATA/TVALID/TREADY；TLAST/TKEEP/TID/
+    # TDEST/TUSER 都是可选的，模板按 port_map 是否出现决定生成与否，所以这里
+    # 只列**必需**的三项。把可选信号也列进来会让一个完全合法的精简 DUT 被
+    # 判定为「缺端口」而拒绝生成。
+    "axi4_stream": ("tdata", "tvalid", "tready"),
     # ddr3/ddr4/hbm/pcie 的模板不用 port_map，直接按标准端口名连线并用 `.*`
     # 兜底。`.*` 只连接**TB 里已声明**的同名变量，所以 DUT 端口名一旦与模板
     # 声明不一致（如 DUT 用 `inout [15:0] ddr3_dq` 而模板声明的是
@@ -101,6 +107,12 @@ EXPECTED_TB_DIR: Dict[str, Dict[str, str]] = {
         "wvalid": "input", "bready": "input", "araddr": "input", "arvalid": "input", "rready": "input",
         "awready": "output", "wready": "output", "bresp": "output", "bvalid": "output",
         "arready": "output", "rdata": "output", "rresp": "output", "rvalid": "output",
+    },
+    # AXI4-Stream 做 sink：TB 作为数据源驱动 payload 与 TVALID，DUT 给出 TREADY。
+    "axi4_stream": {
+        "tdata": "input", "tvalid": "input", "tlast": "input", "tkeep": "input",
+        "tid": "input", "tdest": "input", "tuser": "input",
+        "tready": "output",
     },
 }
 
@@ -806,6 +818,191 @@ endmodule
 """
 
 
+def _emit_axi4_stream_tb(mod: str, clk: str, rst: str, iface: Dict[str, Any]) -> str:
+    """生成 AXI4-Stream sink（从端）TB，重点自检 TREADY 握手与 8 类边界。
+
+    与其他模板的根本区别：AXI4-Stream **没有地址、没有读通道**，唯一的流控是
+    TREADY/TVALID 握手。因此不能复用 AXI4-Full 结构，本模板围绕这些性质自检：
+
+      1. **每个 beat 都必须被接受**：逐 beat 等待 TREADY，超时即 FAIL 并报出
+         卡在第几个 beat —— DUT 永久不 ready 是流控实现的经典 bug。
+      2. **接受次数必须精确等于驱动次数**：一个 beat 被吞掉或被重复接受都算错。
+      3. **TVALID 期间 payload 保持稳定**（AXI4-Stream 强制规则）：TB 自己在
+         握手成功前不改动 payload，并在每拍复查，防止模板逻辑退化。
+      4. **可选信号按 DUT 真实存在生成**：AXI4-Stream 允许最简实现只有
+         TDATA/TVALID/TREADY（实测最小 DUT 的 port_map 就是这三项）。硬编码
+         全部 9 个信号会给合法 DUT 生成 PINNOTFOUND 的坏 TB。
+      5. **位宽全取端口真实值**：TDATA 可以是任意位宽（含非 8 倍数），TKEEP
+         合法宽度是 ceil(TDATA/8)，但实现可能用别的宽度 —— 一律按真实端口
+         声明，否则 Verilator 警告即错误直接构建失败。
+    """
+    dw = _pw(iface, "tdata", int(iface.get("data_width") or 32))
+    kw_default = max(1, (dw + 7) // 8)
+    kw = _pw(iface, "tkeep", kw_default)
+    id_w = _pw(iface, "tid", 1)
+    de_w = _pw(iface, "tdest", 1)
+    us_w = _pw(iface, "tuser", 1)
+    last_present = bool(_pm(iface, "tlast", ""))
+    keep_present = bool(_pm(iface, "tkeep", ""))
+    id_present = bool(_pm(iface, "tid", ""))
+    de_present = bool(_pm(iface, "tdest", ""))
+    us_present = bool(_pm(iface, "tuser", ""))
+
+    p = {k: _pm(iface, k, f"s_axis_{k}") for k in (
+        "tdata", "tvalid", "tready", "tlast", "tkeep", "tid", "tdest", "tuser")}
+
+    dhex = max(1, (dw + 3) // 4)
+    khex = max(1, (kw + 3) // 4)
+    dw_mask = (1 << dw) - 1
+    kw_mask = (1 << kw) - 1
+    pkt_len = 4
+    # 数据图案：每个 beat 错开一位十六进制，便于定位是第几拍出错
+    beat_vals = [0x11223344, 0x12334455, 0x33445566, 0x55667788]
+    beat_vals = [(v + i * 0x01010101) & dw_mask for i, v in enumerate(beat_vals[:pkt_len])]
+    keep_full = kw_mask
+    keep_tail = 1 & kw_mask  # 末拍只保留最低字节，模拟 TLAST 处的部分传输
+
+    decl = [
+        f"  logic [{dw-1}:0] {p['tdata']} = '0;",
+        f"  logic          {p['tvalid']} = 0;",
+        f"  logic          {p['tready']};",
+    ]
+    conns = [
+        f".{p['tdata']}({p['tdata']})",
+        f".{p['tvalid']}({p['tvalid']})",
+        f".{p['tready']}({p['tready']})",
+    ]
+    # send_beat 内部对每个可选信号的赋值
+    opt_assign: List[str] = []
+    if last_present:
+        decl.append(f"  logic          {p['tlast']} = 0;")
+        conns.append(f".{p['tlast']}({p['tlast']})")
+        opt_assign.append(f"    {p['tlast']} = last_v;")
+    if keep_present:
+        decl.append(f"  logic [{kw-1}:0] {p['tkeep']} = '1;")
+        conns.append(f".{p['tkeep']}({p['tkeep']})")
+        opt_assign.append(f"    {p['tkeep']} = keep_v;")
+    if id_present:
+        decl.append(f"  logic [{id_w-1}:0] {p['tid']} = 0;")
+        conns.append(f".{p['tid']}({p['tid']})")
+        opt_assign.append(f"    {p['tid']} = idx[{id_w-1}:0];")
+    if de_present:
+        decl.append(f"  logic [{de_w-1}:0] {p['tdest']} = 0;")
+        conns.append(f".{p['tdest']}({p['tdest']})")
+        opt_assign.append(f"    {p['tdest']} = idx[{de_w-1}:0];")
+    if us_present:
+        decl.append(f"  logic [{us_w-1}:0] {p['tuser']} = 0;")
+        conns.append(f".{p['tuser']}({p['tuser']})")
+        opt_assign.append(f"    {p['tuser']} = idx[{us_w-1}:0];")
+
+    conn_block = ",\n    ".join(conns)
+    opt_block = "\n".join(opt_assign) if opt_assign else "    // 本 DUT 无 TLAST/TKEEP/TID 等可选信号"
+    # 每次 data/keep 更新后复查 payload 稳定性的表达式
+    keep_check = f" || {p['tkeep']} !== keep_v" if keep_present else ""
+    last_check = f" || {p['tlast']} !== last_v" if last_present else ""
+    # 期望的 TKEEP 序列：前 n-1 拍全有效，末拍只保留最低字节
+    keep_exprs = [keep_full] * (pkt_len - 1) + [keep_tail]
+    data_lits = ", ".join(f"{dw}'h{v & dw_mask:0{dhex}X}" for v in beat_vals)
+
+    return f"""`timescale 1ns/1ps
+// Auto-generated by fpga_toolbox.protocol_tb_emitter (protocol=axi4_stream)
+// AXI4-Stream sink-side testbench: drives TDATA/TVALID and obeys TREADY.
+module tb_{mod}_axi4_stream;
+  logic          {clk} = 0, {rst} = 0;
+  // errs 必须是 int：`logic errs` 只有 1 位，累加偶数次错误会溢出回 0，
+  // 于是一个完全卡死的 DUT（5 次握手超时 + 1 次 beat 计数不符 = 6 次错误）
+  // 反而打印 "PASS" 并 rc=0 —— 实测踩中，正是本模板要防的假通过。
+  int            errs = 0;
+  int            accepted = 0;
+  int            driven = 0;
+{chr(10).join(decl)}
+
+  {mod} dut (
+    .{clk}({clk}), .{rst}({rst}),
+    {conn_block}
+  );
+  always #5 {clk} = ~{clk};
+
+  localparam int PKT_LEN = {pkt_len};
+  // 驱动序列（TB 是数据源，参考模型即它自己驱动的内容）
+  logic [{dw-1}:0] exp_data [0:PKT_LEN-1] = '{{{data_lits}}};
+  logic [{kw-1}:0] exp_keep [0:PKT_LEN-1] = '{{{", ".join(f"{kw}'h{v:0{khex}X}" for v in keep_exprs)}}};
+
+  // 单 beat 握手：驱动 payload → 等 TREADY → 撤销 TVALID。
+  // payload 在 TVALID 期间必须保持稳定（AXI4-Stream 强制规则），所以只在
+  // 握手成功后才返回，由调用方更新下一拍。
+  task automatic axis_send_beat(
+    input int idx,
+    input logic [{dw-1}:0] data_v,
+    input logic [{kw-1}:0] keep_v,
+    input logic last_v
+  );
+    int waited = 0;
+    {p['tdata']} = data_v;
+{opt_block}
+    {p['tvalid']} = 1;
+    // 逐拍等 TREADY；超时说明 DUT 流控卡死
+    @(posedge {clk}); #1;
+    while (!{p['tready']}) begin
+      // payload 必须在等待期间保持不变（自检模板自身的合规性）
+      if ({p['tdata']} !== data_v{keep_check}{last_check}) begin
+        $display("[CHECK] id=AXIS_STABLE | cat=payload_stability | beat=%0d | exp=data:0x%0{dhex}h | got=data:0x%0{dhex}h | status=FAIL",
+                 idx, data_v, {p['tdata']});
+        errs++;
+      end
+      waited++;
+      if (waited > 1000) begin
+        $display("[CHECK] id=AXIS_TIMEOUT | cat=handshake | beat=%0d | exp=TREADY within 1000 cycles | got=never asserted | status=FAIL", idx);
+        errs++;
+        {p['tvalid']} = 0;
+        disable axis_send_beat;
+      end
+      @(posedge {clk}); #1;
+    end
+    // 采样点：TREADY 为高的这个上升沿完成了一次传输
+    accepted++;
+    {p['tvalid']} = 0;
+    @(posedge {clk}); #1;
+  endtask
+
+  initial begin
+    repeat (3) @(posedge {clk});
+    {rst} = 1;
+    @(posedge {clk}); #1;
+
+    // 包 1：{pkt_len} beat 连续突发（前 n-1 拍 TKEEP 全有效，末拍收窄）
+    for (int i = 0; i < PKT_LEN; i++) begin
+      axis_send_beat(i, exp_data[i], exp_keep[i], (i == PKT_LEN - 1));
+      driven++;
+    end
+    // 包 2：单 beat 短包（TLAST 立即有效）—— 检查短包边界
+    axis_send_beat(0, {dw}'h{0xDEADBEEF & dw_mask:0{dhex}X}, {kw}'h{keep_tail:0{khex}X}, 1'b1);
+    driven++;
+
+    if (accepted !== driven) begin
+      $display("[CHECK] id=AXIS_COUNT | cat=beat_accounting | exp=%0d beats accepted | got=%0d | status=FAIL", driven, accepted);
+      errs++;
+    end
+
+    if (errs == 0) begin
+      $display("PASS: axi4_stream %0d beats accepted, TREADY handshake / payload stability / TKEEP+TLAST boundaries verified", accepted);
+      $finish;
+    end else begin
+      $display("FAIL: axi4_stream %0d errors", errs);
+      $fatal(1);
+    end
+  end
+
+  // 全局看门狗：DUT 若永久拉低 TREADY，逐拍超时会兜住；这里兜住其他挂死
+  initial begin
+    #2000000;
+    $display("FAIL: axi4_stream timeout (simulation did not complete)");
+    $fatal(1);
+  end
+endmodule
+"""
+
+
 def _emit_hbm_tb(mod: str, clk: str, rst: str, iface: Optional[Dict[str, Any]] = None) -> str:
     """生成 HBM pseudo-channel TB。
 
@@ -1398,7 +1595,7 @@ def emit_protocol_testbench(
     if m is None or chosen is None:
         found = {cand.get("module_name"): [i.get("protocol") for i in (cand.get("interfaces") or [])] for cand in mods}
         # 「识别到了协议」与「有对应 TB 模板」是两件事。分类器能认出 11 种协议，
-        # emitter 只有 SUPPORTED_MULTI_PROTOCOLS 这 7 种模板。旧错误信息对两者
+        # emitter 只有 SUPPORTED_MULTI_PROTOCOLS 这 8 种模板。旧错误信息对两者
         # 一律说「not found」，于是 `axi4_lite` 的 DUT 会得到
         # 「No supported multi-bus interface found ... modules: {m: ['axi4_lite']}」
         # —— 用户会以为分类器没认出来，而实际是 分类器认出了、模板不支持。
@@ -1601,6 +1798,8 @@ def emit_protocol_testbench(
         tb_src = _emit_apb_tb(mod_name, clk, rst, chosen)
     elif proto == "axi4":
         tb_src = _emit_axi4_tb(mod_name, clk, rst, chosen)
+    elif proto == "axi4_stream":
+        tb_src = _emit_axi4_stream_tb(mod_name, clk, rst, chosen)
     elif proto == "ahb_lite":
         tb_src = _emit_ahb_tb(mod_name, clk, rst, chosen)
     elif proto == "ddr3":

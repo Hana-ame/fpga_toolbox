@@ -340,7 +340,8 @@ include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre></div>
   --out-dir /tmp/tb_apb --protocol apb</code></pre></div>
 <div class="code-block"><div class="code-lang">json</div><pre><code>{"ok": true, "data": {"protocol": "apb", "suites": ["apb"],
  "artifacts": {"sv_testbench": "...", "sim_script": "..."}}}</code></pre></div>
-<p>7 种协议可用：<code>apb</code> / <code>axi4</code> / <code>ahb_lite</code> / <code>ddr3</code> / <code>ddr4</code> / <code>hbm</code> / <code>pcie</code> （PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。</p>
+<p>8 种协议可用：<code>apb</code> / <code>axi4</code> / <code>axi4_stream</code> / <code>ahb_lite</code> / <code>ddr3</code> / <code>ddr4</code> / <code>hbm</code> / <code>pcie</code>（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。</p>
+<p><code>axi4_stream</code> 是 sink（从端）模板：AXI4-Stream 没有地址、没有读通道，唯一的 流控是 TREADY/TVALID 握手，所以自检围绕「握手是否真的完成」而不是地址/数据 比对 —— 逐 beat 等 TREADY（1000 拍超时即报出卡在第几拍）、beat 计数必须精确 相等、TVALID 期间 payload 必须稳定、TKEEP/TLAST 包边界。可选的 <code>TLAST</code>/<code>TKEEP</code>/<code>TID</code>/<code>TDEST</code>/<code>TUSER</code> 按 DUT 是否真的暴露来决定是否生成， 所以只有 <code>TDATA</code>/<code>TVALID</code>/<code>TREADY</code> 三个信号的最小实现同样能跑。</p>
 <p>生成的 TB 自带 Verilator 运行脚本，跑起来是这样的：</p>
 <div class="code-block"><div class="code-lang">shell</div><pre><code>$ bash /tmp/tb_apb/run_apb_slave_apb.sh
 == sim: apb (top=tb_apb_slave_apb) ==

@@ -379,8 +379,15 @@ python3 -m fpga_toolbox emit_testbench \
  "artifacts": {"sv_testbench": "...", "sim_script": "..."}}}
 ```
 
-7 种协议可用：`apb` / `axi4` / `ahb_lite` / `ddr3` / `ddr4` / `hbm` / `pcie`
-（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。
+8 种协议可用：`apb` / `axi4` / `axi4_stream` / `ahb_lite` / `ddr3` / `ddr4` /
+`hbm` / `pcie`（PCIe 自动展开 Gen3·4·5 × x1·x4·x16 共 9 套件）。
+
+`axi4_stream` 是 sink（从端）模板：AXI4-Stream 没有地址、没有读通道，唯一的
+流控是 TREADY/TVALID 握手，所以自检围绕「握手是否真的完成」而不是地址/数据
+比对 —— 逐 beat 等 TREADY（1000 拍超时即报出卡在第几拍）、beat 计数必须精确
+相等、TVALID 期间 payload 必须稳定、TKEEP/TLAST 包边界。可选的
+`TLAST`/`TKEEP`/`TID`/`TDEST`/`TUSER` 按 DUT 是否真的暴露来决定是否生成，
+所以只有 `TDATA`/`TVALID`/`TREADY` 三个信号的最小实现同样能跑。
 
 生成的 TB 自带 Verilator 运行脚本，跑起来是这样的：
 

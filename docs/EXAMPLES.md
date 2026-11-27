@@ -221,12 +221,13 @@ PASS: apb all 8 checks passed
 `status` 由比对结果决定。日志被截断时，`normalize_sim_result` 靠汇总行计数
 判断是否跑完（见示例 6）。
 
-7 种协议可用，每个都有对应的自检序列：
+8 种协议可用，每个都有对应的自检序列：
 
 | 协议 | 检查内容 | 实际运行结果 |
 |---|---|---|
 | `apb` | reset 读、PSTRB 写、RO、W1C、PSLVERR | `PASS: apb all 8 checks passed` |
 | `axi4` | INCR4/INCR8 突发 + ID + RLAST + SLVERR | `PASS: axi4_full all 6 burst/SLVERR checks passed` |
+| `axi4_stream` | TREADY 握手逐拍等 + beat 计数 + payload 稳定 + TKEEP/TLAST 边界 | `PASS: axi4_stream 5 beats accepted, TREADY handshake / payload stability / TKEEP+TLAST boundaries verified` |
 | `ahb_lite` | 流水线 RW/RO + HREADYOUT + HRESP | `PASS: ahb_lite all 6 checks passed` |
 | `ddr3` | ACT/WR/RD(CL=2)/PRE + 多 bank | `PASS: ddr3 ACT/WR/RD(CL=2)/PRE all checks passed` |
 | `ddr4` | BG/BA + DM_DBI_n 字节掩码 | `PASS: ddr4 BG/BA + DM_DBI_n masked write/readback passed` |

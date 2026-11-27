@@ -33,6 +33,7 @@ case "${1:-all}" in
   ddr3)       run_one ddr3       tb_ddr3      "$HERE/ddr3_mem_ctrl.sv"   "$HERE/tb_ddr3.sv" ;;
   ddr4)       run_one ddr4       tb_ddr4      "$HERE/ddr4_mem_ctrl.sv"   "$HERE/tb_ddr4.sv" ;;
   hbm)        run_one hbm        tb_hbm       "$HERE/hbm_pc_ctrl.sv"     "$HERE/tb_hbm.sv" ;;
+  axi4_stream) run_one axi4_stream tb_axs_fifo_axi4_stream "$HERE/axi4_stream_dut.sv" "$HERE/tb_axi4_stream.sv" ;;
   pcie_g3x1)  run_one pcie_g3x1  tb_pcie      -GGEN=3 -GLANES=1  "$HERE/pcie_tlp_ep.sv" "$HERE/tb_pcie.sv" ;;
   pcie_g3x4)  run_one pcie_g3x4  tb_pcie      -GGEN=3 -GLANES=4  "$HERE/pcie_tlp_ep.sv" "$HERE/tb_pcie.sv" ;;
   pcie_g3x16) run_one pcie_g3x16 tb_pcie      -GGEN=3 -GLANES=16 "$HERE/pcie_tlp_ep.sv" "$HERE/tb_pcie.sv" ;;
@@ -43,7 +44,7 @@ case "${1:-all}" in
   pcie_g5x4)  run_one pcie_g5x4  tb_pcie      -GGEN=5 -GLANES=4  "$HERE/pcie_tlp_ep.sv" "$HERE/tb_pcie.sv" ;;
   pcie_g5x16) run_one pcie_g5x16 tb_pcie      -GGEN=5 -GLANES=16 "$HERE/pcie_tlp_ep.sv" "$HERE/tb_pcie.sv" ;;
   all)
-    for s in apb axi4_full ahb ddr3 ddr4 hbm pcie_g3x1 pcie_g3x4 pcie_g3x16 pcie_g4x1 pcie_g4x4 pcie_g4x16 pcie_g5x1 pcie_g5x4 pcie_g5x16; do
+    for s in apb axi4_full axi4_stream ahb ddr3 ddr4 hbm pcie_g3x1 pcie_g3x4 pcie_g3x16 pcie_g4x1 pcie_g4x4 pcie_g4x16 pcie_g5x1 pcie_g5x4 pcie_g5x16; do
       bash "$0" "$s"
     done
     ;;

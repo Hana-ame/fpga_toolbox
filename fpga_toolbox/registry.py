@@ -76,14 +76,14 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "emit_testbench": {
         "fn": tool_emit_testbench,
-        "description": "Compile a validated contract into SV wrapper, SVA+bind checker, and cocotb testbench (with write/readback & stress profile). With `protocol` set, instead emit a self-checking SystemVerilog testbench + Verilator runner natively for apb/axi4/ahb_lite/ddr3/ddr4/hbm/pcie (no spec_path needed).",
+        "description": "Compile a validated contract into SV wrapper, SVA+bind checker, and cocotb testbench (with write/readback & stress profile). With `protocol` set, instead emit a self-checking SystemVerilog testbench + Verilator runner natively for apb/axi4/axi4_stream/ahb_lite/ddr3/ddr4/hbm/pcie (no spec_path needed).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "spec_path": {"type": "string", "description": "Path to the validated contract (with AXI4-Lite boundary) to generate a testbench for. Required unless `protocol` is set."},
                 "out_dir": {"type": "string", "description": "Output directory for the generated wrapper/SVA/bind/cocotb artifacts."},
                 "rtl_file": {"type": "string", "description": "Optional RTL file of the DUT to compile against. Required when `protocol` is set."},
-                "protocol": {"type": "string", "enum": ["auto", "apb", "axi4", "ahb_lite", "ddr3", "ddr4", "hbm", "pcie"], "description": "Emit a native multi-bus self-checking testbench for this protocol instead of the AXI4-Lite contract path. 'auto' picks the first supported interface found in rtl_file."},
+                "protocol": {"type": "string", "enum": ["auto", "apb", "axi4", "axi4_stream", "ahb_lite", "ddr3", "ddr4", "hbm", "pcie"], "description": "Emit a native multi-bus self-checking testbench for this protocol instead of the AXI4-Lite contract path. 'auto' picks the first supported interface found in rtl_file."},
             },
             "required": ["out_dir"],
             "additionalProperties": False
