@@ -5359,6 +5359,65 @@ def test_duplicate_module_definitions_are_reported() -> None:
             r2.get("diagnostics")
 
 
+def test_copy_sandbox_failure_leaves_no_partial_output() -> None:
+    """缺陷: copy_sandbox 校验失败时留下半成品沙箱（非原子）。
+
+    旧实现边校验边写：先 `mkdir` + 写 `.fpga_sandbox` 标记，然后逐项校验并
+    立刻 `copy2`。中途任一项失败（符号链接逃逸、文件缺失、路径非法）就直接
+    return err_result —— 此时前面几项**已经写进沙箱**：
+
+        relative_files=['good.sv', 'evil.sv']   （evil.sv -> /etc/passwd）
+        → ok=false
+        → 但沙箱里已有 good.sv + .fpga_sandbox
+
+    调用方看到 ok=false 不会想到沙箱里已有内容；下次运行还可能复用这些陈旧
+    文件。修复为两阶段：先完成全部只读预校验，全部通过后才写盘。
+    """
+    print("coverage: copy_sandbox failure leaves no partial output")
+    from fpga_toolbox.registry import call_tool
+
+    with tempfile.TemporaryDirectory() as td:
+        proj = Path(td) / "proj"
+        proj.mkdir()
+        (proj / "good.sv").write_text("module good(); endmodule\n", encoding="utf-8")
+        outside = Path(td) / "outside.txt"
+        outside.write_text("SECRET\n", encoding="utf-8")
+        try:
+            (proj / "evil.sv").symlink_to(outside)
+        except (OSError, NotImplementedError):
+            return  # 平台不支持符号链接时跳过
+
+        sb = Path(td) / "sb"
+        r = call_tool("copy_sandbox", {
+            "project_root": str(proj), "sandbox_dir": str(sb),
+            "relative_files": ["good.sv", "evil.sv"]})
+        assert r["ok"] is False, r
+        # 关键：失败时不得创建/污染目标目录
+        assert not sb.exists(),             f"sandbox left behind after failure: {sorted(p.name for p in sb.iterdir()) if sb.is_dir() else '?'}"
+
+        # 失败也不得影响项目源目录
+        assert (proj / "good.sv").is_file()
+
+        # 预校验失败时，已存在的沙箱内容必须原封不动（不被 clean 掉）
+        sb2 = Path(td) / "sb2"
+        sb2.mkdir()
+        (sb2 / "keep.txt").write_text("KEEP\n", encoding="utf-8")
+        (sb2 / ".fpga_sandbox").write_text("marker\n", encoding="utf-8")
+        r2 = call_tool("copy_sandbox", {
+            "project_root": str(proj), "sandbox_dir": str(sb2),
+            "relative_files": ["good.sv", "evil.sv"]})
+        assert r2["ok"] is False, r2
+        # 旧实现会先 _clear_dir 再写，失败后 keep.txt 已消失
+        assert (sb2 / "keep.txt").is_file(), "existing sandbox content was wiped despite failure"
+
+        # 成功路径不受影响
+        r3 = call_tool("copy_sandbox", {
+            "project_root": str(proj), "sandbox_dir": str(Path(td) / "sb3"),
+            "relative_files": ["good.sv"]})
+        assert r3["ok"], str(r3.get("error"))[:200]
+        assert r3["data"]["file_count"] == 1, r3["data"]
+
+
 def _available_backends() -> list:
     """Return the parser backends usable in this environment.
 
@@ -5462,6 +5521,7 @@ def main() -> int:
     test_log_files_are_deduplicated()
     test_mutation_accounting_is_self_consistent()
     test_duplicate_module_definitions_are_reported()
+    test_copy_sandbox_failure_leaves_no_partial_output()
     print("\nALL FULL-COVERAGE TESTS PASSED")
     return 0
 

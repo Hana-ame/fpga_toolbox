@@ -14,7 +14,7 @@ import hashlib
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 if __package__ in (None, ""):
     import sys as _sys
@@ -108,6 +108,10 @@ def tool_copy_sandbox(
     if dst_root == Path.home().resolve():
         return err_result("copy_sandbox", f"Refusing to use the home directory as sandbox: {dst_root}")
 
+    # 「是否允许清理」的判定放在预校验之前（纯只读，不产生副作用）；
+    # 真正的 `_clear_dir` 推迟到阶段 2 —— 否则预校验失败时已把旧沙箱清空，
+    # 调用方拿到 ok=False 却发现原有内容没了。
+    needs_clean = False
     if dst_root.exists():
         if not dst_root.is_dir():
             return err_result("copy_sandbox", f"Sandbox path exists but is not a directory: {dst_root}")
@@ -119,14 +123,25 @@ def tool_copy_sandbox(
                     f"Refusing to clean '{dst_root}': it is not empty and carries no {MARKER_NAME} marker. "
                     "Pass force=True if you really intend to wipe it.",
                 )
-            _clear_dir(dst_root)
+            needs_clean = True
 
-    dst_root.mkdir(parents=True, exist_ok=True)
-    (dst_root / MARKER_NAME).write_text(
-        "Created by fpga_toolbox.copy_sandbox. Safe to clean.\n", encoding="utf-8"
-    )
-
-    copied: List[Dict[str, Any]] = []
+    # ---------------------------------------------------------------
+    # 阶段 1：**纯只读预校验**
+    #
+    # 旧实现边校验边复制：先 mkdir + 写 MARKER，然后逐项校验并立刻 copy2。
+    # 中途任一项失败（符号链接逃逸、文件缺失、路径非法）就直接 return
+    # err_result —— 而此时前面几项**已经写进沙箱**，留下半成品目录（还带着
+    # "Safe to clean" 的标记文件），调用方看到 ok=False 却不知道沙箱里已经有
+    # 一堆文件，下次运行还可能复用这些陈旧内容。实测
+    #   relative_files=['good.sv', 'evil.sv']  （evil.sv -> /etc/passwd）
+    # 返回 ok=False，但沙箱里已有 good.sv + .fpga_sandbox。
+    #
+    # 现在把所有校验（路径可移植性、存在性、是否目录、符号链接逃逸、重复项）
+    # 全部前置到这一阶段，**不碰文件系统**；只有全部通过才进入阶段 2 写盘。
+    # 这样失败时目标目录要么原封不动（原本不存在则仍不存在），要么保持调用前
+    # 的内容，绝不会留下半成品。
+    # ---------------------------------------------------------------
+    plan: List[Tuple[str, Path, Path]] = []   # (relative key, src, dst)
     seen = set()
     for rel in relative_files:
         rel_path = Path(rel)
@@ -134,6 +149,16 @@ def tool_copy_sandbox(
             return err_result("copy_sandbox", f"Rejected non-portable relative path: {rel}")
         src = root / rel_path
         if not src.is_file():
+            # 区分「不存在」与「是目录」：`relative_files` 只接受**文件**，
+            # 传目录时旧文案一律说 "Source file missing"，用户会以为路径拼错，
+            # 实际是自己给了个目录。
+            if src.is_dir():
+                return err_result(
+                    "copy_sandbox",
+                    f"Source path is a directory, not a file: {src}. "
+                    "relative_files must list individual files (expand the directory "
+                    "first, e.g. from index_repo/resolve_deps output).",
+                )
             return err_result("copy_sandbox", f"Source file missing: {src}")
 
         # 符号链接逃逸防护：上面只校验了相对路径字符串不含 ".."，但 ``src`` 可能
@@ -156,8 +181,20 @@ def tool_copy_sandbox(
         if key in seen:
             continue
         seen.add(key)
+        plan.append((key, src, dst_root / rel_path))
 
-        dst = dst_root / rel_path
+    # ---------------------------------------------------------------
+    # 阶段 2：写盘（预校验已全部通过，此阶段不应再失败）
+    # ---------------------------------------------------------------
+    if needs_clean:
+        _clear_dir(dst_root)
+    dst_root.mkdir(parents=True, exist_ok=True)
+    (dst_root / MARKER_NAME).write_text(
+        "Created by fpga_toolbox.copy_sandbox. Safe to clean.\n", encoding="utf-8"
+    )
+
+    copied: List[Dict[str, Any]] = []
+    for key, src, dst in plan:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         copied.append({

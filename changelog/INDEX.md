@@ -180,3 +180,4 @@
 - [115 · 无预期套件时不核对；STARTED 漏成没失败](115-suite-verification-without-expectations.md)
 - [116 · log_files 出现重复条目](116-log-files-dedupe.md)
 - [117 · mutation 会计缺断言；重复定义 module 静默取第一个](117-dup-module-and-mutation-accounting.md)
+- [118 · copy_sandbox 失败时留下半成品沙箱（原子性）](118-copy-sandbox-atomicity.md)
