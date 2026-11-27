@@ -117,7 +117,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         if fpath.suffix.lower() not in {".v", ".sv", ".vh", ".svh"}:
             continue
         iface_defined.update(_IFACE_DEF_RE.findall(sources[fpath]))
-    headers = {p.name: str(p.relative_to(root)) for p in rtl_files if p.suffix.lower() in {".vh", ".svh"}}
+    headers = {p.name: p.relative_to(root).as_posix() for p in rtl_files if p.suffix.lower() in {".vh", ".svh"}}
     # package 索引：定义文件（相对路径）与「谁 import 了哪个 package」。
     # 参见 _PKG_DEF_RE 处的说明：package 是独立编译单元，必须一起编译。
     package_files: Dict[str, str] = {}
@@ -125,10 +125,10 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
     for _p in rtl_files:
         _src = sources[_p]
         for _pkg in _PKG_DEF_RE.findall(_src):
-            package_files.setdefault(_pkg, str(_p.relative_to(root)))
+            package_files.setdefault(_pkg, _p.relative_to(root).as_posix())
         _imps = _PKG_IMPORT_RE.findall(_src)
         if _imps:
-            package_imports[str(_p.relative_to(root))] = sorted(set(_imps))
+            package_imports[_p.relative_to(root).as_posix()] = sorted(set(_imps))
     # header 之间也会互相 `include（`include "b.svh" 里再 `include "a.svh"）。
     # 旧实现只索引「文件名 -> 路径」，没有任何 header 级的 include 关系，于是
     # resolve_deps 只能拿到模块直接 include 的头文件，**传递依赖全丢**：
@@ -151,8 +151,8 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         _all_inc_targets.extend(_INC_RE.findall(sources[_p]))
     _by_name: Dict[str, List[str]] = {}
     for _p in rtl_files:
-        _by_name.setdefault(_p.name, []).append(str(_p.relative_to(root)))
-    _rel_to_path = {str(q.relative_to(root)): q for q in rtl_files}
+        _by_name.setdefault(_p.name, []).append(_p.relative_to(root).as_posix())
+    _rel_to_path = {q.relative_to(root).as_posix(): q for q in rtl_files}
     for _inc in _all_inc_targets:
         _bn = _inc.replace("\\", "/").rsplit("/", 1)[-1]
         _hit = _rel_to_path.get(_inc) or (_rel_to_path.get(_by_name[_bn][0]) if _bn in _by_name else None)
@@ -161,12 +161,12 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
         # 只有「非 header 扩展名的源文件被 include」才算异常用法；
         # .vh/.svh 天生就是 header，已经由 header_files 表达。
         if _hit.suffix.lower() not in HDR_EXTS:
-            included_files.add(str(_hit.relative_to(root)))
+            included_files.add(_hit.relative_to(root).as_posix())
     header_includes: Dict[str, List[str]] = {}
     for p in rtl_files:
         if p.suffix.lower() not in {".vh", ".svh"}:
             continue
-        rel = str(p.relative_to(root))
+        rel = p.relative_to(root).as_posix()
         header_includes[rel] = list(dict.fromkeys(_INC_RE.findall(sources[p])))
 
     # 归属修正：`include 会把子模块展开进顶层文件，导致同一模块出现在多个文件
@@ -227,7 +227,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             ]
         modules[m.name] = {
             "name": m.name,
-            "file_path": str(owner.get(m.name, fp).relative_to(root)),
+            "file_path": owner.get(m.name, fp).relative_to(root).as_posix(),
             "port_count": len(m.ports),
             "parameters": m.parameters,
             "instantiated_modules": insts,
@@ -235,7 +235,7 @@ def tool_index_repo(project_root: str) -> Dict[str, Any]:
             # 归属已按 owner 收敛到「真正定义该 module 的文件」，所以这里的
             # sources[fp] 就是该模块自己的文件，include 不会串味。
             "includes": list(dict.fromkeys(_INC_RE.findall(sources[fp]))),
-            "package_imports": package_imports.get(str(owner.get(m.name, fp).relative_to(root)), []),
+            "package_imports": package_imports.get(owner.get(m.name, fp).relative_to(root).as_posix(), []),
         }
         if unknown:
             unresolved[m.name] = unknown
