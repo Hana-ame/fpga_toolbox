@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.7.1] — 桥接 auto 选侧修复 · SPI→APB 桥接 TB
+
+### Added
+
+- **SPI→APB 桥接联合 TB**（`emitters/bridge.py`）。此前 `SUPPORTED_BRIDGES` 声明了
+  5 个组合但只有 2 个有实现（axi4→apb、axi4→axi4），`emit_bridge` 对其余组合会
+  抛错。现在 SPI→APB 有真实实现：TB 在 SPI 侧当 master（CS_n 成帧 + SCLK 移位
+  驱动 MOSI）、在 APB 侧当 slave 建模应答，校验 SPI 成帧事务被转换成 APB 写。
+  用命名哨兵 `@@NAME@@` + `replace()` 填充而非 `%`-格式化——SV 模板里大量
+  `$display` 的 `%0d`/`%08h` 会与 Python 占位符冲突，手写 51 参数元组无法与
+  55 个占位符对齐（F507）。
+
+### Fixed
+
+- **`emit_testbench` auto 在桥接 DUT 上选错侧**。auto 按文件里接口出现顺序取
+  第一个命中的，桥接 DUT 同时暴露 slave 和 master 侧，可能选中 master 侧——
+  而所有模板都是 slave 视角，方向校验随即以「DUT port direction(s) disagree」
+  拒掉一个完全合法的桥接 DUT（实测 SPI→APB 桥复现：auto 选中 apb master 侧
+  被拒，同一 DUT 传 `protocol='spi'` 反而能识别出 slave 侧）。修复：
+  auto 优先选 `role=slave` 的接口，让桥接 slave 侧稳定入选、进而走桥接分支。
+- **桥接识别提前到单协议校验之前**。单协议方向表是 slave 视角，而桥接的 slave
+  侧方向恰好相反（SPI 从机的 sclk 是 input 而非 output），先跑单协议方向校验
+  会在控制到达桥接分支之前就把桥接 DUT 拒掉。现在桥接路径跳过缺端口与方向
+  两道单协议闸门（桥接 TB 自己处理两侧方向）。
+- **`tb_linter` READY 映射缺前缀剥离**：`_ready_of()` 现在剥掉 `s_axi_`/`m_axi_`/
+  `s_axis_` 前缀，`while (!(s_axi_bvalid && m_axi_bready))` 不再被误判 R3。
+
+## [0.7.0] — 架构拆分 · 桥接 DUT 联合 TB · 波形诊断
 ## [0.7.0] — 架构拆分 · 桥接 DUT 联合 TB · 波形诊断
 
 ### Added
