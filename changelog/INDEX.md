@@ -207,3 +207,4 @@
 - [136 · Agent 友好的波形诊断工具 diagnose_waveform](136-waveform-diagnostic-tool.md)
 - [137 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](137-bridge-combos-complete.md)
 - [138 · 桥接子包再拆分（bridge.py 1,117 → 最大 271 行）](138-bridge-subpackage-split.md)
+- [139 · 编排层后处理拆分（orchestrator 729 → 518 行）](139-postprocess-split.md)

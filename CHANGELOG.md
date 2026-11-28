@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.4] — 编排层后处理拆分（orchestrator 729 → 518 行）
+
+### Changed
+
+- **拆分 `emitters/orchestrator.py`**（729 行，子包最大文件）的后处理部分到
+  `emitters/postprocess.py`（229 行）：`add_lint_off`、`add_waveform_dump`、
+  `_emit_run_script`。这三件事对所有协议**完全一致**（不依赖具体协议语义），
+  拆出后编排层专注「选哪个模板 + 三道闸门」，新增协议无需改动后处理。
+
+编排层从 729 降到 518 行；`emit_protocol_testbench` 仍在一个文件内（选模块 →
+三道闸门 → 派发 → 后处理调用 → 落盘），保持单一可读入口。
+
+## [0.7.3] — 桥接子包再拆分（bridge.py 1,117 → 最大 271 行）
 ## [0.7.3] — 桥接子包再拆分（bridge.py 1,117 → 最大 271 行）
 
 ### Changed
@@ -417,6 +430,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **139** · [重构 · 编排层后处理拆分（orchestrator 729 → 518 行）](changelog/139-postprocess-split.md)
 - **138** · [重构 · 桥接子包再拆分（`bridge.py` 1,117 → 最大 271 行）](changelog/138-bridge-subpackage-split.md)
 - **137** · [功能增强 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](changelog/137-bridge-combos-complete.md)
 - **136** · [功能增强 · Agent 友好的波形诊断工具 `diagnose_waveform`（工具 17 → 18）](changelog/136-waveform-diagnostic-tool.md)
@@ -428,6 +442,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **130** · [纯 APB 设备的 draft 契约自相矛盾](changelog/130-pure-apb-draft.md)
 - **129** · [缺陷修复 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点（评审 182/183 的根因）](changelog/129-zero-eda-gate-and-ci-degraded-job.md)
 - **128** · [修正 `FEATURES.html` 副标题中过期诊断码计数（37 → 47）](changelog/128-features-deck-diag-count.md)
-- **127** · [CLI 补全 `--version` / `-V` 标准版本查询参数](changelog/127-cli-version-flag.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->
