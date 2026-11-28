@@ -17,8 +17,13 @@ dev = ["ruff>=0.6"]
 [project.scripts]
 fpga-toolbox = "fpga_toolbox.cli:main"
 
-[tool.setuptools]
-packages = ["fpga_toolbox", "fpga_toolbox.core"]
+[tool.setuptools.packages.find]
+# 用 find 而不是显式列表：`packages = ["fpga_toolbox", "fpga_toolbox.core"]`
+# 在新增子包（如拆分 protocol_tb_emitter 后引入的 fpga_toolbox.emitters）时会被
+# 静默漏掉 —— wheel 里没有该目录，安装后 `No module named 'fpga_toolbox.emitters'`，
+# 而 audit_harness（MCP tools/call 路径）当场失败。CI 的 build job 实测抓到。
+# include 明确限定前缀，避免误收 tests/ 或 examples/。
+include = ["fpga_toolbox*"]
 
 [tool.ruff]
 target-version = "py310"
