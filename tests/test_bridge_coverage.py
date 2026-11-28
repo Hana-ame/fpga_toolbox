@@ -207,14 +207,69 @@ def test_stream_bridges_compile_and_declare_full_widths() -> None:
     print("coverage: ethernet->apb and axi4_stream->apb bridges compile")
     import re
 
+    # 探针 DUT **内联构造**：旧写法指向 /tmp/br2p/*.sv（本地临时目录），
+    # CI 的零 EDA 环境没有这些文件 → 两个新桥接函数从未被调用 → Layer 4
+    # 覆盖率报 210/212 失败。内联后任何环境都能覆盖。
     fixtures = {
-        "ethernet->apb": "/tmp/br2p/eth2apb.sv",
-        "axi4_stream->apb": "/tmp/br2p/axs2apb.sv",
+        "ethernet->apb": """`timescale 1ns/1ps
+module eth2apb (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        gmii_rx_dv,
+  input  logic [7:0]  gmii_rx_data,
+  input  logic        gmii_tx_en,
+  input  logic [7:0]  gmii_tx_data,
+  output logic        m_apb_psel,
+  output logic        m_apb_penable,
+  output logic        m_apb_pwrite,
+  output logic [15:0] m_apb_paddr,
+  output logic [31:0] m_apb_pwdata,
+  output logic [3:0]  m_apb_pstrb,
+  input  logic        m_apb_pready,
+  input  logic [31:0] m_apb_prdata,
+  input  logic        m_apb_pslverr
+);
+  assign m_apb_psel = 1'b0;
+  assign m_apb_penable = 1'b0;
+  assign m_apb_pwrite = 1'b0;
+  assign m_apb_paddr = 16'h0;
+  assign m_apb_pwdata = 32'h0;
+  assign m_apb_pstrb = 4'h0;
+endmodule
+""",
+        "axi4_stream->apb": """`timescale 1ns/1ps
+module axs2apb (
+  input  logic        aclk,
+  input  logic        aresetn,
+  input  logic [31:0] s_axis_tdata,
+  input  logic        s_axis_tvalid,
+  output logic        s_axis_tready,
+  input  logic        s_axis_tlast,
+  output logic        m_apb_psel,
+  output logic        m_apb_penable,
+  output logic        m_apb_pwrite,
+  output logic [15:0] m_apb_paddr,
+  output logic [31:0] m_apb_pwdata,
+  output logic [3:0]  m_apb_pstrb,
+  input  logic        m_apb_pready,
+  input  logic [31:0] m_apb_prdata,
+  input  logic        m_apb_pslverr
+);
+  assign s_axis_tready = 1'b1;
+  assign m_apb_psel = 1'b0;
+  assign m_apb_penable = 1'b0;
+  assign m_apb_pwrite = 1'b0;
+  assign m_apb_paddr = 16'h0;
+  assign m_apb_pwdata = 32'h0;
+  assign m_apb_pstrb = 4'h0;
+endmodule
+""",
     }
-    for combo, dut_path in fixtures.items():
-        if not Path(dut_path).is_file():
-            continue  # 探针夹具只在本地临时目录存在
+    for combo, rtl_src in fixtures.items():
         with tempfile.TemporaryDirectory() as td:
+            dut = Path(td) / "probe.sv"
+            dut.write_text(rtl_src, encoding="utf-8")
+            dut_path = str(dut)
             r = call_tool("emit_testbench", {
                 "rtl_file": dut_path, "out_dir": td, "protocol": "auto"})
             assert r["ok"], (combo, r.get("error"))
@@ -240,11 +295,31 @@ def test_stream_bridge_detects_missing_conversion() -> None:
     if not shutil.which("verilator"):
         print("  (skipped: verilator not installed)")
         return
-    probe = "/tmp/br2p/axs2apb.sv"
-    if not Path(probe).is_file():
-        print("  (skipped: probe fixture not present)")
-        return
+    # 空壳 DUT 内联构造：s_axis_tready 恒 0 → 桥接收不到任何 beat → 0 次 APB 写
+    # → 必须 FAIL。（旧写法指向 /tmp/br2p 探针，CI 环境无此文件 → 测试静默跳过）
     with tempfile.TemporaryDirectory() as td:
+        probe = str(Path(td) / "stub.sv")
+        Path(probe).write_text(
+            "`timescale 1ns/1ps\n"
+            "module stub (\n"
+            "  input  logic        aclk,\n"
+            "  input  logic        aresetn,\n"
+            "  input  logic [31:0] s_axis_tdata,\n"
+            "  input  logic        s_axis_tvalid,\n"
+            "  output logic        s_axis_tready,\n"
+            "  input  logic        s_axis_tlast,\n"
+            "  output logic        m_apb_psel,\n"
+            "  output logic        m_apb_penable,\n"
+            "  output logic        m_apb_pwrite,\n"
+            "  output logic [15:0] m_apb_paddr,\n"
+            "  output logic [31:0] m_apb_pwdata,\n"
+            "  output logic [3:0]  m_apb_pstrb,\n"
+            "  input  logic        m_apb_pready,\n"
+            "  input  logic [31:0] m_apb_prdata,\n"
+            "  input  logic        m_apb_pslverr\n"
+            ");\n"
+            "  assign s_axis_tready = 1'b0;\n"   # 流控死锁：永不接收
+            "endmodule\n", encoding="utf-8")
         r = call_tool("emit_testbench", {
             "rtl_file": probe, "out_dir": td, "protocol": "auto"})
         assert r["ok"], r.get("error")
