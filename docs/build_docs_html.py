@@ -537,7 +537,25 @@ def lint_output(path: Path) -> list[str]:
     return problems
 
 
+def _force_utf8_stdio() -> None:
+    """stdout/stderr 强制 UTF-8。
+
+    本脚本打印中文（「已生成」「自检通过」）。Windows 的 locale 编码是
+    cp1252，`print` 会抛 UnicodeEncodeError；本脚本由六层门禁以
+    `--check` 子进程调用，崩在打印阶段会被上层报成「文档不同步」，
+    掩盖真实的编码问题（CI Windows job 实测）。
+    """
+    import sys as _sys
+    for stream in (_sys.stdout, _sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str]) -> int:
+    _force_utf8_stdio()
     check_only = "--check" in argv
     rc = 0
     for src_name, meta in DOCS.items():

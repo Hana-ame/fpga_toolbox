@@ -144,7 +144,24 @@ def write_toplevel(by_num: dict) -> bool:
     return True
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdout/stderr 强制成 UTF-8。
+
+    本脚本会打印中文（「已更新」「编号重复」等）。Windows 默认 locale 编码是
+    cp1252，`print` 直接抛 UnicodeEncodeError —— 实测 CI Windows job：
+    门禁调用 `--check` 时崩在打印阶段，被上层报成「changelog 索引校验失败」，
+    而真实原因是输出编码，排查方向被带偏。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: List[str]) -> int:
+    _force_utf8_stdio()
     write = "--write" in argv
     files, by_num, problems = scan()
     problems += check_index(files)

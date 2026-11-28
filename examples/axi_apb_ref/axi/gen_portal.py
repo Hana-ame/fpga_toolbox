@@ -384,7 +384,20 @@ SEED=123 bash verilog/sim.sh gaps <span class="c"># 多 seed</span></pre>
 </div></body></html>"""
 
 
+def _force_utf8_stdio():
+    """stdout 强制 UTF-8：本脚本打印中文，Windows 的 cp1252 会抛
+    UnicodeEncodeError（与 docs/build_docs_html.py 同一类问题）。"""
+    import sys as _sys
+    for stream in (_sys.stdout, _sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main():
+    _force_utf8_stdio()
     txt = build_html()
     OUT.write_text(txt, encoding="utf-8")
 
