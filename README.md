@@ -1,12 +1,12 @@
-# fpga_toolbox v0.5.0 — 融合版 AI Agent FPGA 验证工具箱
+# fpga_toolbox v0.6.0 — 融合版 AI Agent FPGA 验证工具箱
 
 将 **`fpga_toolbox`** 的 AI Agent / MCP 控制面与 **`agent/verilog`** 沉淀出的硬件验证与反静默通过护栏融为一体：
 
-- **控制面（零 EDA 强依赖，仅 PyYAML）**：13 个原子工具统一走 `ToolResult(ok / tool / data / diagnostics / error)` 信封，自动导出 MCP JSON Schema 与 CLI 子命令。
+- **控制面（零 EDA 强依赖，仅 PyYAML）**：18 个原子工具统一走 `ToolResult(ok / tool / data / diagnostics / error)` 信封，自动导出 MCP JSON Schema 与 CLI 子命令。
 - **验证与防假通过护栏**：支持 APB 协议分类、SV `interface/modport` 识别与可选 `slang` AST 后端、位域契约校验（兼容 `apb-regfile-spec/v2`）、三套静态反踩坑 Lint（时钟竞争 / AXI 握手 / 静默通过）、参数化变异测试（`try/finally` 强还原 + 残留拦截）、Verilator ≥ 5.040 封装与故障注入自审计。
 - **参考靶场（`examples/axi_apb_ref/`）**：完整保留原 `agent/verilog` 的 AXI4-Lite ↔ APB 串行/并发桥、25 个 Verilator 测试套件、VIP/UVM-lite 与 `regfile_spec.json` 作为跨库集成回归基准。
 
-## 13 个原子工具一览
+## 18 个原子工具一览
 
 | # | 工具 | 职责 |
 |---|---|---|
@@ -23,6 +23,7 @@
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
 | 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
 | 13 | `audit_harness` | 故障注入式自审计（A1–A22），证明验证护栏出错时不会静默通过 |
+| 14–17 | `parse_uvm_log` / `parse_dc_pt_qor` / `aggregate_seed_medians` / `generate_remote_run_script` | 商业 EDA 日志解析（VCS/UVM、DC/PT QoR）、多 seed 中位数聚合、远端启动脚本生成 —— 均无需 EDA 许可证 |
 
 ### 多总线原生测试台（`protocol=`）
 
@@ -119,6 +120,7 @@ printf '%s\n' \
 | `initialize` | 版本协商（支持 2025-06-18 / 2025-03-26 / 2024-11-05 / 2024-10-07，未知版本回落最新） |
 | `tools/list` / `tools/call` | 17 个工具；结果同时给出 `content[0].text` 与 **`structuredContent`**（强类型客户端可直读） |
 | `resources/list` / `resources/read` | 只读上下文：诊断码速查表、11 类协议规范、工具清单 |
+| `diagnose_waveform` | **波形诊断工具**：把 VCD 压缩成文本结论 —— 首个 X/Z 传播点（信号+时刻）、握手死锁窗口（VALID 拉高后 READY 从未拉高）、恒定信号；零外部依赖 |
 | `prompts/list` / `prompts/get` | 标准流程：`rtl-to-mutation-audit`、`debug-failing-simulation`、`analyze-eda-campaign` |
 | `ping` / `shutdown` / `exit` | 健康检查与优雅退出（另支持 JSON-RPC 批量请求） |
 

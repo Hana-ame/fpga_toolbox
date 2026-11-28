@@ -118,6 +118,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 | 15 | `parse_dc_pt_qor` | `[--report-text\|--report-path] [--raw-log-text\|--raw-log-path]` | 解析 DC/PT QoR 报告，标记 K-2015.06 假成功陷阱（`E046` UID-423、`No paths.` 迷你报告） |
 | 16 | `aggregate_seed_medians` | `--runs <JSON>` | 多 seed 运行聚合为中位数，并标出偏离中位数带的 seed（< 3 seed 无统计意义） |
 | 17 | `generate_remote_run_script` | `--host --tag --local-script-name [--remote-work-dir]` | 生成 csh 安全的远端 SSH/SCP 启动脚本（`/dev/shm` 暂存 + 安全清理），拒绝 shell 注入 |
+| 18 | `diagnose_waveform` | `--waveform-path [--signals] [--max-time]` | 把 VCD 波形压缩成文本结论：首个 X/Z 传播点（信号+时刻）、恒定信号、AXI/AXIS 握手死锁窗口；零外部依赖 |
 
 ---
 

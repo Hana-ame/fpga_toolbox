@@ -22,6 +22,7 @@ from .sim_runner import tool_run_sim
 from .tb_emitter import tool_emit_testbench, tool_validate_contract
 from .tb_linter import tool_lint_tb
 from .visual_renderer import tool_render_visual_report
+from .waveform_diag import tool_diagnose_waveform
 
 TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index_repo": {
@@ -254,6 +255,20 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "fn": tool_audit_harness,
         "description": "Run fault-injection self-audit verifying that lint, mutation residual guard, normalizer, and sandbox fail loudly.",
         "inputSchema": {"type": "object", "properties": {"strict": {"type": "boolean", "description": "Fail (instead of reporting) when any fault-injection check fails (default true)."}}, "required": [],
+            "additionalProperties": False
+            },
+    },
+    "diagnose_waveform": {
+        "fn": tool_diagnose_waveform,
+        "description": "Analyze a VCD waveform into text-friendly conclusions for an agent: first X/Z propagation point (with time and signal), stuck/never-toggled signals, and AXI/APB/AXIS handshake deadlock windows (VALID high but READY never asserted). Zero external dependencies; VCD only (FST/LXT2 are rejected with actionable guidance, not a decode exception).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "waveform_path": {"type": "string", "description": "Path to the VCD waveform file."},
+                "signals": {"type": "array", "items": {"type": "string"}, "description": "Optional signal names to focus on (all signals still participate in X detection)."},
+                "max_time": {"type": "integer", "description": "Optional analysis window end in VCD time units (limits how much of a large waveform is scanned)."},
+            },
+            "required": ["waveform_path"],
             "additionalProperties": False
             },
     },
