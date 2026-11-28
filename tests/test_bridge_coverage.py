@@ -140,6 +140,58 @@ def test_axi4_to_axi4_bridge_tb() -> None:
         assert "PASS: bridge axi4->axi4" in cp.stdout, cp.stdout[-600:]
 
 
+
+def test_auto_prefers_slave_side_on_bridge_dut() -> None:
+    """auto 必须优先选桥接 DUT 的 slave 侧，否则联合 TB 分支走不到。
+
+    之前 auto 按文件里接口的出现顺序取第一个命中，可能选中 master 侧；
+    而所有模板都是 slave 视角，于是报「DUT port direction disagree」把一个
+    完全合法的桥接 DUT 拒掉（实测 SPI->APB 桥复现：auto 选中 apb master 侧
+    被拒，同一 DUT 传 protocol='spi' 反而能识别出 slave 侧）。
+
+    修复：auto 时优先选 role=slave 的接口。这样桥接 DUT 的 slave 侧稳定
+    入选，进而走桥接分支生成联合 TB（而不是被方向校验挡在门外）。
+    """
+    print("coverage: auto prefers slave side on a bridge DUT")
+    from fpga_toolbox.emitters.orchestrator import emit_protocol_testbench
+
+    with tempfile.TemporaryDirectory() as td:
+        dut = Path(td) / "spi2apb.sv"
+        body = [
+            "`timescale 1ns/1ps",
+            "module spi2apb (",
+            "  input  logic        clk,",
+            "  input  logic        rst_n,",
+            "  input  logic        spi_sclk,",
+            "  input  logic        spi_cs_n,",
+            "  input  logic        spi_mosi,",
+            "  output logic        spi_miso,",
+            "  output logic        m_apb_psel,",
+            "  output logic        m_apb_penable,",
+            "  output logic        m_apb_pwrite,",
+            "  output logic [15:0] m_apb_paddr,",
+            "  output logic [31:0] m_apb_pwdata,",
+            "  output logic [3:0]  m_apb_pstrb,",
+            "  input  logic        m_apb_pready,",
+            "  input  logic [31:0] m_apb_prdata,",
+            "  input  logic        m_apb_pslverr",
+            ");",
+            "  assign spi_miso = 1'b0;",
+            "endmodule",
+            "",
+        ]
+        dut.write_text("\n".join(body), encoding="utf-8")
+        r = emit_protocol_testbench(str(dut), td, None)
+        if not r["ok"]:
+            err = (r.get("error") or "").lower()
+            assert "direction disagree" not in err, (
+                "auto selected the wrong (master) side: " + str(r.get("error")))
+            assert "joint testbench" in err, r.get("error")
+        else:
+            tbname = r["data"]["artifacts"]["sv_testbench"]
+            assert "bridge" in tbname, tbname
+
+
 def test_bridge_r3_handshake_is_lint_clean() -> None:
     """桥接 TB 里的握手必须同时查 VALID 与 READY（否则 lint_tb 判 R3）。
 
@@ -174,6 +226,7 @@ def main() -> int:
     test_bridge_decl_helpers_cover_all_ports()
     test_bridge_tb_split_and_catches_faults()
     test_axi4_to_axi4_bridge_tb()
+    test_auto_prefers_slave_side_on_bridge_dut()
     test_bridge_r3_handshake_is_lint_clean()
     test_unsupported_bridge_combination_is_disclosed()
     print("\nALL BRIDGE TESTS PASSED")

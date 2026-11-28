@@ -274,18 +274,41 @@ def emit_protocol_testbench(
     want = None if (not protocol or protocol == "auto") else protocol
     m = None
     chosen = None
-    for cand in mods:
-        cand_ifaces = cand.get("interfaces") or []
-        for i in cand_ifaces:
-            if want is not None:
+    if want is not None:
+        # 显式指定协议：直接找含该协议接口的模块（原逻辑）。
+        for cand in mods:
+            for i in (cand.get("interfaces") or []):
                 if i.get("protocol") == want:
                     m, chosen = cand, i
                     break
-            elif i.get("protocol") in SUPPORTED_MULTI_PROTOCOLS:
-                m, chosen = cand, i
+            if m is not None:
                 break
-        if m is not None:
-            break
+    else:
+        # auto 模式：**优先选 role=slave 的接口**。
+        #
+        # 所有 TB 模板都是 slave 视角（TB 驱动请求侧、等 DUT 响应）。桥接 DUT
+        # 同时暴露一个 slave 侧和一个 master 侧；旧实现按文件里接口的出现顺序
+        # 取第一个命中的，可能选中 master 侧 —— 而模板期望的是 slave 方向，
+        # 于是报「DUT port direction(s) disagree」把一个完全合法的桥接 DUT 拒掉
+        # （实测 SPI→APB 桥：auto 选中 apb master 侧 → 方向不符被拒；而同一
+        # DUT 传 protocol='spi' 反而能识别出 slave 侧）。
+        #
+        # 正确做法：auto 时先在所有模块里找 role=slave 的接口，找不到才退回
+        # 「任意命中」。这样桥接 DUT 的 slave 侧稳定入选，进而走桥接分支生成
+        # 联合 TB。
+        for role_pref in ("slave", None):
+            for cand in mods:
+                for i in (cand.get("interfaces") or []):
+                    if i.get("protocol") not in SUPPORTED_MULTI_PROTOCOLS:
+                        continue
+                    if role_pref is not None and i.get("role") != role_pref:
+                        continue
+                    m, chosen = cand, i
+                    break
+                if m is not None:
+                    break
+            if m is not None:
+                break
     if m is None or chosen is None:
         found = {cand.get("module_name"): [i.get("protocol") for i in (cand.get("interfaces") or [])] for cand in mods}
         # 「识别到了协议」与「有对应 TB 模板」是两件事。分类器能认出 11 种协议，
@@ -416,7 +439,23 @@ def emit_protocol_testbench(
             rtl_params = dict(_m.parameters or {})
             break
 
-    missing_ports = _missing_tb_ports(proto, chosen, rtl_ports)
+    # ---- 桥接识别（提前到缺端口/方向校验之前）----
+    # 桥接 DUT 同时暴露 slave 侧和 master 侧。单协议模板的方向表是 **slave
+    # 视角**（TB 驱动请求侧），而桥接的 slave 侧方向恰好相反（如 SPI 从机的
+    # sclk 是 input 而非 output）—— 若先跑单协议方向校验，桥接 DUT 会被误判
+    # 「DUT port direction disagree」而拒掉，根本到不了桥接分支（实测 SPI→APB
+    # 桥复现）。所以这里先识别桥接结构；桥接路径会跳过下面的单协议校验。
+    _is_bridge = False
+    _bridge_info = None
+    _explicit = protocol and str(protocol) not in ("auto", "")
+    if not _explicit:
+        from .bridge import classify_bridge
+        _bridge_info = classify_bridge(m.get("interfaces") or [])
+        _is_bridge = _bridge_info is not None
+
+    _skip_single_proto_gates = _is_bridge
+
+    missing_ports = [] if _skip_single_proto_gates else _missing_tb_ports(proto, chosen, rtl_ports)
     if missing_ports:
         # 若总线端口是用 SV `interface` 打包的，各个平铺信号本来就不在 DUT
         # 顶层 —— 报「DUT 缺少 psel->psel, ...」会把排查方向完全带偏。
@@ -447,7 +486,9 @@ def emit_protocol_testbench(
 
     # 方向校验：方向不匹配不会编译失败，但会在运行期永久挂起（TB 等不到响应），
     # 比编译失败更隐蔽——所以必须在生成前拦住。
-    wrong_dir = _wrong_dir_ports(proto, chosen, rtl_dir)
+    # 桥接 TB 自己处理两侧的方向（联合 TB 的 TB 在上游当 master、下游当 slave），
+    # 不适用单协议的方向表 —— 桥接路径已在上面跳过了缺端口校验，这里同样跳过。
+    wrong_dir = [] if _skip_single_proto_gates else _wrong_dir_ports(proto, chosen, rtl_dir)
     if wrong_dir:
         # 方向不符最常见的原因是**角色反了**：所有模板都假定 DUT 是「从设备」，
         # 而分类器的 role 字段已经知道 DUT 是 master。旧错误只列端口方向，
@@ -508,32 +549,26 @@ def emit_protocol_testbench(
     # 识别桥接结构；识别到且组合已支持就改用联合 TB。
     # 注意：只有在调用方**没有显式指定** protocol，或指定的正是上游侧时才走桥接
     # —— 用户显式要 `protocol=apb` 时通常是想看下游侧，尊重其选择。
-    _is_bridge = False
-    _explicit = protocol and str(protocol) not in ("auto", "")
-    if not _explicit:
-        from .bridge import SUPPORTED_BRIDGES, classify_bridge, emit_bridge
+    # （桥接识别已在上面提前做过：_bridge_info / _is_bridge / _skip_single_proto_gates）
+    if not _explicit and _bridge_info is not None:
+        from .bridge import SUPPORTED_BRIDGES, emit_bridge
 
-        _bridge = classify_bridge(m.get("interfaces") or [])
-        if _bridge is not None:
-            _up_p, _dn_p, _up_i, _dn_i = _bridge
-            try:
-                tb_src = emit_bridge(mod_name, clk, rst, _up_p, _dn_p, _up_i, _dn_i)
-                _is_bridge = True
-            except ValueError as exc:
-                # 识别到桥接但组合暂无联合模板：如实说明，**不**静默退化成
-                # 单侧 TB（那会让用户以为桥接被验证过）。
-                return err_result(
-                    "emit_testbench",
-                    f"Cannot emit a joint testbench for bridge {mod_name} "
-                    f"({_up_p} -> {_dn_p}): {exc}",
-                    data={"module_name": mod_name, "bridge": {"upstream": _up_p,
-                                                              "downstream": _dn_p},
-                          "supported_bridges": [
-                              f"{a}->{b}" for (a, b) in sorted(SUPPORTED_BRIDGES)],
-                          "hint": "pass protocol='<side>' to emit a single-sided TB"},
-                )
-        else:
-            tb_src = None
+        _up_p, _dn_p, _up_i, _dn_i = _bridge_info
+        try:
+            tb_src = emit_bridge(mod_name, clk, rst, _up_p, _dn_p, _up_i, _dn_i)
+        except ValueError as exc:
+            # 识别到桥接但组合暂无联合模板：如实说明，**不**静默退化成
+            # 单侧 TB（那会让用户以为桥接被验证过）。
+            return err_result(
+                "emit_testbench",
+                f"Cannot emit a joint testbench for bridge {mod_name} "
+                f"({_up_p} -> {_dn_p}): {exc}",
+                data={"module_name": mod_name, "bridge": {"upstream": _up_p,
+                                                          "downstream": _dn_p},
+                      "supported_bridges": [
+                          f"{a}->{b}" for (a, b) in sorted(SUPPORTED_BRIDGES)],
+                      "hint": "pass protocol='<side>' to emit a single-sided TB"},
+            )
     else:
         tb_src = None
 
