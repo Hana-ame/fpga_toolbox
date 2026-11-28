@@ -210,3 +210,4 @@
 - [139 · 编排层后处理拆分（orchestrator 729 → 518 行）](139-postprocess-split.md)
 - [140 · slang 后端多维 unpacked 端口位宽错误（两后端不一致）](140-slang-multidim-unpacked-width.md)
 - [141 · 波形诊断新增 APB 握手死锁检测](141-apb-handshake-deadlock.md)
+- [142 · 波形诊断的跨通道误配与 READY 前缀漏配](142-waveform-cross-channel-pairing.md)

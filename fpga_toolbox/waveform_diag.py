@@ -69,9 +69,16 @@ def _ready_of(sig: str) -> Optional[str]:
     key = sig.split(".")[-1].upper()
     if key in _READY_OF:
         return _READY_OF[key]
-    m = re.match(r"^[SM]_(?:AXIS?|APB)_", key)
-    if m:
-        return _READY_OF.get(key[m.end():])
+    # 迭代剥前缀：真实 RTL 里 VALID 信号常带多段前缀（s_axi_awvalid、
+    # axi_bvalid、u_bvalid、m_axis_tvalid ...）。旧实现只剥 s_/m_ + axis 一段
+    # 前缀，`axi_awvalid` 这类裸 axi_ 前缀或两段前缀查不到 → 返回 None →
+    # 明明同时查了 READY 仍漏报死锁（实测 axi_awvalid@10 拉高、axi_awready
+    # 从未拉高却检不出）。逐段剥前缀直到命中表项。
+    parts = key.split("_")
+    for i in range(1, len(parts)):
+        candidate = "_".join(parts[i:])
+        if candidate in _READY_OF:
+            return _READY_OF[candidate]
     return None
 
 
@@ -226,17 +233,28 @@ def _find_handshake_deadlocks(scan: Dict[str, Any]) -> List[Dict[str, Any]]:
         ready_name = _ready_of(base)
         if not ready_name:
             continue
-        # 找同前缀的 READY 信号（如 dut.valid -> dut.ready）
+        # 找同 scope 的 READY 信号。不能猜 `prefix.ready_name` —— 真实 RTL 里
+        # READY 名常带自己的通道前缀（VALID=axi_awvalid 时 READY=axi_awready，
+        # 不是 tb.ready）。改为：在**同 scope**（同 `.` 前缀）内找**以
+        # ready_name 结尾**的信号（`axi_awready` 以 `awready` 结尾）。
         prefix = name[: name.rfind(".")] if "." in name else ""
-        ready_full = f"{prefix}.{ready_name.lower()}" if prefix else ready_name.lower()
-        rchanges = by_name.get(ready_full)
-        if rchanges is None:
-            # 尝试裸名匹配（无 scope 前缀时）
-            for cand, ch in by_name.items():
-                if cand.split(".")[-1].lower() == ready_name.lower():
-                    rchanges = ch
-                    ready_full = cand
-                    break
+        rchanges = None
+        ready_full = None
+        chan = base[: -len(ready_name)]  # VALID 名去掉 ready_name 的通道前缀
+        # 同 scope + READY 名以 ready_name 结尾 + **通道前缀一致**。
+        # 只用后缀匹配会跨通道误配（wvalid 的后缀是 valid，会匹配到
+        # awready —— 不同通道）。通道前缀一致才配对：awvalid/awready 的
+        # 通道前缀都是 "aw"，wvalid/wready 都是 "w"。
+        chan = base[: -len(ready_name)]
+        for cand, ch in by_name.items():
+            cand_prefix = cand[: cand.rfind(".")] if "." in cand else ""
+            cand_base = cand.split(".")[-1].lower()
+            if cand_prefix != prefix or not cand_base.endswith(ready_name.lower()):
+                continue
+            if cand_base[: -len(ready_name)] == chan:   # 同通道
+                rchanges = ch
+                ready_full = cand
+                break
         if not rchanges:
             continue
 

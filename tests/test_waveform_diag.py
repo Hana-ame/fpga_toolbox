@@ -251,6 +251,36 @@ def test_apb_healthy_no_false_positive() -> None:
         assert h["count"] == 0, h
 
 
+
+def test_ready_of_strips_common_channel_prefixes() -> None:
+    """_ready_of 必须剥掉常见的**多段通道前缀**。
+
+    真实 RTL 里 VALID 名常带通道前缀（axi_awvalid / axi_bvalid / u_tvalid）。
+    旧实现只剥 s_/m_ + axis 一段前缀，`axi_awvalid` 这类裸 axi_ 前缀查不到 ->
+    返回 None -> 明明同时查了 READY 仍漏报死锁（实测 axi_awvalid@10 拉高、
+    axi_awready 从未拉高却检不出）。改为逐段剥前缀直到命中表项。
+    """
+    print("coverage: _ready_of strips multi-segment channel prefixes")
+    from fpga_toolbox.waveform_diag import _ready_of
+    cases = {
+        "axi_awvalid": "AWREADY",
+        "axi_bvalid": "BREADY",
+        "axi_rvalid": "RREADY",
+        "u_tvalid": "TREADY",
+        "axis_tvalid": "TREADY",
+        "s_axi_bvalid": "BREADY",
+        "m_axis_tvalid": "TREADY",
+        "tvalid": "TREADY",
+        "bvalid": "BREADY",
+    }
+    for sig, want in cases.items():
+        got = _ready_of(sig)
+        assert got == want, (sig, got, want)
+    # APB 信号无 VALID/READY 对，返回 None 是正确的
+    assert _ready_of("psel") is None
+    assert _ready_of("pready") is None
+
+
 def main() -> int:
     test_waveform_tool_registered()
     test_x_propagation_detection()
@@ -259,6 +289,7 @@ def main() -> int:
     test_fst_is_rejected_with_guidance()
     test_apb_handshake_deadlock_detection()
     test_apb_healthy_no_false_positive()
+    test_ready_of_strips_common_channel_prefixes()
     test_missing_path_is_structured_error()
     print("\nALL WAVEFORM DIAG TESTS PASSED")
     return 0

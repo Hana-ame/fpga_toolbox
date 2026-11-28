@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.7] — 修复波形诊断的跨通道误配与 READY 前缀漏配
+
+### Fixed
+
+- **VALID/READY 跨通道误配**：`_find_handshake_deadlocks` 旧配对逻辑只按
+  「READY 名以 ready_name 结尾」匹配，会把 `wvalid` 误配到 `awready`（后缀都是
+  valid/ready 但通道不同）。改为同 scope + **通道前缀一致**才配对
+  （`awvalid`/`awready` 的通道前缀都是 `aw`，`wvalid`/`wready` 都是 `w`）。
+- **`_ready_of` 多段前缀漏配**：真实 RTL 里 VALID 名常带通道前缀
+  （`axi_awvalid` / `axi_bvalid` / `u_tvalid`）。旧实现只剥 `s_`/`m_` + axis
+  一段前缀，`axi_awvalid` 这类裸 `axi_` 前缀查不到 → 返回 None → 明明同时查了
+  READY 仍漏报死锁（实测 `axi_awvalid`@10 拉高、`axi_awready` 从未拉高却检不出）。
+  改为逐段剥前缀直到命中表项。
+
+### 验证
+
+| 场景 | 结果 |
+|---|---|
+| `axi_awvalid`@10 拉高、`axi_awready` 从未拉高 | 检出 1 个死锁，配对到 awready（修复前漏报） |
+| `wvalid` 不跨通道误配到 awready | 正确配对到 wready |
+| `_ready_of` 11 个前缀变体 | 全部正确（含 `axi_`/`u_`/`axis_`） |
+
+## [0.7.6] — 波形诊断新增 APB 握手死锁检测
 ## [0.7.6] — 波形诊断新增 APB 握手死锁检测
 
 ### Added
@@ -513,6 +536,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **142** · [缺陷修复 · 波形诊断的跨通道误配与 READY 前缀漏配](changelog/142-waveform-cross-channel-pairing.md)
 - **141** · [功能增强 · 波形诊断新增 APB 握手死锁检测](changelog/141-apb-handshake-deadlock.md)
 - **140** · [缺陷修复 · slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）](changelog/140-slang-multidim-unpacked-width.md)
 - **139** · [重构 · 编排层后处理拆分（orchestrator 729 → 518 行）](changelog/139-postprocess-split.md)
@@ -524,6 +548,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **133** · [功能增强 · 补齐 ddr5 / spi / ethernet 原生 TB 模板（8 → 11 协议）](changelog/133-ddr5-spi-ethernet-tb-templates.md)
 - **132** · [功能增强 · 零依赖 MCP stdio server（`serve-mcp`）](changelog/132-mcp-stdio-server.md)
 - **131** · [功能增强 · CI 显式 slang 矩阵维度 + changelog 索引自动化](changelog/131-ci-slang-matrix-changelog-automation.md)
-- **130** · [纯 APB 设备的 draft 契约自相矛盾](changelog/130-pure-apb-draft.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->
