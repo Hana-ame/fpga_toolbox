@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.7.0] — 架构拆分 · 桥接 DUT 联合 TB · 波形诊断
+
+### Added
+
+- **桥接 DUT 联合测试台**（`emitters/bridge.py`）。桥接 DUT 同时暴露一个 slave 侧
+  和一个 master 侧；单协议 TB 只驱动一侧、另一侧 tie-off，等于完全没验证桥接
+  逻辑。`classify_bridge()` 按 **role 组合**（不靠端口名前缀）识别桥接结构，
+  生成双边联合 TB：TB 在上游当 master 发事务、在下游当 slave 收事务，再校验
+  **跨总线一致性**。两个 examples 桥接 DUT 现可自动生成并 Verilator 实跑通过：
+  `axi4_64_to_apb_32_bridge`（64→32 拆成 4 次下游访问）、
+  `axi4_ooo_reorder_fabric`（数据透传）。
+- **波形诊断工具 `diagnose_waveform`**（工具 17 → 18）。把 VCD 压缩成面向文本
+  Agent 的结论：首个 X/Z 传播点（信号+时刻+位宽）、握手死锁窗口（VALID 拉高后
+  READY 从未拉高）、恒定信号。零外部依赖；FST/LXT2 给出可操作错误而非解码异常。
+
+### Changed
+
+- **拆分 2,428 行单文件 `protocol_tb_emitter.py`**（全仓最大）到
+  `fpga_toolbox/emitters/` 子包：公共骨架（`common.py`）、按协议分文件（11 个
+  协议模板）、编排层（`orchestrator.py`）、桥接（`bridge.py`）。最大文件从 2,428
+  降到 694 行；门面保留 75 行 re-export，既有 import 与测试零改动。
+- 版本号 0.6.0 → 0.7.0。
+
+### Fixed
+
+- **wheel 漏打包子包**：`pyproject.toml` 显式列 `packages` 在新增
+  `fpga_toolbox.emitters` 时被静默漏掉，安装后 `No module named
+  'fpga_toolbox.emitters'`，`audit_harness` 当场失败。改用 `packages.find` +
+  include 前缀。源码安装正常所以本地未发现，只有打包后才暴露（CI build job 抓到）。
+- **桥接 TB 的 7 个真实缺陷**（首次实现踩到，全部修复并固化测试）：
+  AXI4 下游网线宽度退化（漏声明 arsize/arburst/awsize/awburst → 构建失败）、
+  APB 在 setup 相位采样 pwdata（会误报「桥接不搬数据」而让人改正确的 RTL）、
+  APB 访问重复计数、`while (!(s_axi_bvalid && m_axi_bready))` 被误判 R3
+  （`tb_linter` 的 READY 映射缺 `s_axi_` 前缀剥离）、SV 拼接的四层花括号转义、
+  测试向量只覆盖一半位、`top_module` 与实际 module 名不一致。
+- **文档计数漂移**：README / FEATURES / USER_MANUAL 里残留的「13 个工具」
+  「v0.5.0」等旧文案已统一为 18 个工具 / v0.7.0+。
+
+## [0.6.0] — Agent 控制面打通 · MCP 生产化 · 11 协议 TB
 ## [0.6.0] — Agent 控制面打通 · MCP 生产化 · 11 协议 TB
 
 本版把 fpga_toolbox 从「Python/CLI 工具集」推进为**可被 Agent 直接接入的验证控制面**，

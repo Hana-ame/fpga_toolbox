@@ -69,7 +69,7 @@ APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ 
 ## 作为 MCP 服务接入 Agent 客户端
 
 `serve-mcp` 在 **stdio** 上提供 MCP（JSON-RPC 2.0）服务，让 Claude Desktop / Cursor
-等客户端直接调用这 17 个原子工具。**零外部依赖** —— 只用标准库，不需要装任何
+等客户端直接调用这 18 个原子工具。**零外部依赖** —— 只用标准库，不需要装任何
 MCP SDK，与「仅 PyYAML」的部署口径一致。
 
 ### Claude Desktop
@@ -152,7 +152,7 @@ Markdown 是唯一事实源，HTML 由它派生（带侧栏目录 + 页内搜索
 
 | Markdown | HTML | 内容 |
 |---|---|---|
-| [`docs/FEATURES.md`](docs/FEATURES.md) | [`docs/FEATURES.html`](docs/FEATURES.html) | **功能手册**：13 个工具的用途、参数与真实输出，诊断码总表，三种调用方式，边界与已知限制 |
+| [`docs/FEATURES.md`](docs/FEATURES.md) | [`docs/FEATURES.html`](docs/FEATURES.html) | **功能手册**：18 个工具的用途、参数与真实输出，诊断码总表，三种调用方式，边界与已知限制 |
 | [`docs/EXAMPLES.md`](docs/EXAMPLES.md) | [`docs/EXAMPLES.html`](docs/EXAMPLES.html) | **示例集**：10 个可直接运行的端到端示例（契约生成链、多协议 TB、静默通过检测、变异测试、三源日志归一化、PT 网表清理、自审计、沙箱逃逸） |
 
 重新生成 HTML（改了 md 之后必须执行，CI 会校验同步）：

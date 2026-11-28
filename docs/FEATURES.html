@@ -155,7 +155,7 @@ blockquote ul { margin:8px 0; }
 <div class="kicker">功能手册</div>
 <h1>fpga_toolbox 功能手册</h1>
 <p class="deck">13 个原子工具、统一信封、47 个诊断码 —— 面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱</p>
-<p>面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱。13 个原子工具，统一信封、 统一错误码、可直接从 MCP / CLI / Python 三处调用。</p>
+<p>面向 AI Agent 与人类工程师的 FPGA/ASIC 验证工具箱。18 个原子工具，统一信封、 统一错误码、可直接从 MCP / CLI / Python 三处调用。</p>
 <hr>
 <h2 id="1-它解决什么问题">1. 它解决什么问题</h2>
 <p>FPGA 验证里最常见的失败不是"断言失败"，而是<strong>看起来通过了</strong>：</p>
@@ -172,7 +172,7 @@ blockquote ul { margin:8px 0; }
                     └──────────────┬──────────────┘
                                    ▼
                     ┌─────────────────────────────┐
-                    │  13 个原子工具（纯函数）      │
+                    │  18 个原子工具（纯函数）      │
                     └──────────────┬──────────────┘
                                    ▼
                     ┌─────────────────────────────┐
@@ -180,7 +180,7 @@ blockquote ul { margin:8px 0; }
                     │  {ok, tool, data,           │
                     │   diagnostics, error}       │
                     └─────────────────────────────┘</code></pre></div>
-<p><strong>统一信封</strong>意味着调用方只需写一次错误处理，13 个工具全部适用：</p>
+<p><strong>统一信封</strong>意味着调用方只需写一次错误处理，18 个工具全部适用：</p>
 <div class="code-block"><div class="code-lang">python</div><pre><code>r = call_tool("index_repo", {"project_root": "."})
 if not r["ok"]:
     print(r["error"])                       # 人类可读的一句话

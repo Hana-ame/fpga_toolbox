@@ -1,12 +1,12 @@
 # `fpga_toolbox` 完整使用说明书、设计原理与实战示例
 
-> 版本：`v0.5.0+`（13 个注册原子工具 · 12 类总线协议 · 100% 函数测试覆盖率 · Verilator 5.054 + slang 12.2 + cocotb 2.1.0 + Synopsys VCS/DC/PT 自动化）
+> 版本：`v0.7.0+`（18 个注册原子工具 · 12 类总线协议 · 100% 函数测试覆盖率 · Verilator 5.054 + slang 12.2 + cocotb 2.1.0 + Synopsys VCS/DC/PT 自动化）
 
 ---
 
 ## 1. 设计原理与核心架构
 
-`fpga_toolbox` 的核心设计思想是 **“确定性验证流水线（Deterministic Verification Pipeline）”**——把 RTL 静态分析、契约校验、测试台生成、仿真防呆、变异杀伤与可视化审计拆解为 **13 个无状态原子工具**，所有工具统一返回结构化信封：
+`fpga_toolbox` 的核心设计思想是 **“确定性验证流水线（Deterministic Verification Pipeline）”**——把 RTL 静态分析、契约校验、测试台生成、仿真防呆、变异杀伤与可视化审计拆解为 **18 个无状态原子工具**，所有工具统一返回结构化信封：
 
 ```json
 {
@@ -56,7 +56,7 @@ python3 -m fpga_toolbox serve-mcp
 ### MCP 服务入口（`serve-mcp`）
 
 `serve-mcp` 在 **stdio** 上提供 MCP（Model Context Protocol，JSON-RPC 2.0）
-服务，让 Agent 客户端直接调用这 13 个原子工具。**零外部依赖** —— 只用标准库，
+服务，让 Agent 客户端直接调用这 18 个原子工具。**零外部依赖** —— 只用标准库，
 不需要安装 `mcp` 包，与「仅 PyYAML」的部署口径一致。
 
 Claude Desktop 配置示例（`claude_desktop_config.json`）：
@@ -92,7 +92,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 
 ---
 
-## 3. 13 个注册原子工具使用说明
+## 3. 18 个注册原子工具使用说明
 
 支持三种调用方式：
 - **统一 CLI**：`python3 -m fpga_toolbox <tool_name> --param value`（object/array 参数支持 `@file.json` 或行内 JSON）
