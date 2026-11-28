@@ -10,6 +10,7 @@ Codifies production workflows and hard-won tool-boundary guards for ASIC/FPGA pa
 
 from __future__ import annotations
 
+import hashlib
 import re
 import statistics
 from pathlib import Path
@@ -638,3 +639,156 @@ def tool_clean_pt_netlist(
             data=stats,
         )
     return ok_result("clean_pt_netlist", stats)
+
+
+# ---------------------------------------------------------------------------
+# Agent 控制面：把 VCS/UVM 与 DC/PT 的分析能力注册成原子工具
+#
+# 背景：`parse_uvm_log` / `parse_dc_pt_qor` / `aggregate_seed_medians` /
+# `generate_remote_run_script` 早已实现，但只有 `clean_pt_netlist` 注册进了
+# registry —— 外部 Agent 通过 MCP 只能看到网表清理，拿不到 VCS/DC/PT 的日志
+# 解析能力。没有商业 EDA 许可证的机器同样需要这些解析工具（日志是别人跑出来
+# 的），所以它们必须能在**零 EDA** 环境下工作：输入是文本/文件路径，不是
+# 真去调 vcs/dc_shell/pt_shell。
+# ---------------------------------------------------------------------------
+
+
+def _read_text_arg(text: str, path: str, what: str,
+                   tool: str = "eda_campaign") -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """取文本内容：`text` 优先，其次读 `path`。
+
+    两个参数都空、或 path 不存在时返回结构化错误（而不是让调用方看到
+    KeyError / FileNotFoundError 堆栈）。
+    """
+    if text and str(text).strip():
+        return str(text), None
+    if path and str(path).strip():
+        p = Path(path)
+        if not p.is_file():
+            return None, err_result(tool, f"{what} file not found: {path}")
+        try:
+            return p.read_text(encoding="utf-8", errors="replace"), None
+        except OSError as exc:
+            return None, err_result(tool, f"Cannot read {what} file {path}: {exc}")
+    return None, err_result(
+        tool,
+        f"Provide either '{what.lower().replace(' ', '_')}_text' or "
+        f"'{what.lower().replace(' ', '_')}_path' — both were empty.",
+    )
+
+
+def tool_parse_uvm_log(
+    log_text: str = "",
+    log_path: str = "",
+    expected_frames: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Parse a VCS/UVM simulation log into a structured pass/fail report."""
+    txt, err = _read_text_arg(log_text, log_path, "UVM log", tool="parse_uvm_log")
+    if err is not None:
+        return err
+    res = parse_uvm_log(txt or "", expected_frames=expected_frames)
+    # parse_uvm_log 返回 {'ok':..., 'data':..., 'diagnostics':...} 形态，
+    # 但 tool 名与信封的 tool 字段必须是本工具名，否则调用方无法区分。
+    return {
+        "ok": bool(res.get("ok")),
+        "tool": "parse_uvm_log",
+        "data": res.get("data") or {},
+        "diagnostics": res.get("diagnostics") or [],
+        "error": res.get("error"),
+    }
+
+
+def tool_parse_dc_pt_qor(
+    report_text: str = "",
+    report_path: str = "",
+    raw_log_text: str = "",
+    raw_log_path: str = "",
+) -> Dict[str, Any]:
+    """Parse a Synopsys DC/PT QoR report, flagging K-2015.06 fake-success pitfalls."""
+    rep, err = _read_text_arg(report_text, report_path, "DC/PT report", tool="parse_dc_pt_qor")
+    if err is not None:
+        return err
+    raw = ""
+    if raw_log_text and str(raw_log_text).strip():
+        raw = str(raw_log_text)
+    elif raw_log_path and str(raw_log_path).strip():
+        rp = Path(raw_log_path)
+        if not rp.is_file():
+            return err_result("parse_dc_pt_qor", f"Raw log file not found: {raw_log_path}")
+        try:
+            raw = rp.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return err_result("parse_dc_pt_qor", f"Cannot read raw log {raw_log_path}: {exc}")
+    res = parse_dc_pt_qor(rep or "", raw_log_text=raw)
+    return {
+        "ok": bool(res.get("ok")),
+        "tool": "parse_dc_pt_qor",
+        "data": res.get("data") or {},
+        "diagnostics": res.get("diagnostics") or [],
+        "error": res.get("error"),
+    }
+
+
+def tool_aggregate_seed_medians(runs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Aggregate multi-seed QoR runs into medians (seeds must be >= 3 to be meaningful)."""
+    if runs is None:
+        return err_result("aggregate_seed_medians", "'runs' is required (list of run objects).")
+    if not isinstance(runs, list):
+        return err_result("aggregate_seed_medians", f"'runs' must be a list, got {type(runs).__name__}.")
+    for i, r in enumerate(runs):
+        if not isinstance(r, dict):
+            return err_result(
+                "aggregate_seed_medians",
+                f"runs[{i}] must be an object, got {type(r).__name__}.",
+            )
+    try:
+        res = aggregate_seed_medians(runs)
+    except ValueError as exc:
+        # 「误传整条 ToolResult 信封」是调用方最常见的参数层级错误。底层用
+        # ValueError 明确指出该怎么传；这里必须把它转成结构化错误，否则会
+        # 冒泡成 MCP 传输层异常（客户端只看到 server 崩了）。
+        return err_result("aggregate_seed_medians", str(exc))
+    # 注意：aggregate_seed_medians 返回的是**裸 dict**（没有 ok/tool 信封），
+    # 与 parse_uvm_log / parse_dc_pt_qor 不同。旧包装直接把 res 当信封解，
+    # 于是 ok 恒为 False、data 恒为空 —— 一次成功的聚合看起来像失败。
+    return ok_result("aggregate_seed_medians", res)
+
+
+def tool_generate_remote_run_script(
+    host: str,
+    tag: str,
+    local_script_name: str,
+    remote_work_dir: str = "~/work",
+    use_dev_shm: bool = True,
+) -> Dict[str, Any]:
+    """Generate a csh-safe remote SSH/SCP launcher script (returns the script text)."""
+    try:
+        script = generate_remote_run_script(
+            host=host,
+            tag=tag,
+            local_script_name=local_script_name,
+            remote_work_dir=remote_work_dir,
+            use_dev_shm=use_dev_shm,
+        )
+    except ValueError as exc:
+        # 非法输入是**用户错误**，要给结构化错误而不是让 ValueError 冒泡成
+        # MCP 传输层错误（客户端会当成 server 崩了）。
+        return err_result(
+            "generate_remote_run_script",
+            str(exc),
+            diagnostics=[{
+                "severity": "ERROR",
+                "code": "E024",
+                "path": "remote_run_script",
+                "message": "Invalid launcher parameter; refused to generate a script that could inject or delete data.",
+            }],
+        )
+    return ok_result("generate_remote_run_script", {
+        "script": script,
+        "sha256_prefix": hashlib.sha256(script.encode("utf-8")).hexdigest()[:16],
+        "bytes": len(script.encode("utf-8")),
+        "host": host,
+        "tag": tag,
+        "remote_work_dir": remote_work_dir,
+        "use_dev_shm": bool(use_dev_shm),
+    })

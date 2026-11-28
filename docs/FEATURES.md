@@ -737,12 +737,51 @@ python3 -m fpga_toolbox extract_interfaces --rtl-file dut.sv
 python3 -m fpga_toolbox @params.json                  # 从 JSON 文件传参
 ```
 
-### MCP
+### MCP（stdio 服务 + 客户端接入）
 
-```python
-from fpga_toolbox import list_tool_schemas
-mcp_tools = list_tool_schemas()    # 直接喂给 MCP server 注册
+内置零依赖 MCP server，不需要安装任何 MCP SDK：
+
+```bash
+python3 -m fpga_toolbox serve-mcp          # 在 stdio 上服务
 ```
+
+Claude Desktop / Cursor 的 `mcpServers` 配置：
+
+```json
+{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}
+```
+
+协议能力：
+
+| 方法 | 说明 |
+|---|---|
+| `initialize` | 版本协商：`2025-06-18` / `2025-03-26` / `2024-11-05` / `2024-10-07`，未知版本回落最新 |
+| `tools/list` / `tools/call` | 17 个工具；响应同时含 `content[0].text` 与 **`structuredContent`** |
+| `resources/list` / `resources/read` | 只读上下文：诊断码速查表、11 类协议规范、工具清单 |
+| `prompts/list` / `prompts/get` | `rtl-to-mutation-audit` / `debug-failing-simulation` / `analyze-eda-campaign` |
+
+`structuredContent` 与 `content[0].text` 内容**完全一致**：强类型客户端直接读前者
+（不用再解析文本里的 JSON），只认文本的客户端读后者。两个出口都填，才不会让其中
+一半客户端拿到空结构。
+
+resources 的内容来自仓库内的**唯一事实源**（`docs/FEATURES.md` 的诊断码表、
+`canonical_iface.py` 的协议声明），不额外维护副本，因此不会与代码漂移。
+
+三条硬约定（都是实现时踩过的坑）：
+
+1. **stdout 只能有协议消息** —— 工具执行期间 `sys.stdout` 临时重定向到 stderr。
+   否则工具里任何 `print` 都会污染协议流，客户端只表现为「工具超时」。
+2. **工具失败 ≠ 协议失败** —— `ok: false` 返回正常响应 + `isError: true`，
+   完整 `ToolResult` 在 `content` / `structuredContent` 里。走 JSON-RPC error
+   会被客户端当成传输故障并重试。
+3. **一条坏消息不能杀死 server** —— `-32700` / `-32601` / `-32602` 之后继续服务。
 
 ---
 

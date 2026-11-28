@@ -108,12 +108,16 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 | 5 | `validate_contract` | `--spec-path [--rtl-file]` | 校验寄存器契约（含位域重叠 `E013`、越界 `E014`） |
 | 6 | `emit_testbench` | `--out-dir [--spec-path] [--rtl-file] [--protocol auto\|apb\|axi4\|...]` | 生成 cocotb/SVA/Makefile 或多协议自检 SV 测试台 |
 | 7 | `lint_tb` | `--target-path` | 静态扫描测试台时钟、握手与静默通过缺陷（`C/R/S` 规则） |
-| 8 | `run_sim` | `--sim-script [--suite] [--expected-suites] [--waveform] [--require-waveform]` | 运行仿真、持久化全量日志、核验套件身份与波形新鲜度 |
+| 8 | `run_sim` | `--sim-script [--suite] [--backend auto\|verilator\|cocotb\|iverilog] [--waveform] [--require-waveform]` | 按后端分发运行仿真（verilator / cocotb Makefile / iverilog）、持久化全量日志、核验套件身份与波形新鲜度 |
 | 9 | `run_mutation` | `--workdir --mutation-spec --test-cmd [--min-score 80]` | 注入真实 RTL 变异、统计杀伤率并保证 `try/finally` 恢复 |
 | 10 | `normalize_sim_result` | `--module-name [--cocotb-results-json] [--verilator-log-path] [--sva-log-path]` | 归一化所有仿真日志与逐笔 `[CHECK]` 为统一 JSON 报告 |
 | 11 | `render_visual_report` | `--report --dep-graph --extracted-interfaces --out-html-path` | 生成带 SV 语法高亮、方向/位宽标签与分项目标签页的离线 HTML+SVG |
 | 12 | `clean_pt_netlist` | `--in-verilog --out-verilog [--blackbox-modules]` | 清理 DC 网表中的参数化黑盒并插入标量 `assign = 1'b0;` 供 PT 读取 |
-| 13 | `audit_harness` | `[--strict]` | 运行 19 项故障注入自审计，验证工具链所有护栏未被破坏 |
+| 13 | `audit_harness` | `[--strict]` | 运行 22 项故障注入自审计，验证工具链所有护栏未被破坏 |
+| 14 | `parse_uvm_log` | `[--log-text\|--log-path] [--expected-frames]` | 解析 VCS/UVM 日志：delivered/fid_bad/retry、UVM_ERROR/FATAL、延迟 min/avg/max，并拦截陈旧 simv 与截断日志 |
+| 15 | `parse_dc_pt_qor` | `[--report-text\|--report-path] [--raw-log-text\|--raw-log-path]` | 解析 DC/PT QoR 报告，标记 K-2015.06 假成功陷阱（`E046` UID-423、`No paths.` 迷你报告） |
+| 16 | `aggregate_seed_medians` | `--runs <JSON>` | 多 seed 运行聚合为中位数，并标出偏离中位数带的 seed（< 3 seed 无统计意义） |
+| 17 | `generate_remote_run_script` | `--host --tag --local-script-name [--remote-work-dir]` | 生成 csh 安全的远端 SSH/SCP 启动脚本（`/dev/shm` 暂存 + 安全清理），拒绝 shell 注入 |
 
 ---
 

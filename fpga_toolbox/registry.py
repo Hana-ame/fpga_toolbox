@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from .core.types import err_result
-from .eda_campaign import tool_clean_pt_netlist
+from .eda_campaign import (
+    tool_aggregate_seed_medians,
+    tool_clean_pt_netlist,
+    tool_generate_remote_run_script,
+    tool_parse_dc_pt_qor,
+    tool_parse_uvm_log,
+)
 from .iface_extractor import tool_extract_interfaces
 from .mutation_runner import tool_run_mutation
 from .repo_indexer import tool_index_repo, tool_resolve_deps
@@ -135,7 +141,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "run_sim": {
         "fn": tool_run_sim,
-        "description": "Run Verilator (>= 5.040) + slang simulation with stdbuf log retention and per-suite identity verification.",
+        "description": "Run a simulation through a pluggable backend (verilator / cocotb / iverilog) with stdbuf log retention and per-suite identity verification.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -150,6 +156,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "waveform": {"type": "boolean", "description": "Enable waveform capture: sets WAVE=1 for the sim script so verilator is built with --trace/--trace-fst (default false)."},
                 "waveform_format": {"type": "string", "enum": ["vcd", "fst"], "description": "Waveform format when waveform=true (default vcd)."},
                 "require_waveform": {"type": "boolean", "description": "Fail with E024 unless a non-empty waveform file was produced. Guards against verilator silently ignoring $dumpvars without --trace."},
+                "backend": {"type": "string", "enum": ["auto", "verilator", "cocotb", "iverilog"], "description": "Simulation backend. 'auto' detects from the entry point: a Makefile implies cocotb, otherwise verilator. Only the selected backend's toolchain is required (E020 names what is missing)."},
             },
             "required": ["sim_script"],
             "additionalProperties": False
@@ -169,6 +176,63 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "only_id": {"type": "string", "description": "Optional single mutation id to run (for targeted verification)."},
             },
             "required": ["workdir", "mutation_spec", "test_cmd"],
+            "additionalProperties": False
+            },
+    },
+    "parse_uvm_log": {
+        "fn": tool_parse_uvm_log,
+        "description": "Parse a VCS/UVM simulation log into a structured pass/fail report: delivered frames, FID errors, retries, UVM_ERROR/UVM_FATAL counts, latency min/avg/max, and strict gates against stale simv / truncated logs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "log_text": {"type": "string", "description": "UVM log content. Provide this or log_path."},
+                "log_path": {"type": "string", "description": "Path to the UVM log file (read as UTF-8 with replacement)."},
+                "expected_frames": {"type": "integer", "description": "Expected frame count; a mismatch is reported as a hard failure instead of a silent pass."},
+            },
+            "required": [],
+            "additionalProperties": False
+            },
+    },
+    "parse_dc_pt_qor": {
+        "fn": tool_parse_dc_pt_qor,
+        "description": "Parse a Synopsys DC/PT QoR report (plus optional raw log) and flag K-2015.06 fake-success pitfalls: UID-423 async_default group, tiny 'No paths.' reports, missing timing paths.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "report_text": {"type": "string", "description": "QoR report content. Provide this or report_path."},
+                "report_path": {"type": "string", "description": "Path to the DC/PT QoR report file."},
+                "raw_log_text": {"type": "string", "description": "Raw tool log content (optional; catches pitfalls only visible in logs)."},
+                "raw_log_path": {"type": "string", "description": "Path to the raw DC/PT log file (optional)."},
+            },
+            "required": [],
+            "additionalProperties": False
+            },
+    },
+    "aggregate_seed_medians": {
+        "fn": tool_aggregate_seed_medians,
+        "description": "Aggregate multi-seed QoR runs into medians and flag seeds whose results fall outside the median band (needs at least 3 seeds to be statistically meaningful).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "runs": {"type": "array", "items": {"type": "object"}, "description": "List of per-seed run objects (each with at least a seed and QoR metrics)."},
+            },
+            "required": ["runs"],
+            "additionalProperties": False
+            },
+    },
+    "generate_remote_run_script": {
+        "fn": tool_generate_remote_run_script,
+        "description": "Generate a csh-safe remote SSH/SCP launcher script with /dev/shm staging, progress tracking and safe cleanup. Rejects shell metacharacters and path-escaping tags instead of emitting an injectable script.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Remote host (user@host / IPv4 / [IPv6]); shell metacharacters are rejected."},
+                "tag": {"type": "string", "description": "Run tag used as the /dev/shm directory name; only [A-Za-z0-9_.-], and '.'/'..' are rejected."},
+                "local_script_name": {"type": "string", "description": "Plain file name of the script to upload (no path separators or metacharacters)."},
+                "remote_work_dir": {"type": "string", "description": "Remote working directory (default ~/work). '..' and root are rejected."},
+                "use_dev_shm": {"type": "boolean", "description": "Stage under /dev/shm when available (default true)."},
+            },
+            "required": ["host", "tag", "local_script_name"],
             "additionalProperties": False
             },
     },

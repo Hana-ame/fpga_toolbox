@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -246,6 +247,7 @@ def tool_run_sim(
     waveform: bool = False,
     waveform_format: str = "vcd",
     require_waveform: bool = False,
+    backend: str = "auto",
 ) -> Dict[str, Any]:
     # MCP / CLI 调用方常把数字参数序列化成字符串（JSON number → str），
     # schema 虽声明 integer，但 call_tool 不做类型强制。若直接把 str 传给
@@ -286,31 +288,103 @@ def tool_run_sim(
                           "message": "require_waveform=true requires waveform=true."}],
         )
 
+    # ---- 后端分发 ----
+    # 此前 run_sim 硬绑 Verilator：`probe_eda_env()` 检查 verilator 版本，不满足
+    # 就整个拒绝。于是 emit_testbench 契约路径产出的 **cocotb Makefile** 永远
+    # 跑不通（它甚至不是 shell 脚本），iverilog 用户也被一刀切挡在门外。
+    # 现在按 backend 分发校验与执行方式：
+    #   auto      —— 依据入口形态判断（Makefile→cocotb，*.sh 里出现 iverilog→
+    #                iverilog，其余按 verilator）
+    #   verilator —— 驱动协议路径生成的 run_*.sh（需要 verilator）
+    #   cocotb    —— 驱动 `make` + cocotb Makefile（需要 cocotb / sim 构建器）
+    #   iverilog  —— 驱动 iverilog + vvp（零商业/半商业依赖，最轻量）
+    backend = (backend or "auto").lower().strip()
+    if backend not in ("auto", "verilator", "cocotb", "iverilog"):
+        return err_result(
+            "run_sim",
+            f"backend must be 'auto', 'verilator', 'cocotb' or 'iverilog', got {backend!r}",
+            diagnostics=[{"severity": "ERROR", "code": "E024", "path": "backend",
+                          "message": f"Unsupported simulation backend {backend!r}."}],
+        )
+
     script_p = Path(sim_script)
     if not script_p.is_file():
         return err_result("run_sim", f"Simulation entry script not found: {sim_script}")
 
-    # 契约路径（emit_testbench --spec-path）产出的是 **Makefile**，不是可执行
-    # shell 脚本。旧实现直接 `bash Makefile` → 127 "command not found"，用户
-    # 完全不知道应该用 `make`。这里给出可操作的指引。
-    if script_p.suffix.lower() in (".mk",) or script_p.name in ("Makefile", "makefile", "GNUmakefile"):
+    is_makefile = (script_p.suffix.lower() in (".mk",)
+                   or script_p.name in ("Makefile", "makefile", "GNUmakefile"))
+    if backend == "auto":
+        # Makefile 只能是 cocotb 路径（协议路径产出的是 run_*.sh）
+        backend = "cocotb" if is_makefile else "verilator"
+
+    # 入口形态与后端不匹配时**必须当场拒绝**：把 Makefile 交给
+    # `bash Makefile` 会得到 127 "command not found"（旧实现就是这样误导用户
+    # 去查 bash 而不是 make），把 shell 脚本交给 make 会报 "No targets"。
+    # 这类错误信息完全没有指向真实原因，所以在分发阶段就拦住。
+    if is_makefile and backend in ("verilator", "iverilog"):
         return err_result(
             "run_sim",
-            f"{sim_script} is a Makefile, not a shell script — run it with make, e.g. "
-            f"`make -C {script_p.parent} SIM=verilator`. To capture a waveform add "
-            "VERILATOR_TRACE=1 (the generated Makefile already sets COCOTB_PLUSARGS=+WAVE). "
-            "run_sim drives a POSIX sim script (the protocol path's run_*.sh); it cannot "
-            "drive a cocotb Makefile.",
-            data={"script": str(script_p.resolve()), "hint": "use make"},
+            f"{script_p.name} is a Makefile, which the '{backend}' backend cannot "
+            f"execute (it runs `bash <script>`). Use backend='cocotb' for cocotb "
+            "Makefiles (it runs `make -C <dir> SIM=verilator`), or point run_sim at "
+            "the generated run_*.sh shell script for the protocol-testbench path.",
+            data={"script": str(script_p.resolve()), "detected": "makefile",
+                  "backend": backend},
+        )
+    if (not is_makefile) and backend == "cocotb":
+        return err_result(
+            "run_sim",
+            f"backend='cocotb' expects a cocotb Makefile, but {script_p.name} is "
+            "not one. Point run_sim at the Makefile produced by "
+            "`emit_testbench --spec-path`, or use backend='verilator' for the "
+            "run_*.sh scripts.",
+            data={"script": str(script_p.resolve()), "detected": "script",
+                  "backend": backend},
         )
 
+    # 契约路径（emit_testbench --spec-path）产出的是 **Makefile**，不是可执行
     env_info = probe_eda_env()
-    if not env_info["verilator"]["meets_min_version"]:
+
+    # 后端能力校验：只检查**该后端真正需要**的东西。
+    # 旧实现无条件要求 Verilator >= 5.040，导致
+    #   * cocotb Makefile 永远跑不了（它甚至不是 shell 脚本）；
+    #   * iverilog 用户虽然装了 iverilog，仍被 Verilator 版本门槛拦住。
+    # 每个后端给出各自的 E020 诊断，而不是一律报「Verilator requirement unmet」。
+    if backend == "verilator" and not env_info["verilator"]["meets_min_version"]:
         return err_result(
             "run_sim",
             f"Verilator requirement unmet: {env_info['verilator']['message']}",
             diagnostics=[{"severity": "ERROR", "code": "E020", "path": "eda_env.verilator", "message": env_info["verilator"]["message"]}],
         )
+    if backend == "cocotb":
+        missing = [t for t in ("make",) if shutil.which(t) is None]
+        try:
+            import cocotb  # noqa: F401
+        except ImportError:
+            missing.append("cocotb (python package)")
+        if missing:
+            return err_result(
+                "run_sim",
+                "cocotb backend requires: " + ", ".join(missing) + ". "
+                "Install with `pip install cocotb` and make sure `make` is on PATH. "
+                "This is a cocotb Makefile - run it with make, e.g. "
+                "`make -C <dir> SIM=verilator`; "
+                "run_sim does exactly that for you once the toolchain is present. "
+                "To capture a waveform add VERILATOR_TRACE=1 (the generated Makefile "
+                "already sets COCOTB_PLUSARGS=+WAVE).",
+                diagnostics=[{"severity": "ERROR", "code": "E020", "path": "eda_env.cocotb",
+                              "message": "cocotb toolchain missing: " + ", ".join(missing)}],
+            )
+    if backend == "iverilog":
+        missing = [t for t in ("iverilog", "vvp") if shutil.which(t) is None]
+        if missing:
+            return err_result(
+                "run_sim",
+                "iverilog backend requires: " + ", ".join(missing) + " on PATH.",
+                diagnostics=[{"severity": "ERROR", "code": "E020", "path": "eda_env.iverilog",
+                              "message": "iverilog toolchain missing: " + ", ".join(missing)}],
+            )
+
     if require_slang and not env_info["slang"]["available"]:
         return err_result(
             "run_sim",
@@ -320,7 +394,9 @@ def tool_run_sim(
 
     # FST 需要 lz4 开发头文件；不支持时必须显式报错，不能静默降级成 VCD
     # （那会产出「后缀 .fst、内容是 VCD」的假文件）。
-    if waveform and waveform_format == "fst":
+    # 只有 verilator 直接以 `--trace-fst` 驱动时才需要这个探测；cocotb 由
+    # Makefile 自己处理波形，iverilog 根本不产 FST。
+    if waveform and waveform_format == "fst" and backend == "verilator":
         fst_ok, fst_msg = _fst_available(str(env_info["verilator"]["path"]))
         if not fst_ok:
             return err_result(
@@ -333,13 +409,38 @@ def tool_run_sim(
     cmd: List[str] = []
     if env_info["stdbuf"]["available"]:
         cmd.extend(["stdbuf", "-oL", "-eL"])
-    cmd.extend(["bash", str(script_p.resolve()), suite])
+    if backend == "cocotb":
+        # cocotb 的标准入口是 Makefile（emit_testbench 契约路径产出）。
+        # 关键：Makefile 里 `SIM ?= icarus` 之类的默认值会让「以为在跑
+        # verilator、实际跑 icarus」，所以显式传 SIM=verilator 且允许调用方
+        # 通过 sim_env 覆盖（见下方 run_env 里的 COCOTB_* 变量）。
+        cmd.extend(["make", "-C", str(script_p.parent), "SIM=verilator"])
+        if suite and suite not in ("all", ""):
+            # cocotb 用 TESTS / MODULE 选择用例，不是位置参数
+            cmd.append(f"TESTS={suite}")
+    elif backend == "iverilog":
+        # iverilog 后端：调用方提供的是 shell 脚本（内部自己调 iverilog+vvp），
+        # 与 verilator 后端一样用 bash 驱动；区别只在环境校验与不传 VERILATOR。
+        cmd.extend(["bash", str(script_p.resolve()), suite])
+    else:
+        cmd.extend(["bash", str(script_p.resolve()), suite])
 
     import os
     import time
 
     run_env = os.environ.copy()
-    run_env["VERILATOR"] = str(env_info["verilator"]["path"])
+    # PWD 必须与子进程 cwd 一致。`subprocess.run(cwd=...)` 只改变工作目录，
+    # **不会**更新环境里的 PWD；而 `os.environ["PWD"]` 仍是调用方的工作目录，
+    # 被原样传给子进程。cocotb 的 Makefile 惯用 `VERILOG_SOURCES = $(PWD)/x.sv`，
+    # 于是它在仓库根目录找 /home/.../fpga_toolbox/dut.sv 而不是 /tmp/coco/dut.sv：
+    #     make: *** No rule to make target '.../dut.sv'
+    # 实测踩中，且在 shell 里直接 `make` 完全正常（shell 会维护 PWD），
+    # 只有被 run_sim 拉起时才失败 —— 典型的「工具调用与手工执行不一致」。
+    run_env["PWD"] = str(script_p.parent.resolve())
+    if backend in ("verilator", "cocotb") and env_info["verilator"]["path"]:
+        run_env["VERILATOR"] = str(env_info["verilator"]["path"])
+    if backend == "iverilog":
+        run_env["IVERILOG"] = shutil.which("iverilog") or "iverilog"
     if seed is not None:
         run_env["SEED"] = str(seed)
     if wait_cycles is not None:

@@ -22,11 +22,11 @@
 | 10 | `run_sim` | 封装 Verilator ≥ 5.040 + slang 仿真、`stdbuf` 日志保活与逐套件身份校验 |
 | 11 | `run_mutation` | 参数化 RTL 变异测试，含 `try/finally` 强还原与残留变异拦截（E030） |
 | 12 | `clean_pt_netlist` | 清理 DC 网表中未解析的参数化黑盒（`RDBUS`/`CLKCROSSBUS`/`CLKCROSSDFF`）并插入标量 tie-off，使 PrimeTime `link_design` 可通过 |
-| 13 | `audit_harness` | 故障注入式自审计（A1–A19），证明验证护栏出错时不会静默通过 |
+| 13 | `audit_harness` | 故障注入式自审计（A1–A22），证明验证护栏出错时不会静默通过 |
 
 ### 多总线原生测试台（`protocol=`）
 
-不需要写契约，直接从 RTL 的 slang AST 生成可编译、自检的 SystemVerilog testbench 与 Verilator 运行脚本：
+不需要写契约，直接从 RTL 端口（内置 token 解析器，装了 slang 时用其 AST 增强）生成可编译、自检的 SystemVerilog testbench 与 Verilator 运行脚本：
 
 ```bash
 python3 -m fpga_toolbox emit_testbench \
@@ -39,7 +39,7 @@ bash /tmp/tb_pcie/run_pcie_tlp_ep_pcie.sh all     # Gen3/4/5 × x1/x4/x16 共 9 
 每个生成的 TB 都以 `[CHECK] id=... | proto=... | status=PASS|FAIL` 输出逐笔事务结果，
 `normalize_sim_result` 会把这些行解析成 rule 级 check。
 
-`examples/multi_bus_ref/` 是配套靶场：7 类协议 RTL + `complex_datapath/`（AXI4-64↔APB32、
+`examples/multi_bus_ref/` 是配套靶场：11 类协议 RTL + `complex_datapath/`（AXI4-64↔APB32、
 AXI4 OoO 重排、PCIe repack loopback）+ `full_conversion_suite/`（可配 `BUF_CYCS=0/2/4` 的
 APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ `omni_hub/`。
 
@@ -64,6 +64,72 @@ APB→AXI4 / PCIe→AXI4 / AXI4→DDR3）+ `soc_fabric/`（SPI/ETH/PM/LTSSM）+ 
 
 > 注：这批码原设计用 `E040–E045`，但 `E040` 已被 `audit_harness` 占用（自审计护栏失效），
 > 故整体平移至空闲的 `E046–E050`，避免同一码两种语义。
+
+## 作为 MCP 服务接入 Agent 客户端
+
+`serve-mcp` 在 **stdio** 上提供 MCP（JSON-RPC 2.0）服务，让 Claude Desktop / Cursor
+等客户端直接调用这 17 个原子工具。**零外部依赖** —— 只用标准库，不需要装任何
+MCP SDK，与「仅 PyYAML」的部署口径一致。
+
+### Claude Desktop
+
+编辑 `claude_desktop_config.json`（macOS: `~/Library/Application Support/Claude/`；
+Windows: `%APPDATA%\Claude\`）：
+
+```json
+{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+`~/.cursor/mcp.json`（或项目内 `.cursor/mcp.json`），格式同上：
+
+```json
+{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}
+```
+
+### CLI 冒烟
+
+```bash
+# 握手 + 列工具
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  | python3 -m fpga_toolbox serve-mcp
+```
+
+### 协议能力
+
+| 方法 | 说明 |
+|---|---|
+| `initialize` | 版本协商（支持 2025-06-18 / 2025-03-26 / 2024-11-05 / 2024-10-07，未知版本回落最新） |
+| `tools/list` / `tools/call` | 17 个工具；结果同时给出 `content[0].text` 与 **`structuredContent`**（强类型客户端可直读） |
+| `resources/list` / `resources/read` | 只读上下文：诊断码速查表、11 类协议规范、工具清单 |
+| `prompts/list` / `prompts/get` | 标准流程：`rtl-to-mutation-audit`、`debug-failing-simulation`、`analyze-eda-campaign` |
+| `ping` / `shutdown` / `exit` | 健康检查与优雅退出（另支持 JSON-RPC 批量请求） |
+
+三条硬约定：
+
+1. **stdout 只承载协议消息** —— 工具执行期间的 `print` 会临时重定向到 stderr，
+   否则客户端解析失败后只会表现为「工具超时」。
+2. **工具失败 ≠ 协议失败** —— `ok:false` 走正常响应 + `isError:true`，完整
+   `ToolResult` 信封在 `content` 与 `structuredContent` 里。
+3. **一条坏消息不能杀死 server** —— 坏 JSON 回 `-32700`、未知方法回 `-32601`、
+   非法参数回 `-32602`，之后继续服务。
 
 ## 快速验证与测试
 

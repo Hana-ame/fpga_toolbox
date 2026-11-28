@@ -66,11 +66,14 @@ def test_mcp_initialize_and_capabilities() -> None:
     assert res["serverInfo"]["name"] == "fpga-toolbox", res
     assert "tools" in res["capabilities"], res
     # 未在支持列表内的版本：回落到最新版而不是报错（旧/未来客户端仍可连）
+    # 未知版本回落**最新**协议（不是钉死的某个值 —— 升级版本号时这条断言
+    # 不该跟着改，否则每次升版都要改测试，容易改成"测试跟着实现走"）
+    from fpga_toolbox.mcp_server import LATEST_PROTOCOL
     r2 = McpServer().handle({
         "jsonrpc": "2.0", "id": 2, "method": "initialize",
         "params": {"protocolVersion": "1999-01-01"},
     })
-    assert r2["result"]["protocolVersion"] == "2024-11-05", r2
+    assert r2["result"]["protocolVersion"] == LATEST_PROTOCOL, r2
 
 
 def test_mcp_tools_list_and_call() -> None:
@@ -201,7 +204,81 @@ def test_mcp_cli_subcommand_end_to_end() -> None:
     assert len(lines) == 3, (len(lines), cp.stdout[:400])
     parsed = [json.loads(ln) for ln in lines]
     assert [p["id"] for p in parsed] == [1, 2, 3], parsed
-    assert len(parsed[1]["result"]["tools"]) == 13, parsed[1]
+    # 不要写死工具数量 —— 新增工具时这条断言不该跟着改（否则测试变成
+    # "跟着实现走"，失去回归价值）。直接与注册表比对。
+    from fpga_toolbox.registry import TOOL_REGISTRY
+    assert len(parsed[1]["result"]["tools"]) == len(TOOL_REGISTRY), parsed[1]
+
+
+def test_mcp_all_resources_and_prompts_render() -> None:
+    """每个 resource 与每个 prompt 都必须能真的渲染出内容。
+
+    未覆盖的三个函数（tools_doc / 两个 prompt 渲染器）暴露的真实风险：
+    resource 或 prompt 只在**被请求时**才执行渲染，若某条路径有 bug，客户端
+    拉到的是 500/-32603，而 server 启动与 tools/list 一切正常 —— 缺陷直到
+    真实使用时才暴露。这里把每个 uri / name 都拉一遍。
+    """
+    print("coverage: every MCP resource and prompt renders")
+    from fpga_toolbox.mcp_resources import (
+        list_prompts,
+        list_resources,
+        read_resource,
+    )
+
+    srv = McpServer()
+    # ---- 每个 resource 都能读且内容非空 ----
+    for meta in list_resources():
+        r = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+                        "params": {"uri": meta["uri"]}})
+        assert "result" in r, (meta["uri"], r)
+        content = r["result"]["contents"][0]
+        assert content["uri"] == meta["uri"], content
+        assert content["mimeType"] == "text/markdown", content
+        assert len(content["text"].strip()) > 100, (meta["uri"], content["text"][:100])
+        # 直接调底层也要一致（MCP 与库内两个出口不能漂移）
+        assert read_resource(meta["uri"])["text"] == content["text"]
+
+    # tools resource 必须真的列出全部工具（不是空表）
+    tools_res = read_resource("fpga-toolbox://tools")["text"]
+    from fpga_toolbox.registry import TOOL_REGISTRY
+    for name in TOOL_REGISTRY:
+        assert f"`{name}`" in tools_res, name
+
+    # ---- 每个 prompt 都能渲染，且参数被插入 ----
+    for meta in list_prompts():
+        args = {}
+        for a in meta.get("arguments", []):
+            if a.get("required"):
+                args[a["name"]] = f"<{a['name']}>"
+        r = srv.handle({"jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+                        "params": {"name": meta["name"], "arguments": args}})
+        assert "result" in r, (meta["name"], r)
+        msgs = r["result"]["messages"]
+        assert msgs and msgs[0]["role"] == "user", (meta["name"], msgs)
+        body = msgs[0]["content"]["text"]
+        assert len(body) > 100, (meta["name"], body[:100])
+        # prompt 必须真的指导调用工具，而不是一段空话
+        assert "`" in body, (meta["name"], body[:120])
+        for k, v in args.items():
+            assert v in body, (meta["name"], k, body[:200])
+
+    # 三个命名 prompt 的存在性与用途（避免有人删掉后静默失效）
+    names = {p["name"] for p in list_prompts()}
+    assert {"rtl-to-mutation-audit", "debug-failing-simulation",
+            "analyze-eda-campaign"} <= names, names
+    # EDA campaign prompt 必须提到四个解析工具
+    eda = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+                      "params": {"name": "analyze-eda-campaign", "arguments": {}}})
+    eda_body = eda["result"]["messages"][0]["content"]["text"]
+    for t in ("parse_uvm_log", "parse_dc_pt_qor", "aggregate_seed_medians",
+              "generate_remote_run_script"):
+        assert t in eda_body, (t, eda_body[:300])
+    # debug prompt 必须给出症状→诊断码的分流表（这是它的全部价值）
+    dbg = srv.handle({"jsonrpc": "2.0", "id": 4, "method": "prompts/get",
+                      "params": {"name": "debug-failing-simulation",
+                                 "arguments": {"log_path": "/tmp/x.log"}}})
+    dbg_body = dbg["result"]["messages"][0]["content"]["text"]
+    assert "E050" in dbg_body and "/tmp/x.log" in dbg_body, dbg_body[:300]
 
 
 def test_mcp_main_entry_points() -> None:
@@ -237,6 +314,129 @@ def test_mcp_main_entry_points() -> None:
     assert out.getvalue() == "", out.getvalue()[:200]
 
 
+def test_mcp_resources_and_prompts() -> None:
+    """resources/list|read 与 prompts/list|get 必须返回真实内容。
+
+    之前这两个方法固定返回空列表 —— 客户端拿不到诊断码速查/协议规范，只能把
+    这些上下文写进提示词，每次 session 重来一遍。空列表还有一个更隐蔽的坏处：
+    客户端探测到「能力存在但为空」后不会重试，问题永远不会被发现。
+    """
+    print("coverage: MCP resources/list|read and prompts/list|get")
+    srv = McpServer()
+
+    # capabilities 必须声明 resources/prompts（否则客户端根本不来探测）
+    init = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                       "params": {"protocolVersion": "2025-06-18"}})
+    caps = init["result"]["capabilities"]
+    assert "resources" in caps and "prompts" in caps, caps
+    # 新版协议必须被原样回显（不是回落到旧版本）
+    assert init["result"]["protocolVersion"] == "2025-06-18", init["result"]
+
+    # ---- resources ----
+    rl = srv.handle({"jsonrpc": "2.0", "id": 2, "method": "resources/list"})
+    res = rl["result"]["resources"]
+    assert len(res) >= 3, res
+    uris = {r["uri"] for r in res}
+    assert "fpga-toolbox://diagnostics/codes" in uris, uris
+    for r in res:
+        assert set(r) >= {"uri", "name", "mimeType"}, r
+
+    codes = srv.handle({"jsonrpc": "2.0", "id": 3, "method": "resources/read",
+                        "params": {"uri": "fpga-toolbox://diagnostics/codes"}})
+    text = codes["result"]["contents"][0]["text"]
+    # 内容必须是**真实**诊断码表，不是占位符
+    assert "E001" in text and "W0" in text, text[:300]
+    assert "| 码 | 含义 |" in text, text[:200]
+    assert codes["result"]["contents"][0]["mimeType"] == "text/markdown"
+
+    protos = srv.handle({"jsonrpc": "2.0", "id": 4, "method": "resources/read",
+                         "params": {"uri": "fpga-toolbox://protocols"}})
+    ptext = protos["result"]["contents"][0]["text"]
+    assert "axi4_stream" in ptext and "apb" in ptext, ptext[:300]
+
+    # 未知 uri：-32602 且列出可用 uri（方便 Agent 自纠）
+    bad = srv.handle({"jsonrpc": "2.0", "id": 5, "method": "resources/read",
+                      "params": {"uri": "fpga-toolbox://nope"}})
+    assert bad["error"]["code"] == INVALID_PARAMS, bad
+    assert bad["error"]["data"]["available"], bad
+    # 缺 uri 参数
+    miss = srv.handle({"jsonrpc": "2.0", "id": 6, "method": "resources/read",
+                       "params": {}})
+    assert miss["error"]["code"] == INVALID_PARAMS, miss
+
+    # ---- prompts ----
+    pl = srv.handle({"jsonrpc": "2.0", "id": 7, "method": "prompts/list"})
+    prompts = pl["result"]["prompts"]
+    assert len(prompts) >= 3, prompts
+    names = {p["name"] for p in prompts}
+    assert "rtl-to-mutation-audit" in names, names
+    for p in prompts:
+        assert set(p) >= {"name", "description"}, p
+
+    got = srv.handle({"jsonrpc": "2.0", "id": 8, "method": "prompts/get",
+                      "params": {"name": "rtl-to-mutation-audit",
+                                 "arguments": {"rtl_file": "dut.sv"}}})
+    msgs = got["result"]["messages"]
+    assert msgs and msgs[0]["role"] == "user", msgs
+    body = msgs[0]["content"]["text"]
+    # prompt 必须把调用方参数真正插进去，并且覆盖真实工具流程
+    assert "dut.sv" in body, body[:300]
+    for tool in ("extract_interfaces", "emit_testbench", "run_sim", "run_mutation"):
+        assert tool in body, (tool, body[:300])
+
+    # 未知 prompt
+    badp = srv.handle({"jsonrpc": "2.0", "id": 9, "method": "prompts/get",
+                       "params": {"name": "nope"}})
+    assert badp["error"]["code"] == INVALID_PARAMS, badp
+    assert badp["error"]["data"]["available"], badp
+
+
+def test_mcp_structured_content_matches_text() -> None:
+    """structuredContent 必须与 content[0].text 里的 JSON **完全一致**。
+
+    两个出口服务于不同客户端：强类型客户端读 structuredContent，只认文本的
+    读 content。只填一个或内容不一致，会让其中一半客户端拿到空/错的数据。
+    """
+    print("coverage: MCP structuredContent mirrors the tool envelope")
+    srv = McpServer()
+    r = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "audit_harness", "arguments": {}}})
+    res = r["result"]
+    assert "structuredContent" in res, res.keys()
+    structured = res["structuredContent"]
+    textual = json.loads(res["content"][0]["text"])
+    assert structured == textual, (structured.keys(), textual.keys())
+    # 强类型字段必须可直接消费
+    assert structured["tool"] == "audit_harness", structured
+    assert isinstance(structured["data"], dict), structured
+    assert structured["data"]["passed"] == structured["data"]["total"], structured["data"]
+    # 失败调用同样要带 structuredContent（客户端需要 code/path 做分支）
+    bad = srv.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                      "params": {"name": "extract_interfaces",
+                                 "arguments": {"rtl_file": "/missing.sv"}}})
+    assert bad["result"]["isError"] is True, bad
+    assert bad["result"]["structuredContent"]["ok"] is False, bad
+
+
+def test_mcp_protocol_version_negotiation() -> None:
+    """协议协商：支持列表内的版本原样回显，未知版本回落最新版而非报错。"""
+    print("coverage: MCP protocol version negotiation")
+    from fpga_toolbox.mcp_server import LATEST_PROTOCOL, PROTOCOL_VERSIONS
+
+    srv = McpServer()
+    for ver in PROTOCOL_VERSIONS:
+        r = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                        "params": {"protocolVersion": ver}})
+        assert r["result"]["protocolVersion"] == ver, (ver, r["result"])
+    # 未知/未来版本：回落最新版（旧客户端仍可连，不会因版本不识别被拒）
+    future = srv.handle({"jsonrpc": "2.0", "id": 2, "method": "initialize",
+                         "params": {"protocolVersion": "2099-01-01"}})
+    assert future["result"]["protocolVersion"] == LATEST_PROTOCOL, future["result"]
+    # 声明了 resources/prompts 能力，且与实现一致（都返回非空）
+    caps = future["result"]["capabilities"]
+    assert caps["resources"] and caps["prompts"], caps
+
+
 def test_mcp_batch_requests() -> None:
     print("coverage: MCP batch (JSON-RPC 2.0 array) requests")
     batch = [
@@ -258,6 +458,10 @@ def main() -> int:
     test_mcp_error_codes_and_resilience()
     test_mcp_notifications_and_falsy_ids()
     test_mcp_cli_subcommand_end_to_end()
+    test_mcp_resources_and_prompts()
+    test_mcp_structured_content_matches_text()
+    test_mcp_protocol_version_negotiation()
+    test_mcp_all_resources_and_prompts_render()
     test_mcp_main_entry_points()
     test_mcp_batch_requests()
     print("\nALL MCP SERVER TESTS PASSED")

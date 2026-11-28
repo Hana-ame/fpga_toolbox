@@ -564,6 +564,115 @@ def tool_audit_harness(strict: bool = True) -> Dict[str, Any]:
             "detail": f"gaps={_a19_bad[:3]} strobe={_a19_strobe}",
         })
 
+        # ---- A20: 新注册的 eda_campaign 解析工具必须真的能解析，且能拒绝坏输入 ----
+        # 背景：parse_uvm_log / parse_dc_pt_qor / aggregate_seed_medians /
+        # generate_remote_run_script 早已实现却只注册了 clean_pt_netlist，
+        # Agent 通过 MCP 完全看不到 VCS/DC/PT 的解析能力（控制面缺口）。
+        # 注册只是第一步 —— 护栏要证明「无商业 EDA 环境下也能用夹具日志跑通」。
+        from .eda_campaign import (
+            tool_aggregate_seed_medians,
+            tool_generate_remote_run_script,
+            tool_parse_dc_pt_qor,
+            tool_parse_uvm_log,
+        )
+
+        _a20_bad: List[str] = []
+        # (a) UVM 日志：正常日志必须解析出通过；截断日志必须被判失败
+        # 注意格式：解析器认的是 `delivered=<n>` / `send_nums=<n>` 这类
+        # key=value 汇总行（真实 UVM 报告的写法），不是自然语言叙述。
+        # 夹具必须写**全部**门禁字段：fid_bad 缺失时解析为 None，而门禁要求
+        # fid_bad == 0（None 表示"不知道"，绝不能被当成 0 通过）——这正是
+        # 解析器防止「日志不完整却报通过」的设计，这里如实按真实报告格式给全。
+        _uvm_ok = tool_parse_uvm_log(
+            log_text="UVM_INFO : scoreboard delivered=1000 send_nums=1000 "
+                     "fid_bad=0 all_retry=0\n"
+                     "UVM_ERROR : 0\nUVM_FATAL : 0\n"
+                     "PASSED: all frames delivered\n",
+            expected_frames=1000)
+        if not _uvm_ok["ok"]:
+            _a20_bad.append(f"parse_uvm_log rejected a clean log: {_uvm_ok.get('error')}")
+        _uvm_bad = tool_parse_uvm_log(
+            log_text="UVM_FATAL : 3\n仿真被 kill\n", expected_frames=1000)
+        if _uvm_bad["ok"]:
+            _a20_bad.append("parse_uvm_log accepted a log with UVM_FATAL")
+        # (b) DC/PT QoR：UID-423 陷阱必须报 E046
+        _qor = tool_parse_dc_pt_qor(
+            report_text="Warning: UID-423 Invalid path group name 'async_default'." + " " * 800,
+        )
+        _qor_codes = {d.get("code") for d in (_qor.get("diagnostics") or [])}
+        if "E046" not in _qor_codes:
+            _a20_bad.append(f"parse_dc_pt_qor missed UID-423 (codes={sorted(_qor_codes)})")
+        # (c) 多 seed 聚合：非列表输入必须被拒（防止把 dict 当 runs 静默算错）
+        _agg_bad = tool_aggregate_seed_medians(runs="not-a-list")  # type: ignore[arg-type]
+        if _agg_bad["ok"]:
+            _a20_bad.append("aggregate_seed_medians accepted a non-list 'runs'")
+        # (d) 远端脚本：注入串必须被拒，合法输入必须产出脚本
+        _inj = tool_generate_remote_run_script(
+            host="h1; rm -rf /", tag="t", local_script_name="run.sh")
+        if _inj["ok"]:
+            _a20_bad.append("generate_remote_run_script accepted a shell-injecting host")
+        _good = tool_generate_remote_run_script(
+            host="h1", tag="t", local_script_name="run.sh")
+        if not _good["ok"] or "#!/" not in _good["data"].get("script", ""):
+            _a20_bad.append("generate_remote_run_script produced no script for valid input")
+        checks.append({
+            "id": "A20_EDA_CAMPAIGN_TOOLS_PARSE_FIXTURES",
+            "passed": not _a20_bad,
+            "detail": f"problems={_a20_bad[:3]}",
+        })
+
+        # ---- A21: run_sim 后端分发必须按后端校验工具链，且拒绝形态不符的入口 ----
+        # 背景：run_sim 硬绑 Verilator，导致
+        #   * cocotb Makefile 永远跑不了（它不是 shell 脚本）；
+        #   * iverilog 用户虽装了 iverilog 仍被 Verilator 版本门槛拦住。
+        # 护栏要求：(1) 非法 backend 被拒；(2) Makefile+verilator 后端被拒并
+        # 指向正确用法；(3) 不支持的 backend 不会泄漏成 127/堆栈。
+        from . import sim_runner as _sr
+
+        _a21_bad: List[str] = []
+        _mk = root / "Makefile"
+        _mk.write_text("SIM ?= verilator\nall:\n\t@echo hi\n", encoding="utf-8")
+        _r_be = _sr.tool_run_sim(sim_script=str(_mk), backend="questa")
+        if _r_be["ok"]:
+            _a21_bad.append("run_sim accepted an unknown backend")
+        _r_mk = _sr.tool_run_sim(sim_script=str(_mk), backend="verilator")
+        if _r_mk["ok"]:
+            _a21_bad.append("run_sim ran a Makefile with the verilator backend")
+        _r_mk_err = str(_r_mk.get("error") or "")
+        if "cocotb" not in _r_mk_err:
+            _a21_bad.append("Makefile/verilator mismatch did not point at backend='cocotb'")
+        _sh = root / "run.sh"
+        _sh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        _r_sh = _sr.tool_run_sim(sim_script=str(_sh), backend="cocotb")
+        if _r_sh["ok"]:
+            _a21_bad.append("run_sim used the cocotb backend on a shell script")
+        checks.append({
+            "id": "A21_RUN_SIM_BACKEND_DISPATCH",
+            "passed": not _a21_bad,
+            "detail": f"problems={_a21_bad[:3]}",
+        })
+
+        # ---- A22: registered tools must stay reachable through MCP tools/list ----
+        # 背景：控制面缺口（Agent 看不到 eda_campaign 能力）。注册表与 MCP
+        # 是两个出口，任何一个漏掉都会让「工具存在但 Agent 调不到」重现。
+        from .registry import TOOL_REGISTRY as _TR
+        from .registry import list_tool_schemas as _schemas
+
+        _a22_bad: List[str] = []
+        _names = {t["name"] for t in _schemas()}
+        if _names != set(_TR):
+            _a22_bad.append(f"tools/list mismatch: only-in-registry={sorted(set(_TR) - _names)} "
+                            f"only-in-mcp={sorted(_names - set(_TR))}")
+        for _t in ("parse_uvm_log", "parse_dc_pt_qor", "aggregate_seed_medians",
+                   "generate_remote_run_script"):
+            if _t not in _names:
+                _a22_bad.append(f"{_t} not exposed via tools/list")
+        checks.append({
+            "id": "A22_MCP_TOOL_SURFACE_MATCHES_REGISTRY",
+            "passed": not _a22_bad,
+            "detail": f"{len(_names)} tools exposed; problems={_a22_bad[:3]}",
+        })
+
         # ---- A15: run_mutation 必须有 baseline 预检（缺陷 113）----
         # 坏掉的 test_cmd（永远非零）不能让每个变异都判 KILLED 从而报假 100%。
         _bm = root / "mut_baseline"

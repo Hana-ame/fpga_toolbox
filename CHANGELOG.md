@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.6.0] — Agent 控制面打通 · MCP 生产化 · 11 协议 TB
+
+本版把 fpga_toolbox 从「Python/CLI 工具集」推进为**可被 Agent 直接接入的验证控制面**，
+并补齐发布流水线。全部改动在零 EDA 环境（仅 PyYAML）下通过 6 层门禁。
+
+### Added
+
+- **`run_sim` 后端分发**（`verilator` / `cocotb` / `iverilog` / `auto`）。
+  此前 `run_sim` 硬绑 Verilator，契约路径产出的 cocotb Makefile 永远跑不通；
+  现在「契约 → cocotb TB → 运行 → 归一化」在纯工具链内闭环。只校验被选中后端
+  实际需要的工具链，缺什么就在 E020 里点名。已知两种入口形态错配（Makefile 交给
+  `bash`、脚本交给 `make`）会在分发阶段拒绝并给出正确用法。
+- **4 个 EDA 分析工具注册**：`parse_uvm_log`、`parse_dc_pt_qor`、
+  `aggregate_seed_medians`、`generate_remote_run_script`。日志解析不需要任何
+  商业 EDA 许可证 —— 正是「日志是别人跑出来的」这一现实场景。工具总数 13 → 17。
+- **MCP 生产化**：协议协商支持 `2025-06-18` / `2025-03-26` / `2024-11-05` /
+  `2024-10-07`；`tools/call` 增加 **`structuredContent`**（与 `content[0].text`
+  内容完全一致）；暴露 3 个只读 **resources**（诊断码速查表、11 类协议规范、
+  工具清单）与 3 个 **prompts**（从 RTL 到变异审计、排查仿真失败、分析 EDA 跑批）。
+- **`ddr5` / `spi` / `ethernet` 原生 TB 模板**：可生成 TB 的协议 8 → 11。
+  三者都不复用总线时序（DDR5 用 CA 总线编码命令 + 差分 CK 互补；SPI 靠 CS_n
+  成帧 + SCLK 逐位移位；Ethernet 是 tx_en 流式成帧 + 60 字节最小帧硬约束），
+  均已 Verilator 实跑绿并通过故障注入验证会 FAIL。
+- **changelog 索引自动化**：`scripts/sync_changelog_index.py` 校验编号唯一、
+  INDEX 完整、零死链、`CHANGELOG.md` 摘要同步，并接入 Layer 5 门禁。
+
+### Changed
+
+- **CI 矩阵显式化 slang 维度**：4 个 `slang: true` + 1 个 `slang: false` 节点，
+  双向断言「声称的环境状态 == 实际状态」。此前 slang 安装是 `continue-on-error`，
+  失败会静默退化成 builtin 回退，把内置解析器的回归掩盖掉。
+- **`audit_harness` 19 → 22 项**：新增 A20（EDA 解析工具真能解析夹具并拒绝坏输入）、
+  A21（run_sim 后端分发与形态错配拒绝）、A22（MCP tools/list 与注册表一致）。
+- **`protocol_tb_emitter` 角色文案**：按协议给出准确对端角色（SPI slave /
+  link partner / DRAM device），不再一律说 "bus slave"。
+- **发布流水线**：`release.yml` 接入完整 6 层门禁（零 EDA 模式）、changelog 一致性、
+  MCP 协议测试；wheel 冒烟改到干净 venv 并覆盖 `--version` / `audit_harness` /
+  `serve-mcp` 握手与 `tools/list`。
+- `SERVER_VERSION` 改为从 `__version__` 派生，消除发版漏改点。
+
+### Fixed
+
+- **`$PWD` 与子进程 cwd 不一致**：`subprocess.run(cwd=...)` 不改环境里的 `PWD`，
+  而 cocotb Makefile 惯用 `$(PWD)/x.sv`，导致 `run_sim` 拉起时在错误目录找源文件
+  （手工 `make` 完全正常，只有工具调用失败）。现在显式同步 `PWD`。
+- **Windows UTF-8 编码链**：MCP stdio 流、`subprocess` 的 `text=True` 解码、
+  以及门禁调用的辅助脚本自身 `print` 中文，在 cp1252 环境下逐层崩溃。全部显式
+  指定 UTF-8（`errors="replace"`），并用 `PYTHONIOENCODING=cp1252` 本地复现验证。
+- `aggregate_seed_medians` 工具包装：底层返回裸 dict（无 ok 信封），旧包装当成
+  信封解析，导致一次成功的聚合看起来像失败。
+- 解析工具的错误信封 `tool` 字段此前写成内部模块名（`eda_campaign`），
+  调用方无法区分是哪个工具失败。
+- README 旧文案：`A1–A19` → `A1–A22`、「7 类协议 RTL」→「11 类」、
+  「直接从 slang AST 生成」→ 说明内置解析器为主、slang 可选增强。
+
+### Breaking
+
+- `run_sim` 的 `backend` 参数默认 `auto`：Makefile 现在走 cocotb 后端（此前一律
+  拒绝并提示用 make）。若依赖旧的「Makefile 必被拒绝」行为，请显式传
+  `backend="verilator"`。
+
+
 All notable changes to `fpga_toolbox` and its companion verification workbench are documented in this file.
 
 > **完整变更清单见 [`changelog/INDEX.md`](changelog/INDEX.md)** —— 本文件只保留早期（v0.4→v0.5 合并期）的精选摘要。
@@ -243,6 +305,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **134** · [功能增强 · Agent 控制面打通 + MCP 生产化 + v0.6.0](changelog/134-agent-control-plane-and-v0.6.0.md)
 - **133** · [功能增强 · 补齐 ddr5 / spi / ethernet 原生 TB 模板（8 → 11 协议）](changelog/133-ddr5-spi-ethernet-tb-templates.md)
 - **132** · [功能增强 · 零依赖 MCP stdio server（`serve-mcp`）](changelog/132-mcp-stdio-server.md)
 - **131** · [功能增强 · CI 显式 slang 矩阵维度 + changelog 索引自动化](changelog/131-ci-slang-matrix-changelog-automation.md)
@@ -254,6 +317,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **125** · [同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）](changelog/125-docs-sync-user-manual-and-ddr5.md)
 - **124** · [CI 接入全覆盖回归套件与六层不变量门禁（183）](changelog/124-ci-full-coverage-and-invariants.md)
 - **123** · [消除 `test_full_coverage.py` 在纯 Python 环境下对 `slang`/`verilator` 的硬依赖（182）](changelog/123-eda-free-full-coverage-tests.md)
-- **122** · [修复内置 SV 解析器把自定义 `typedef` 端口误判为 1-bit（181）](changelog/122-builtin-typedef-port-width.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->

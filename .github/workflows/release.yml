@@ -52,20 +52,87 @@ jobs:
               sys.exit(f"tag '{tag}' does not match __version__ '{version}'")
           PY
 
-      - name: Regression suite
+      - name: Install runtime deps
         run: |
+          python -m pip install --upgrade pip
           python -m pip install "pyyaml>=6.0"
-          python tests/test_regression.py
+
+      # 发布前必须跑**完整** 6 层不变量门禁，而不只是 test_regression.py。
+      # 旧配置只跑了回归套件，于是「覆盖率跌破 100%」「文档与代码漂移」
+      # 「changelog 编号重复」这类问题会在**发布之后**才被发现。
+      #
+      # 零 EDA 模式：release runner 不装 slang/verilator，Layer 4 会把
+      # 「必须 fork slang 才能执行」的函数显式排除并说明（不是静默跳过），
+      # 这正是 README 承诺的部署口径。
+      - name: Six-layer invariant gate (full, zero-EDA)
+        run: python scripts/verify_invariants.py --full
+
+      - name: changelog index & CHANGELOG summary consistency
+        run: python scripts/sync_changelog_index.py --check
+
+      - name: MCP server protocol tests
+        run: python tests/test_mcp_server.py
+
+      - name: Regression suite
+        run: python tests/test_regression.py
 
       - name: Build sdist + wheel
         run: |
           python -m pip install build
           python -m build
 
-      - name: Smoke-test the wheel
+      # wheel 冒烟必须在**干净虚拟环境**里跑，且覆盖安装后的真实入口：
+      # 只 `fpga-toolbox list` 无法发现「--version 崩」「audit_harness 缺依赖」
+      # 「serve-mcp 握手失败」这类只在安装后才暴露的问题。
+      - name: Smoke-test the wheel in a clean venv
         run: |
+          set -euo pipefail
+          python -m venv /tmp/wheel-smoke
+          # shellcheck disable=SC1091
+          . /tmp/wheel-smoke/bin/activate
+          python -m pip install --upgrade pip >/dev/null
           python -m pip install dist/*.whl
+
+          echo "== fpga-toolbox --version =="
+          fpga-toolbox --version
+
+          echo "== fpga-toolbox list =="
           fpga-toolbox list
+
+          echo "== audit_harness =="
+          python -m fpga_toolbox audit_harness >/tmp/audit.json
+          python - <<'PY'
+          import json, sys
+          rep = json.load(open("/tmp/audit.json", encoding="utf-8"))
+          passed = rep.get("data", {}).get("passed")
+          total = rep.get("data", {}).get("total")
+          print(f"audit_harness {passed}/{total}")
+          if not rep.get("ok") or passed != total:
+              sys.exit("audit_harness failed in the installed wheel")
+          PY
+
+          echo "== MCP handshake + tools/list =="
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | python -m fpga_toolbox serve-mcp > /tmp/mcp.jsonl
+          python - <<'PY'
+          import json, sys
+          lines = [json.loads(l) for l in open("/tmp/mcp.jsonl", encoding="utf-8") if l.strip()]
+          if len(lines) != 2:
+              sys.exit(f"expected 2 MCP responses, got {len(lines)}")
+          init, tools = lines
+          if init["result"]["protocolVersion"] != "2025-06-18":
+              sys.exit(f"unexpected protocol version: {init['result']['protocolVersion']}")
+          names = [t["name"] for t in tools["result"]["tools"]]
+          print(f"MCP initialize ok, tools/list -> {len(names)} tools")
+          for required in ("extract_interfaces", "emit_testbench", "run_sim",
+                           "parse_uvm_log", "parse_dc_pt_qor", "serve-mcp"):
+              if required == "serve-mcp":
+                  continue
+              if required not in names:
+                  sys.exit(f"tool {required} missing from installed wheel")
+          PY
 
       - name: Create GitHub Release
         env:

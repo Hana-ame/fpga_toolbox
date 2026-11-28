@@ -37,14 +37,27 @@ import json
 import sys
 from typing import Any, Dict, List, Optional, TextIO
 
+from . import __version__ as _pkg_version
+from .mcp_resources import (
+    get_prompt,
+    list_prompts,
+    list_resources,
+    read_resource,
+)
 from .registry import TOOL_REGISTRY, call_tool, list_tool_schemas
 
 #: 支持的 MCP 协议版本（客户端请求的版本在本列表内就回显它，否则回最新版）
-PROTOCOL_VERSIONS = ("2024-11-05", "2024-10-07")
+#: 支持的 MCP 协议版本，**新的在前**。`initialize` 时客户端请求的版本在这里面
+#: 就原样回显，否则回最新版（旧客户端仍可连，不会因版本号不识别而被拒）。
+#: 2025-06-18 引入了 structuredContent / resources 订阅等能力；2025-03-26 是
+#: 其前身；2024-11-05 与 2024-10-07 为兼容旧客户端保留。
+PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07")
 LATEST_PROTOCOL = PROTOCOL_VERSIONS[0]
 
 SERVER_NAME = "fpga-toolbox"
-SERVER_VERSION = "0.5.0"
+#: serverInfo 里的版本**从包版本派生**，不再单独维护 —— 否则发版时容易
+#: 只改 pyproject/__init__ 而漏掉这里，客户端看到的是过期版本号。
+SERVER_VERSION = _pkg_version
 
 # JSON-RPC 2.0 标准错误码
 PARSE_ERROR = -32700
@@ -121,7 +134,13 @@ class McpServer:
             self.initialized = True
             return {
                 "protocolVersion": ver,
-                "capabilities": {"tools": {"listChanged": False}},
+                # 能力声明必须与实际实现一致：声明了 resources/prompts
+                # 客户端才会去探测；反过来，实现了却不声明，客户端永不调用。
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"subscribe": False, "listChanged": False},
+                    "prompts": {"listChanged": False},
+                },
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             }
         if method == "ping":
@@ -134,11 +153,35 @@ class McpServer:
             self.should_exit = True
             return {}
         if method == "resources/list":
-            # 本 server 不暴露 resources；回空列表比报 -32601 更友好
-            # （部分客户端会并发探测该能力）
-            return {"resources": []}
+            return {"resources": list_resources()}
+        if method == "resources/read":
+            uri = params.get("uri")
+            if not isinstance(uri, str) or not uri:
+                raise _RpcError(INVALID_PARAMS,
+                                "'resources/read' requires a string 'uri'")
+            try:
+                content = read_resource(uri)
+            except KeyError:
+                raise _RpcError(
+                    INVALID_PARAMS, f"Unknown resource uri: {uri}",
+                    {"available": [r["uri"] for r in list_resources()]}) from None
+            return {"contents": [content]}
         if method == "prompts/list":
-            return {"prompts": []}
+            return {"prompts": list_prompts()}
+        if method == "prompts/get":
+            name = params.get("name")
+            if not isinstance(name, str) or not name:
+                raise _RpcError(INVALID_PARAMS,
+                                "'prompts/get' requires a string 'name'")
+            args = params.get("arguments") or {}
+            if not isinstance(args, dict):
+                raise _RpcError(INVALID_PARAMS, "'arguments' must be an object")
+            try:
+                return get_prompt(name, args)
+            except KeyError:
+                raise _RpcError(
+                    INVALID_PARAMS, f"Unknown prompt: {name}",
+                    {"available": [p["name"] for p in list_prompts()]}) from None
         raise _RpcError(METHOD_NOT_FOUND, f"Method not found: {method}")
 
     def _call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,6 +217,10 @@ class McpServer:
         out = {
             "content": [{"type": "text", "text": payload}],
             "isError": not ok,
+            # structuredContent（MCP 2025-06-18 起）：强类型客户端可直接读
+            # result.structuredContent 而不用再解析 content[0].text 里的 JSON。
+            # 两个出口内容必须一致 —— 只给一个会让部分客户端拿到空结构。
+            "structuredContent": result,
         }
         if leaked:
             out["_stdout_leak"] = leaked[:2000]

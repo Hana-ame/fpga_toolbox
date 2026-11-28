@@ -995,9 +995,109 @@ python3 -m fpga_toolbox audit_harness
 
 ---
 
+## 示例 12 — 作为 MCP 服务被 Agent 客户端拉起
+
+Claude Desktop / Cursor 里配置后，客户端会自动完成握手与工具发现：
+
+```json
+{
+  "mcpServers": {
+    "fpga-toolbox": {
+      "command": "python3",
+      "args": ["-m", "fpga_toolbox", "serve-mcp"]
+    }
+  }
+}
+```
+
+手工验证协议（不依赖任何客户端）：
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"audit_harness","arguments":{}}}' \
+  | python3 -m fpga_toolbox serve-mcp
+```
+
+`tools/call` 的响应同时含文本与强类型两个出口：
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{
+  "content":[{"type":"text","text":"{\"ok\":true,\"tool\":\"audit_harness\",...}"}],
+  "isError": false,
+  "structuredContent":{"ok":true,"tool":"audit_harness","data":{"passed":22,"total":22}}
+}}
+```
+
+只读上下文（不占提示词预算）：
+
+```bash
+# 拉取诊断码速查表
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"resources/read",
+  "params":{"uri":"fpga-toolbox://diagnostics/codes"}}' \
+  | python3 -m fpga_toolbox serve-mcp
+```
+
+```bash
+# 拉取「从 RTL 到变异审计」标准流程（参数会被填进模板）
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"prompts/get",
+  "params":{"name":"rtl-to-mutation-audit","arguments":{"rtl_file":"dut.sv"}}}' \
+  | python3 -m fpga_toolbox serve-mcp
+```
+
+---
+
+## 示例 13 — 无商业 EDA 许可证时解析 VCS/DC/PT 跑批结果
+
+日志是别人跑出来的，解析不需要任何许可证 —— 这正是这四个工具的定位：
+
+```python
+from fpga_toolbox import call_tool
+
+# 1) VCS/UVM 日志：帧数、FID、重传、UVM_ERROR/FATAL、延迟
+uvm = call_tool("parse_uvm_log", {
+    "log_path": "/data/run01/uvm.log",
+    "expected_frames": 10000,
+})
+if not uvm["ok"]:
+    # 注意 fid_bad 缺失会判失败：不完整的日志不能被当成"没问题"
+    print(uvm["error"], uvm["diagnostics"])
+
+# 2) DC/PT QoR：拦 K-2015.06 假成功（UID-423 / "No paths."）
+qor = call_tool("parse_dc_pt_qor", {"report_path": "/data/run01/dc.qor"})
+trap = [d for d in qor["diagnostics"] if d["code"] == "E046"]
+
+# 3) 多 seed 聚合：入参必须是 parse_uvm_log 的**内层 data**
+runs = [call_tool("parse_uvm_log", {"log_path": p})["data"] for p in seed_logs]
+agg = call_tool("aggregate_seed_medians", {"runs": runs})
+
+# 4) 生成远端复跑脚本（拒绝 shell 注入与危险 tag）
+launcher = call_tool("generate_remote_run_script", {
+    "host": "user@eda-server", "tag": "run02", "local_script_name": "run.sh",
+})
+```
+
+各步输出：
+
+```
+parse_uvm_log     -> {"passed":true, "delivered":10000, "fid_bad":0,
+                      "lat_avg":20, "uvm_error":0, "uvm_fatal":0}
+parse_dc_pt_qor   -> diagnostics 里若有 E046，说明报告是假成功
+aggregate_seed_medians -> {"n_runs":5, "n_passed":5, "lat_avg_median":21}
+generate_remote_run_script -> {"script":"#!/bin/csh...", "bytes":613}
+```
+
+⚠ 常见参数层级错误：把整条 `ToolResult` 信封传给 `aggregate_seed_medians`。
+工具会显式拒绝并提示 `Pass [r['data'] for r in results]`，而不是静默算出
+`n_passed=0`（旧实现的表现）。
+
+---
+
 ## 相关文档
 
-- [`docs/FEATURES.md`](FEATURES.md) — 功能手册（13 工具详解 + 诊断码总表）
+- [`docs/FEATURES.md`](FEATURES.md) — 功能手册（17 工具详解 + 诊断码总表）
 - [`docs/FEATURES.html`](FEATURES.html) — 功能手册 HTML 版（侧栏目录 + 页内搜索，可离线打开）
 - [`docs/TEST_REPORT_AND_PLAN.md`](TEST_REPORT_AND_PLAN.md) — 全工具实测结果
 - [`README.md`](../README.md) — 项目概览

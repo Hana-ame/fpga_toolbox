@@ -202,3 +202,4 @@
 - [131 · CI 显式 slang 矩阵维度 + changelog 索引自动化](131-ci-slang-matrix-changelog-automation.md)
 - [132 · 零依赖 MCP stdio server（serve-mcp）](132-mcp-stdio-server.md)
 - [133 · 补齐 ddr5/spi/ethernet 原生 TB 模板（8 → 11 协议）](133-ddr5-spi-ethernet-tb-templates.md)
+- [134 · Agent 控制面打通 + MCP 生产化 + v0.6.0](134-agent-control-plane-and-v0.6.0.md)
