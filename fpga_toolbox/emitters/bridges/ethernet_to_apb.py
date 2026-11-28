@@ -100,12 +100,15 @@ module tb_@@MOD@@_bridge;
           $display("[CHECK] id=ETH2A_WR | proto=ethernet->apb | cat=downstream_write | addr=0x%0@@AHEX@@h data=0x%0@@DHEX@@h | status=PASS",
                    @@PADDR@@, @@PWDATA@@);
           @@PREADY@@ <= 1;
-          ap_counted = 0;   // 本次传输应答完成，允许下一次计数
+          // 注意：这里**不**清 ap_counted。若在此清零，下一拍（pready 已高、
+          // penable 仍高）又满足计数条件 → 同一事务重复计/重复打（实测复现）。
+          // ap_counted 保持 1 直到 psel 拉低，由下方 else 分支清除。
         end else begin
           @@PREADY@@ <= 0;
         end
       end else begin
         @@PREADY@@ <= 0;
+        ap_counted = 0;   // psel 已拉低 = 事务结束，允许下一次计数
       end
     end
   end

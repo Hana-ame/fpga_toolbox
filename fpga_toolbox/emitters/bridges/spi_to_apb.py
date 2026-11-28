@@ -94,15 +94,22 @@ module tb_@@MOD@@_bridge;
           ap_writes++;
           ap_last_addr = @@PADDR@@;
           ap_last_data = @@PWDATA@@;
+          // $display 必须在**同一条件块内**（access 相位第一拍、ap_counted 边沿
+          // 处）。放在外层会让 access 相位的每一拍都打一行，同一事务虚增成
+          // 多条 [CHECK]（实测 SPI 打 6 次），可能被 normalize_sim_result 误判。
           $display("[CHECK] id=SP2A_WR | proto=spi->apb | cat=downstream_write | addr=0x%0@@AHEX@@h data=0x%0@@DHEX@@h | status=PASS",
                    @@PADDR@@, @@PWDATA@@);
           @@PREADY@@ <= 1;
-          ap_counted = 0;   // 本次传输应答完成，允许下一次计数
+          // 注意：这里**不**清 ap_counted。若在此清零，下一拍（pready 已高、
+          // penable 仍高）又满足计数条件 → 同一事务重复计/重复打（实测 SPI 打
+          // 6 次）。ap_counted 保持 1 直到 psel 拉低（事务真正结束），由下方
+          // else 分支清除。
         end else begin
           @@PREADY@@ <= 0;
         end
       end else begin
         @@PREADY@@ <= 0;
+        ap_counted = 0;   // psel 已拉低 = 事务结束，允许下一次计数
       end
     end
   end
