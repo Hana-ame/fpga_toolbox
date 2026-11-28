@@ -206,3 +206,4 @@
 - [135 · 拆分 protocol_tb_emitter + 桥接 DUT 联合 TB](135-emitter-split-and-bridge-tb.md)
 - [136 · Agent 友好的波形诊断工具 diagnose_waveform](136-waveform-diagnostic-tool.md)
 - [137 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](137-bridge-combos-complete.md)
+- [138 · 桥接子包再拆分（bridge.py 1,117 → 最大 271 行）](138-bridge-subpackage-split.md)

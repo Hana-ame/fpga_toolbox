@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.3] — 桥接子包再拆分（bridge.py 1,117 → 最大 271 行）
+
+### Changed
+
+- **拆分 `emitters/bridge.py`**（1,117 行，拆分后子包最大文件）到
+  `emitters/bridges/` 子包：
+  - `common.py`：桥接结构识别（`classify_bridge`）+ 端口声明 helper +
+    `SUPPORTED_BRIDGES` 表
+  - `axi4_to_apb.py` / `axi4_to_axi4.py` / `spi_to_apb.py` /
+    `ethernet_to_apb.py` / `axi4_stream_to_apb.py`：每个组合一个文件
+  - `__init__.py`：派发器 `emit_bridge`
+  最大文件从 1,117 降到 271 行；`emitters/bridge.py` 保留为兼容门面
+  （re-export 全部符号，含 `__all__` 防止 ruff 删兼容导出）。
+
+### Fixed
+
+- **`SUPPORTED_BRIDGES` 循环导入**：该常量原在 `bridges/__init__.py`，而
+  `classify_bridge`（在 `common.py`）要查它 → `__init__` 导入 `common` 时
+  `SUPPORTED_BRIDGES` 尚未定义。移到 `common.py` 解决。
+
+## [0.7.2] — 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）
 ## [0.7.2] — 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）
 
 ### Added
@@ -396,6 +417,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **138** · [重构 · 桥接子包再拆分（`bridge.py` 1,117 → 最大 271 行）](changelog/138-bridge-subpackage-split.md)
 - **137** · [功能增强 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](changelog/137-bridge-combos-complete.md)
 - **136** · [功能增强 · Agent 友好的波形诊断工具 `diagnose_waveform`（工具 17 → 18）](changelog/136-waveform-diagnostic-tool.md)
 - **135** · [重构 + 功能增强 · 拆分 `protocol_tb_emitter.py` 并支持桥接 DUT 联合 TB](changelog/135-emitter-split-and-bridge-tb.md)
@@ -407,6 +429,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **129** · [缺陷修复 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点（评审 182/183 的根因）](changelog/129-zero-eda-gate-and-ci-degraded-job.md)
 - **128** · [修正 `FEATURES.html` 副标题中过期诊断码计数（37 → 47）](changelog/128-features-deck-diag-count.md)
 - **127** · [CLI 补全 `--version` / `-V` 标准版本查询参数](changelog/127-cli-version-flag.md)
-- **126** · [零 EDA 环境下达成 100% 函数覆盖率（169/169，六层不变量全通过）](changelog/126-zero-eda-100pct-function-coverage.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->
