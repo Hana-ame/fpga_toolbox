@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.2] — 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）
+
+### Added
+
+- **ethernet→apb** 与 **axi4_stream→apb** 桥接联合 TB。此前 `SUPPORTED_BRIDGES`
+  声明了 5 个组合但只有 3 个有实现，`emit_bridge` 对其余 2 个抛错（声明与实现
+  不一致）。现在 **5/5 全部有实现**，声明与实现对齐。
+- 两个新模板都用 `@@SENTINEL@@` + `replace()` 填充（SV 模板里大量 `$display`
+  的 `%0d`/`%08h` 与 Python `%` 占位符冲突，`%`-格式化会让占位符与参数元组错位）。
+
+### Fixed
+
+- **流式桥接 APB 从机的重复计数**：APB 的 access 相位会持续多拍（直到 `pready`
+  拉高），旧写法每拍都 `ap_writes++`，2 个 beat 被计成 3 次 APB 写——让「几个
+  beat 转成几次 APB 写」这条断言失效。改用 `ap_counted` 标志做边沿检测：只在
+  access 相位第一拍计数，`pready` 拉高时清除。
+- **`ap_counted` 类型**：用 `int` 会让 `!ap_counted` 触发 WIDTHTRUNC 警告，
+  而 Verilator 默认警告即错误 → 构建失败。改为 1 位 `logic`。
+- **位宽哨兵未替换**：新模板的位宽哨兵写成了单 `@` 前缀（`[@ADDR_W-1:0]`），
+  `replace()` 只匹配双 `@`（`@@ADDR_W@@`），导致网线位宽未被代入 → Verilator
+  隐式建 1 位 → WIDTHTRUNC 构建失败。实测在 ethernet/axi4_stream 两个模板
+  各复现一次。
+
+## [0.7.1] — 桥接 auto 选侧修复 · SPI→APB 桥接 TB
 ## [0.7.1] — 桥接 auto 选侧修复 · SPI→APB 桥接 TB
 
 ### Added
@@ -372,6 +396,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **137** · [功能增强 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](changelog/137-bridge-combos-complete.md)
 - **136** · [功能增强 · Agent 友好的波形诊断工具 `diagnose_waveform`（工具 17 → 18）](changelog/136-waveform-diagnostic-tool.md)
 - **135** · [重构 + 功能增强 · 拆分 `protocol_tb_emitter.py` 并支持桥接 DUT 联合 TB](changelog/135-emitter-split-and-bridge-tb.md)
 - **134** · [功能增强 · Agent 控制面打通 + MCP 生产化 + v0.6.0](changelog/134-agent-control-plane-and-v0.6.0.md)
@@ -383,6 +408,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **128** · [修正 `FEATURES.html` 副标题中过期诊断码计数（37 → 47）](changelog/128-features-deck-diag-count.md)
 - **127** · [CLI 补全 `--version` / `-V` 标准版本查询参数](changelog/127-cli-version-flag.md)
 - **126** · [零 EDA 环境下达成 100% 函数覆盖率（169/169，六层不变量全通过）](changelog/126-zero-eda-100pct-function-coverage.md)
-- **125** · [同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）](changelog/125-docs-sync-user-manual-and-ddr5.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->

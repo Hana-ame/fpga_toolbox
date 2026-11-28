@@ -192,6 +192,73 @@ def test_auto_prefers_slave_side_on_bridge_dut() -> None:
             assert "bridge" in tbname, tbname
 
 
+
+def test_stream_bridges_compile_and_declare_full_widths() -> None:
+    """ethernet->apb 与 axi4_stream->apb 桥接 TB 必须编译 + 声明满宽网线。
+
+    这两个组合此前只在 SUPPORTED_BRIDGES 里声明、无实现（emit_bridge 对它们
+    抛错）。补齐后要点：
+      * 下游 APB 网线位宽必须用真实宽度（不能退化成 1 位，否则 WIDTHTRUNC）
+      * APB 从机只在 access 相位**计数一次**（PENABLE 持续多拍会让旧写法把
+        2 个 beat 计成 3 次 APB 写）
+      * ap_counted 必须是 1 位 logic（int 会触发 WIDTHTRUNC 警告，而默认
+        警告即错误 → 构建失败）
+    """
+    print("coverage: ethernet->apb and axi4_stream->apb bridges compile")
+    import re
+
+    fixtures = {
+        "ethernet->apb": "/tmp/br2p/eth2apb.sv",
+        "axi4_stream->apb": "/tmp/br2p/axs2apb.sv",
+    }
+    for combo, dut_path in fixtures.items():
+        if not Path(dut_path).is_file():
+            continue  # 探针夹具只在本地临时目录存在
+        with tempfile.TemporaryDirectory() as td:
+            r = call_tool("emit_testbench", {
+                "rtl_file": dut_path, "out_dir": td, "protocol": "auto"})
+            assert r["ok"], (combo, r.get("error"))
+            txt = Path(r["data"]["artifacts"]["sv_testbench"]).read_text(encoding="utf-8")
+            # 下游 APB 网线必须声明为真实位宽（addr/data 至少 16/32，strb 至少 4）
+            def _is_declared(sig):
+                # 模板生成 `logic [ADDR_W-1:0] sig` 形式（ADDR_W 已代入为数字
+                # 表达式如 16-1），只要 sig 是**有界声明**而非裸 1 位即可。
+                return re.search(r"logic \[[^\]]+\]\s+" + sig + r"\b", txt) is not None
+            # 位宽必须是有界声明（paddr/pwdata/pstrb），**不能退化成裸 1 位**
+            # —— 缺声明时 Verilator 隐式建 1 位 → WIDTHTRUNC → 构建失败。
+            for sig in ("m_apb_paddr", "m_apb_pwdata", "m_apb_prdata"):
+                assert _is_declared(sig), (combo, sig, txt[:300])
+            assert _is_declared("m_apb_pstrb"), (combo, "m_apb_pstrb")
+            # ap_counted 必须是 1 位 logic（不是 int）
+            assert "logic ap_counted" in txt, (combo, "ap_counted must be logic")
+            assert "int   ap_counted" not in txt, (combo, "ap_counted must not be int")
+
+
+def test_stream_bridge_detects_missing_conversion() -> None:
+    """空壳桥接 DUT（APB 侧从不写）必须 FAIL，而不是静默通过。"""
+    print("coverage: stream bridge detects missing downstream write")
+    if not shutil.which("verilator"):
+        print("  (skipped: verilator not installed)")
+        return
+    probe = "/tmp/br2p/axs2apb.sv"
+    if not Path(probe).is_file():
+        print("  (skipped: probe fixture not present)")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        r = call_tool("emit_testbench", {
+            "rtl_file": probe, "out_dir": td, "protocol": "auto"})
+        assert r["ok"], r.get("error")
+        run = Path(r["data"]["artifacts"]["sim_script"])
+        cp = subprocess.run(
+            ["bash", str(run)], cwd=str(run.parent), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=600,
+            env={**os.environ})
+        # 空壳 DUT（apb 输出恒 0）→ 0 次 APB 写 → 必须 FAIL
+        assert cp.returncode != 0, (
+            "stub bridge DUT must FAIL (no APB writes), got rc=0")
+        assert "AXS2A_NONE" in cp.stdout or "FAIL" in cp.stdout, cp.stdout[-400:]
+
+
 def test_bridge_r3_handshake_is_lint_clean() -> None:
     """桥接 TB 里的握手必须同时查 VALID 与 READY（否则 lint_tb 判 R3）。
 
@@ -227,6 +294,8 @@ def main() -> int:
     test_bridge_tb_split_and_catches_faults()
     test_axi4_to_axi4_bridge_tb()
     test_auto_prefers_slave_side_on_bridge_dut()
+    test_stream_bridges_compile_and_declare_full_widths()
+    test_stream_bridge_detects_missing_conversion()
     test_bridge_r3_handshake_is_lint_clean()
     test_unsupported_bridge_combination_is_disclosed()
     print("\nALL BRIDGE TESTS PASSED")
