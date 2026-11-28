@@ -305,6 +305,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **135** · [重构 + 功能增强 · 拆分 `protocol_tb_emitter.py` 并支持桥接 DUT 联合 TB](changelog/135-emitter-split-and-bridge-tb.md)
 - **134** · [功能增强 · Agent 控制面打通 + MCP 生产化 + v0.6.0](changelog/134-agent-control-plane-and-v0.6.0.md)
 - **133** · [功能增强 · 补齐 ddr5 / spi / ethernet 原生 TB 模板（8 → 11 协议）](changelog/133-ddr5-spi-ethernet-tb-templates.md)
 - **132** · [功能增强 · 零依赖 MCP stdio server（`serve-mcp`）](changelog/132-mcp-stdio-server.md)
@@ -316,6 +317,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **126** · [零 EDA 环境下达成 100% 函数覆盖率（169/169，六层不变量全通过）](changelog/126-zero-eda-100pct-function-coverage.md)
 - **125** · [同步 `USER_MANUAL.html` 派生校验并补全 `ddr5` 协议文档（184）](changelog/125-docs-sync-user-manual-and-ddr5.md)
 - **124** · [CI 接入全覆盖回归套件与六层不变量门禁（183）](changelog/124-ci-full-coverage-and-invariants.md)
-- **123** · [消除 `test_full_coverage.py` 在纯 Python 环境下对 `slang`/`verilator` 的硬依赖（182）](changelog/123-eda-free-full-coverage-tests.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->

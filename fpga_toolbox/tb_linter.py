@@ -48,6 +48,29 @@ _READY_OF = {
 }
 
 
+def _ready_of(sig: str) -> Optional[str]:
+    """按信号名查它对应的 READY 信号。
+
+    除了裸名（bvalid -> bready）外，还要剥掉常见的**总线通道前缀**：
+      * `s_axi_bvalid` / `m_axi_bvalid` —— AXI4 的 master/slave 前缀
+      * `s_apb_psel` 一类不在本表（APB 无 VALID/READY 握手）
+
+    旧实现只用 `sig.split(".")[-1].upper()` 做对象归一（处理 `axi.bvalid`），
+    但 `s_axi_bvalid` 是**单个标识符**里的下划线前缀，`.` 分割后仍是
+    `S_AXI_BVALID`，在表里查不到 → 返回 None → 明明同时查了 READY 仍判 R3。
+    桥接 TB 实测踩中：`while (!(s_axi_bvalid && m_axi_bready))` 被误报 R3。
+    """
+    key = sig.split(".")[-1].upper()
+    if key in _READY_OF:
+        return _READY_OF[key]
+    # 剥掉 s_axi_ / m_axi_ / s_axis_ 等前缀后再查
+    m = re.match(r"^[SM]_(?:AXIS?|APB)_", key)
+    if m:
+        stripped = key[m.end():]
+        return _READY_OF.get(stripped)
+    return None
+
+
 def _strip_comment(raw: str) -> str:
     """剥掉行注释，但跳过字符串内的 //。
 
@@ -168,7 +191,7 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
             if has_v and not has_r:
                 sig = has_v.group(1)
                 # 去掉可选前缀后查 READY 映射（_READY_OF 键为全大写）
-                ready = _READY_OF.get(sig.split(".")[-1].upper())
+                ready = _ready_of(sig)
                 safe = bool(ready and _ready_raised_before(i, ready))
                 code = "R1" if safe else "R3"
                 sev = "WARNING" if safe else "ERROR"
@@ -193,8 +216,8 @@ def scan_handshake(path: Path) -> List[Dict[str, Any]]:
                 # sig.replace("axi.", "") 不做大小写归一 —— 实测
                 # `while (!axi.bvalid)` 在 BREADY 已拉高时仍报 R3（假错误），而同一份
                 # 代码写成 `while (!axi.BVALID)` 正确报 R1，纯大小写差异导致判定不同。
-                # 这里改用 .split(".")[-1].upper()（与 wait() 分支一致）。
-                ready = _READY_OF.get(sig.split(".")[-1].upper())
+                # 这里改用 _ready_of()（与 wait() 分支一致），并额外剥前缀
+                ready = _ready_of(sig)
                 safe = bool(ready and _ready_raised_before(i, ready))
                 code = "R1" if safe else "R3"
                 sev = "WARNING" if safe else "ERROR"

@@ -1554,6 +1554,33 @@ endmodule
 """,
     }
     faults = {
+        # DDR5 的两个真实故障模式，都必须被 TB 抓住：
+        #   (a) 差分时钟接反（ck_c 与 ck_t 同相）—— 采样边沿错位，真实硅上
+        #       表现为「偶发数据错」，是 DDR 最经典的硬件故障；
+        #   (b) CS_n 从未拉低 —— 控制器压根没发命令，看着"跑完了"其实零事务。
+        "ddr5": """`timescale 1ns/1ps
+module ddr5_bad (
+  input  logic clk, input logic rst_n,
+  output logic ddr5_ck_t, output logic ddr5_ck_c,
+  output logic ddr5_cs_n, output logic ddr5_act_n,
+  output logic [6:0] ddr5_ca, output logic [1:0] ddr5_ba, output logic [1:0] ddr5_bg,
+  inout  wire  [15:0] ddr5_dq, output logic ddr5_dqs_t, output logic ddr5_dqs_c,
+  output logic ddr5_rd_valid
+);
+  // 故障：ck_c 与 ck_t 同相（差分对必须反相）
+  assign ddr5_ck_t = clk;
+  assign ddr5_ck_c = clk;
+  assign ddr5_cs_n = 1'b1;          // 故障：从不选中
+  assign ddr5_act_n = 1'b1;
+  assign ddr5_ca = 7'h00;
+  assign ddr5_ba = 2'h0;
+  assign ddr5_bg = 2'h0;
+  assign ddr5_dqs_t = 1'b1;
+  assign ddr5_dqs_c = 1'b0;
+  assign ddr5_rd_valid = 1'b0;
+  assign ddr5_dq = 16'hzzzz;
+endmodule
+""",
         "spi": """`timescale 1ns/1ps
 module spi_bad (
   input  logic clk, input logic rst_n,
