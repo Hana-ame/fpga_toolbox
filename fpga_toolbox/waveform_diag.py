@@ -182,9 +182,13 @@ def _scan(
                     "width": signals[idc]["width"],
                 })
 
-            # 收集 VALID/READY 变迁，供握手死锁分析用
+            # 收集握手信号变迁，供死锁分析用。两类协议：
+            #   * AXI / AXI4-Stream：*VALID / *READY 两信号握手
+            #   * APB：*PSEL / *PENABLE / *PREADY 三信号握手（无 VALID/READY 对，
+            #     旧过滤器 `endswith(("VALID","READY"))` 会把 APB 全排除 → APB
+            #     死锁检测完全不工作）
             base = name.split(".")[-1].upper()
-            if base.endswith(("VALID", "READY")):
+            if base.endswith(("VALID", "READY", "PSEL", "PENABLE", "PREADY")):
                 transitions.setdefault(idc, []).append((cur_time, val == "1"))
 
     return {
@@ -257,6 +261,70 @@ def _find_handshake_deadlocks(scan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return deadlocks
 
 
+def _find_apb_deadlocks(scan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """找出 APB 握手死锁：PSEL 拉高后 PREADY 从未拉高。
+
+    APB 是**三信号协议**，与 AXI 的 VALID/READY 两信号握手不同：
+      * PSEL + PENABLE 同时高 = access 相位（一次传输请求）
+      * PREADY 高 = 从机应答完成
+
+    死锁模式：PSEL 拉高后 PREADY 一直为低 —— 主设备在等从机应答，从机永不
+    应答，仿真在此挂死。日志只会说「APB 事务超时」，波形能直接指出
+    「PSEL 从 t=X 拉高，PREADY 到仿真结束从未拉高」。
+
+    与 AXI 检测分开实现的原因：APB 没有 VALID/READY 对（`_ready_of` 返回
+    None），走不到 AXI 的检测分支。APB 需要按「PSEL 前缀找同组 PREADY」来配对。
+    """
+    id_to_name = scan["id_to_name"]
+    transitions = scan["transitions"]
+    max_t = scan["max_time_seen"]
+
+    by_name: Dict[str, List[Tuple[int, bool]]] = {}
+    for idc, changes in transitions.items():
+        name = id_to_name.get(idc)
+        if name:
+            by_name[name] = changes
+
+    deadlocks: List[Dict[str, Any]] = []
+    # 找每个 PSEL 信号，按同前缀配对 PREADY
+    for name, changes in by_name.items():
+        base = name.split(".")[-1].lower()
+        if not base.endswith("psel"):
+            continue
+        prefix = name[: name.rfind(".")] if "." in name else ""
+        ready_full = f"{prefix}.pready" if prefix else "pready"
+        rchanges = by_name.get(ready_full)
+        if rchanges is None:
+            # 裸名兜底
+            for cand, ch in by_name.items():
+                if cand.split(".")[-1].lower() == "pready":
+                    rchanges = ch
+                    ready_full = cand
+                    break
+        if not rchanges:
+            continue
+
+        # PSEL 拉高的最后一段起点（简化：只看是否曾拉高且结束时仍高）
+        high_start = None
+        for ct, is_high in changes:
+            if is_high and high_start is None:
+                high_start = ct
+            elif not is_high:
+                high_start = None
+        if high_start is None:
+            continue
+        r_ever = any(is_r and ct_r >= high_start for ct_r, is_r in rchanges)
+        if not r_ever:
+            deadlocks.append({
+                "valid_signal": name,
+                "valid_high_since": high_start,
+                "ready_signal": ready_full,
+                "window_end": max_t,
+                "note": "APB: PSEL 拉高后 PREADY 从未拉高 —— 握手死锁，从机永不应答",
+            })
+    return deadlocks
+
+
 def diagnose_waveform(
     waveform_path: str = "",
     signals: Optional[List[str]] = None,
@@ -301,7 +369,7 @@ def diagnose_waveform(
             stuck.append({"signal": name, "value": scan["prev_value"].get(idc)})
 
     # ---- 结论 3：握手死锁（VALID 拉高后 READY 从未拉高）----
-    deadlocks = _find_handshake_deadlocks(scan)
+    deadlocks = _find_handshake_deadlocks(scan) + _find_apb_deadlocks(scan)
 
     summary = {
         "waveform": str(p.resolve()),

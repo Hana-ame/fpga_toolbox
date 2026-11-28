@@ -158,12 +158,107 @@ def test_missing_path_is_structured_error() -> None:
     assert miss["ok"] is False and "not found" in (miss.get("error") or ""), miss
 
 
+
+def test_apb_handshake_deadlock_detection() -> None:
+    """APB 死锁：PSEL 拉高后 PREADY 从未拉高。
+
+    APB 是三信号协议（PSEL+PENABLE 构成请求、PREADY 应答），与 AXI 的
+    VALID/READY 两信号握手不同。旧实现的过滤器只收集以 VALID/READY 结尾的
+    信号，APB 的 psel/penable/pready 全被排除 -> APB 死锁检测完全不工作。
+    """
+    print("coverage: APB handshake deadlock detection")
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module tb $end",
+        '$var wire 1 ! clk $end',
+        '$var wire 1 ' + '"' + ' psel $end',
+        "$var wire 1 # penable $end",
+        '$var wire 1 $ pready $end',
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+        "0" + '"',
+        "0#",
+        "0$",
+        "#10",
+        "1!",
+        "#20",
+        "0!",
+        "#30",
+        "1!",
+        "1" + '"',
+        "1#",
+        "#40",
+        "0!",
+        "#50",
+        "1!",
+        "#60",
+        "0!",
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        vcd_path = Path(td) / "apb.vcd"
+        vcd_path.write_text("\n".join(lines), encoding="utf-8")
+        r = call_tool("diagnose_waveform", {"waveform_path": str(vcd_path)})
+        h = r["data"]["handshake_deadlocks"]
+        assert h["count"] == 1, h
+        w = h["windows"][0]
+        assert w["valid_signal"].endswith("psel"), w
+        assert w["valid_high_since"] == 30, w
+        assert w["ready_signal"].endswith("pready"), w
+
+
+def test_apb_healthy_no_false_positive() -> None:
+    """PREADY 会拉高的健康 APB 必须不报死锁。"""
+    print("coverage: APB healthy handshake -> no false deadlock")
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module tb $end",
+        '$var wire 1 ! clk $end',
+        '$var wire 1 ' + '"' + ' psel $end',
+        "$var wire 1 # penable $end",
+        '$var wire 1 $ pready $end',
+        "$upscope $end",
+        "$enddefinitions $end",
+        "#0",
+        "0!",
+        "0" + '"',
+        "0#",
+        "0$",
+        "#10",
+        "1!",
+        "#20",
+        "0!",
+        "#30",
+        "1!",
+        "1" + '"',
+        "1#",
+        "#40",
+        "0!",
+        "#50",
+        "1!",
+        "1$",
+        "#60",
+        "0!",
+        "0" + '"',
+        "0#",
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        vcd_path = Path(td) / "apb_ok.vcd"
+        vcd_path.write_text("\n".join(lines), encoding="utf-8")
+        r = call_tool("diagnose_waveform", {"waveform_path": str(vcd_path)})
+        h = r["data"]["handshake_deadlocks"]
+        assert h["count"] == 0, h
+
+
 def main() -> int:
     test_waveform_tool_registered()
     test_x_propagation_detection()
     test_handshake_deadlock_detection()
     test_healthy_handshake_no_false_positive()
     test_fst_is_rejected_with_guidance()
+    test_apb_handshake_deadlock_detection()
+    test_apb_healthy_no_false_positive()
     test_missing_path_is_structured_error()
     print("\nALL WAVEFORM DIAG TESTS PASSED")
     return 0

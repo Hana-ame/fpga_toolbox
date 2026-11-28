@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.7.6] — 波形诊断新增 APB 握手死锁检测
+
+### Added
+
+- **APB 握手死锁检测**（`diagnose_waveform`）。APB 是**三信号协议**
+  （PSEL+PENABLE 构成请求、PREADY 应答），与 AXI 的 VALID/READY 两信号握手
+  不同。死锁模式：PSEL 拉高后 PREADY 一直为低 —— 主设备等从机应答，从机永不
+  应答，仿真挂死。
+
+  日志只会说「APB 事务超时」，波形能直接指出「PSEL 从 t=30 拉高，PREADY 到
+  仿真结束从未拉高」—— 指向 DUT 流控实现。
+
+### Fixed
+
+- **APB 信号变迁未被收集**：`_scan` 的过滤器只收集以 VALID/READY 结尾的信号，
+  APB 的 `psel`/`penable`/`pready` 全被排除 → APB 死锁检测完全不工作（实测
+  deadlock count=0，假阴性）。扩展过滤器加入 `PSEL`/`PENABLE`/`PREADY`。
+- **`_find_apb_deadlocks` 缺 `max_t` 变量**（NameError，重构时遗漏）。
+
+### 验证
+
+| 场景 | 结果 |
+|---|---|
+| APB 死锁（psel@30 拉高、pready 从未拉高） | `deadlock count=1`，报出 psel→pready 对 |
+| APB 健康（pready 会拉高） | `deadlock count=0`（无假阳性） |
+| 六层门禁（完整 EDA） | **6/6**，Layer 4 `218/218` 函数 / 46 模块 |
+
+## [0.7.5] — 修复 slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）
 ## [0.7.5] — 修复 slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）
 
 ### 现象
@@ -485,6 +513,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **141** · [功能增强 · 波形诊断新增 APB 握手死锁检测](changelog/141-apb-handshake-deadlock.md)
 - **140** · [缺陷修复 · slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）](changelog/140-slang-multidim-unpacked-width.md)
 - **139** · [重构 · 编排层后处理拆分（orchestrator 729 → 518 行）](changelog/139-postprocess-split.md)
 - **138** · [重构 · 桥接子包再拆分（`bridge.py` 1,117 → 最大 271 行）](changelog/138-bridge-subpackage-split.md)
@@ -496,6 +525,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **132** · [功能增强 · 零依赖 MCP stdio server（`serve-mcp`）](changelog/132-mcp-stdio-server.md)
 - **131** · [功能增强 · CI 显式 slang 矩阵维度 + changelog 索引自动化](changelog/131-ci-slang-matrix-changelog-automation.md)
 - **130** · [纯 APB 设备的 draft 契约自相矛盾](changelog/130-pure-apb-draft.md)
-- **129** · [缺陷修复 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点（评审 182/183 的根因）](changelog/129-zero-eda-gate-and-ci-degraded-job.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->
