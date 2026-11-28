@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.7.5] — 修复 slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）
+
+### 现象
+
+```systemverilog
+input  logic [7:0] arr [2][3],      // packed [7:0]=8 位 × unpacked 2×3
+input  logic [3:0] mat [0:1][0:2],  // packed [3:0]=4 位 × unpacked 2×3
+```
+
+| 后端 | `arr` | `mat` | 
+|---|---|---|
+| builtin | 8 ✓ | 4 ✓ |
+| slang（旧） | **24**（8×3） | **12**（4×3） |
+
+两个后端**不一致**，且 slang 的值是错的。
+
+### 根因
+
+slang 用 `$` 明确分隔 packed 与 unpacked：`logic[7:0]$[0:1][0:2]` 表示 packed
+只有 `[7:0]`=8 位，`$` 之后全是 unpacked（两个维度）。
+
+旧实现用 `re.sub(r"\$\s*\[..\]", "", tstr)` 逐个剥 `$[...]`。但多维 unpacked
+**只有一个 `$`**：剥掉 `$[0:1]` 后，剩下的 `[0:2]` 没有前缀、不被正则匹配 →
+被误算成 packed → `8*3=24`。缺陷 186 只修了**单维** unpacked 的 case
+（`logic[7:0]$[0:3]` → 剥掉后无残留），多维是它的漏网之鱼。
+
+### 修复
+
+改为**截断到第一个 `$`**：`$` 之后（无论几维 unpacked）一律不计入端口连线宽度。
+
+```python
+_dollar = tstr.find("$")
+if _dollar >= 0:
+    tstr = tstr[:_dollar]   # $ 之后全是 unpacked
+```
+
+语义正确性依据：SystemVerilog 中端口连线宽度只算 **packed** 维度；unpacked
+维度定义的是「多少个元素」，不改变单个连线宽度（下游 TB 按元素数展开连线，
+但端口本身的位宽是 packed 部分）。
+
+### 验证
+
+| 端口 | builtin | slang（修复后） |
+|---|---|---|
+| `logic [7:0] a [0:3]` | 8 | 8 ✓ |
+| `logic g [2]` | 1 | 1 ✓ |
+| `logic [3:0][7:0] packed_only` | 32 | 32 ✓（多维 packed 相乘） |
+| `logic [1:0][1:0][1:0] triple` | 8 | 8 ✓（三维 packed） |
+| `logic [7:0] arr [2][3]` | 8 | **8** ✓（修复前 24） |
+| `logic [3:0] mat [0:1][0:2]` | 4 | **4** ✓（修复前 12） |
+
+两后端**一致且正确**。既有测试 `test_fz_unp_widths` 断言的 6 个 case 全部保持
+通过（未改断言），并新增多维 unpacked 的覆盖。
+
+## [0.7.4] — 编排层后处理拆分（orchestrator 729 → 518 行）
 ## [0.7.4] — 编排层后处理拆分（orchestrator 729 → 518 行）
 
 ### Changed
@@ -430,6 +485,7 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 
 ### 最近 12 条变更
 
+- **140** · [缺陷修复 · slang 后端对**多维 unpacked** 端口的位宽错误（两后端不一致）](changelog/140-slang-multidim-unpacked-width.md)
 - **139** · [重构 · 编排层后处理拆分（orchestrator 729 → 518 行）](changelog/139-postprocess-split.md)
 - **138** · [重构 · 桥接子包再拆分（`bridge.py` 1,117 → 最大 271 行）](changelog/138-bridge-subpackage-split.md)
 - **137** · [功能增强 · 桥接组合全覆盖（SUPPORTED_BRIDGES 声明 = 实现）](changelog/137-bridge-combos-complete.md)
@@ -441,6 +497,5 @@ All notable changes to `fpga_toolbox` and its companion verification workbench a
 - **131** · [功能增强 · CI 显式 slang 矩阵维度 + changelog 索引自动化](changelog/131-ci-slang-matrix-changelog-automation.md)
 - **130** · [纯 APB 设备的 draft 契约自相矛盾](changelog/130-pure-apb-draft.md)
 - **129** · [缺陷修复 · 零 EDA 环境下六层门禁不可通过 + CI 缺降级节点（评审 182/183 的根因）](changelog/129-zero-eda-gate-and-ci-degraded-job.md)
-- **128** · [修正 `FEATURES.html` 副标题中过期诊断码计数（37 → 47）](changelog/128-features-deck-diag-count.md)
 
 <!-- END AUTO-GENERATED CHANGELOG SUMMARY -->

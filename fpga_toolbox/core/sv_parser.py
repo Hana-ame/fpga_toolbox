@@ -770,7 +770,28 @@ def _parse_with_slang(
                     # 会按 32 位连线（WIDTHTRUNC/WIDTHEXPAND，Verilator 默认
                     # warning-as-error）。缺陷 186。
                     # 必须先剥掉 `$[...]`（unpacked）再取 packed 维度。
-                    _packed = re.sub(r"\$\s*\[(?:\d+):(?:\d+)\]", "", tstr)
+                    # 必须剥掉**所有** `$[...]`（unpacked 维度），不止一个：
+                    # 多维 unpacked 如 `logic[7:0]$[0:1][0:2]` 有两个 `$[...]`，
+                    # 旧正则非全局替换只剥第一个，剩下的 [0:2] 被误算成 packed
+                    # 只取**第一个 `[` 之前**的类型部分作为 packed 宽度来源。
+                    # 旧写法用 `re.sub(r"\$\s*\[..\]", "", tstr)` 剥 `$[...]`，
+                    # 但多维 unpacked 如 `logic[7:0]$[0:1][0:2]` 只有一个 `$`，
+                    # 剥掉 `$[0:1]` 后剩下的 `[0:2]` 没有前缀、不被匹配 → 被误算
+                    # 成 packed → 8*3=24（真相 8），与 builtin 后端不一致（缺陷
+                    # 186 只修了单维 unpacked 的 case）。
+                    # 正确语义：端口连线宽度只算 packed 维度；unpacked 维度
+                    # （无论几维）一律不计。slang 用 `$` 明确分隔两者：
+                    #   logic[7:0]$[0:1][0:2]  → packed [7:0]=8，$ 之后全 unpacked
+                    #   logic$[0:1]            → 无 packed，标量 1 位
+                    # 所以**截断到第一个 `$`**（$ 之后全是 unpacked，无论几维）。
+                    # 旧写法 `re.sub(r"\$\s*\[..\]", "", tstr)` 逐个剥 `$[...]`，
+                    # 但多维 unpacked `$[0:1][0:2]` 剥掉 `$[0:1]` 后剩下的 `[0:2]`
+                    # 没有前缀、不被匹配 → 被误算成 packed → 8*3=24（真相 8），
+                    # 与 builtin 后端不一致（缺陷 186 只修了单维 unpacked）。
+                    _dollar = tstr.find("$")
+                    if _dollar >= 0:
+                        tstr = tstr[:_dollar]
+                    _packed = tstr
                     _rngs = re.findall(r"\[(\d+):(\d+)\]", _packed)
                     if _rngs:
                         w = 1
